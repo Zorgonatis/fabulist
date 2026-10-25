@@ -191,7 +191,7 @@ INTERACTION_TASKS: dict[str, tuple[str, str]] = {
 #: a lane GROUP ("Npc lanes") rather than as one more row among the completion
 #: extras. Grouping is presentation only — resolution is untouched.
 SLOT_GROUPS: dict[str, str] = {
-    "npc": "Npc lanes",
+    "npc": "NPC lanes",
 }
 
 #: Display labels for declared slots (the drawer's row names). An undeclared
@@ -212,7 +212,7 @@ SLOT_LABELS: dict[str, str] = {
     "imagegen": "Image Prompter",
     # Issue #55b/#55c: the two per-item roles that are also D19 interactions.
     "planner": "Planner",
-    "npc": "Npc lanes",
+    "npc": "NPC lanes",
     "embedder": "Embedder",
 }
 

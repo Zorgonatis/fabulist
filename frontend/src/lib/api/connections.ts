@@ -633,8 +633,8 @@ const MOCK_SLOT_SEEDS: MockSlotSeed[] = [
 		slot: 'npc',
 		type: 'completion',
 		task: null,
-		label: 'Npc lanes',
-		group: 'Npc lanes',
+		label: 'NPC lanes',
+		group: 'NPC lanes',
 		aliases: [],
 		candidates: ['npc', 'completion.narration', 'narrator', 'completion']
 	},

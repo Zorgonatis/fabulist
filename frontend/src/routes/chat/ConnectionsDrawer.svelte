@@ -234,23 +234,23 @@
 	/** The Context Size label; the embedding path never uses the value. */
 	const contextLabel = $derived(
 		fieldMode === 'embedding'
-			? 'Context Size (informational — not used by the embedding path)'
+			? 'Context Size (not used for embeddings)'
 			: 'Context Size'
 	);
 
 	/** The line above the fields: which mode the form is in and why. */
 	const modeNote = $derived.by((): string => {
 		if (fieldMode === 'embedding') {
-			return 'Embedding slot — this connection serves the memory embedder. Response Length and the samplers are never sent on that path.';
+			return 'This connection runs the memory embedder — responses are vectors, so length and sampler settings are never sent.';
 		}
 		if (fieldMode === 'decision') {
-			return 'Decision slot — this connection answers verdicts: keep small (256–512) for verdicts.';
+			return 'This connection answers yes/no checks — keep it small (256–512 tokens is plenty).';
 		}
 		if (!editingName) {
-			return 'Nothing is bound to this connection yet — the full form is shown. The slot it later serves decides which fields matter.';
+			return 'No agent uses this connection yet — the full form is shown. The agent you assign it to decides which fields matter.';
 		}
 		if (boundRows.length === 0) {
-			return 'No slot resolves to this connection — the full form is shown.';
+			return 'No agent uses this connection yet — the full form is shown.';
 		}
 		const labels = [...new Set(boundRows.map((row) => row.label))].join(', ');
 		return `This connection serves ${labels} — the full form is shown.`;
@@ -1214,13 +1214,12 @@
 						/>
 						{#if fieldMode === 'embedding'}
 							<small>
-								tokens — informational only: the embedding path never compacts, budgets, or keeps
-								a context ledger.
+								tokens — for information only: the embedder never shortens what it reads.
 							</small>
 						{:else}
 							<small>
-								tokens. Undeclared = compaction, budget warnings and the context ledger stay OFF.
-								Set it on the model that narrates.
+								tokens. Leave it empty and the engine cannot warn you before the chat runs long, or
+								show you what it sent. Set it on the model that narrates.
 							</small>
 						{/if}
 					</label>
@@ -1237,7 +1236,7 @@
 								data-field="max_tokens"
 							/>
 							<small>
-								tokens — also reserves headroom for compaction (window − response − 512)
+								tokens — part of this is kept free so the engine can compact the chat later
 							</small>
 						</label>
 					{/if}
@@ -1435,7 +1434,7 @@
 				<h3>Agents → connections</h3>
 				{#if slotRows.length === 0}
 					<p class="hint">
-						No slot view from the engine — restart it so the agent taxonomy loads.
+						The engine did not send its agent list — restart it to load the agents.
 					</p>
 				{:else}
 					{#each slotGroups as group (group.key)}
@@ -1459,7 +1458,7 @@
 												onchange={(event) => onSlotSelect(event, row)}
 											>
 												{#if !row.connection}
-													<option value="">— unresolved —</option>
+													<option value="">— not set —</option>
 												{/if}
 												{#each connectionNames as name (name)}
 													<option value={name}>{name}</option>
@@ -1472,10 +1471,10 @@
 												class="slot-inert"
 												class:conflict={isConflict(row, entry)}
 												title={isConflict(row, entry)
-													? `The ${entry.slot} key is inert: this role resolves through the effective binding above, which names a different connection (“${entry.connection}” vs “${row.connection}”).`
-													: `The ${entry.slot} key is inert — this role resolves through the binding above.`}
+													? `The ${entry.slot} entry is ignored: this agent goes through the connection above, which names a different one (“${entry.connection}” vs “${row.connection}”).`
+													: `The ${entry.slot} entry is ignored — this agent goes through the connection above.`}
 											>
-												{isConflict(row, entry) ? '⚠ ' : ''}{entry.slot} key inert → {entry.connection}
+												{isConflict(row, entry) ? '⚠ ' : ''}{entry.slot} ignored → {entry.connection}
 											</span>
 										{/each}
 										{#if row.type === 'embedding'}
@@ -1498,20 +1497,17 @@
 							</ul>
 							{#if group.key === 'npc'}
 								<p class="hint">
-									All lanes ride this one binding (the fan-out runs a single caller), so
-									pointing it at a cheaper or stronger connection moves every member's pass
-									at once.
+									Every NPC lane shares this one connection, so pointing it at a cheaper or
+									stronger model moves all of them at once.
 								</p>
 							{/if}
 						</div>
 					{/each}
 					<p class="hint">
-						ONE row per resolved role. A row shows the connection the engine actually uses and
-						how it got there (its own key, a legacy alias, the task, the type default, or the
-						item slot that serves the type — <code>embedding</code> renders as one row
-						resolved <em>via embedder</em>). An authored spelling that loses precedence is
-						marked inert instead of being hidden or listed twice. Rebinding saves immediately
-						— callers pick it up on the next turn (no restart).
+						One row per agent, showing the connection it actually uses and why (its own setting, an
+						older name for the same role, its task, the default for its kind, or the model served
+						by another role). An entry that is not the one in force says <em>ignored</em> rather
+						than being hidden. Changes save immediately and apply on the next turn — no restart.
 					</p>
 				{/if}
 			</section>
@@ -1579,9 +1575,9 @@
 			<h3>Switch embedder?</h3>
 			<p>
 				Switching the <strong>embedder</strong> to <strong>{memoryGate.connection}</strong> will
-				<strong>wipe the memory index</strong> and re-create it for the new embedder's
-				dimensions. No indexed data is kept — re-embed all sessions afterwards to rebuild
-				it from the event log.
+				<strong>wipe the memory index</strong> and rebuild it to fit the new model's output size.
+				Nothing indexed is kept — re-embed all sessions afterwards to rebuild it from your chat
+				history.
 			</p>
 			<div class="form-actions">
 				<button type="button" class="ghost" onclick={cancelGate} disabled={switching}>

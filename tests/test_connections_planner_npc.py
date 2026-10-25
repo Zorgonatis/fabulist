@@ -77,13 +77,13 @@ def test_planner_and_npc_are_declared_item_roles():
     assert taxonomy.ITEM_SLOTS["npc"] == ("completion", "narration")
     # the labels the drawer shows
     assert taxonomy.SLOT_LABELS["planner"] == "Planner"
-    assert taxonomy.SLOT_LABELS["npc"] == "Npc lanes"
+    assert taxonomy.SLOT_LABELS["npc"] == "NPC lanes"
 
 
 def test_each_role_is_one_row_in_the_completion_group():
     rows = _rows(LEGACY)
 
-    for slot, label in (("planner", "Planner"), ("npc", "Npc lanes")):
+    for slot, label in (("planner", "Planner"), ("npc", "NPC lanes")):
         row = rows[slot]
         assert row["type"] == "completion"
         assert row["task"] is None
@@ -113,7 +113,7 @@ def test_unauthored_rows_resolve_through_the_narration_task():
 def test_the_npc_group_renders_in_its_own_section():
     """Issue #55c: the lane group is a GROUP in the pane, not a completion extra."""
     rows = _rows(LEGACY)
-    assert rows["npc"]["group"] == "Npc lanes"
+    assert rows["npc"]["group"] == "NPC lanes"
     # the planner is mappable like the others: no section of its own
     assert rows["planner"]["group"] == "completion"
     assert rows["completion.narration"]["group"] == "completion"
