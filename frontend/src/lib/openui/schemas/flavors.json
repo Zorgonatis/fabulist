@@ -1,0 +1,689 @@
+{
+  "$comment": "GENERATED MIRROR of flavors.ts (Wave 2a cull). Regenerate with `npm run gen:flavors` (frontend/scripts/gen_flavors_json.mjs); do not edit by hand. Read by the Python narrator-side validation gate so it needs no JS runtime.",
+  "preset": "Stabs-EDH-3.0.1 + Stabs-GLM5.1-Directives-v4.0.0.json (VTK, Wave 2a cull)",
+  "presetSection": "Visual Toolkit (VTK)",
+  "root": "root",
+  "orderedArgs": true,
+  "flavors": [
+    {
+      "component": "Mindscape",
+      "flavor": "Mindscape",
+      "root": "root",
+      "description": "Internal conflict, strong emotions, impulses, breakdowns, cognition, memories, altered perception",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Mindscape",
+      "bestFor": "Internal conflict, strong emotions, impulses, breakdowns, cognition, memories, altered perception",
+      "exampleElements": "Scattered mental debris of emoji/kaomoji/ASCII, contradictory thoughts, texture backgrounds; flashbacks use fragmented sepia treatment; hallucination uses warping/chromatic aberration",
+      "rules": [
+        "Biological NPCs only",
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "inner conflict; debris[] {text, weight, kind}.",
+      "props": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Heading for the inner world, e.g. 'Cracks in the Facade'"
+        },
+        {
+          "name": "debris",
+          "type": "object[]",
+          "required": true,
+          "description": "Three or more scattered fragments at different weights, contradictions included"
+        },
+        {
+          "name": "texture",
+          "type": "string",
+          "required": true,
+          "description": "Backdrop texture: 'dots', 'grid' or 'grain' ('none' to drop it)"
+        },
+        {
+          "name": "image",
+          "type": "string",
+          "required": true,
+          "description": "Optional backdrop image URL; pass an empty string for texture only"
+        },
+        {
+          "name": "mood",
+          "type": "string",
+          "required": true,
+          "description": "Dominant emotional register colouring the mindscape"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Interface",
+      "flavor": "Interface",
+      "root": "root",
+      "description": "Tech, communication, digital media",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Interface",
+      "bestFor": "Tech, communication, digital media",
+      "exampleElements": "Phone UI, terminal windows, social apps, holographic displays",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "machine screens; a styled terminal is Interface(terminal), not HTML in prose.",
+      "props": [
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true,
+          "description": "'terminal' or 'hologram' — a styled terminal a card asks for is Interface('terminal', ...), never HTML in prose (phone/chat/social deprecated D59: use Phone / SMS / SocialPost)"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Window / device / channel label"
+        },
+        {
+          "name": "lines",
+          "type": "string[]",
+          "required": true,
+          "description": "Ordered log, message or readout lines"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Document",
+      "flavor": "Document",
+      "root": "root",
+      "description": "Papers, letters, ledgers, lore",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Document",
+      "bestFor": "Papers, letters, ledgers, lore",
+      "exampleElements": "Dark paper, ledgers, handwritten notes (stickynotes anchored), official forms, newspapers",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "letter, ledger, notice; body verbatim.",
+      "props": [
+        {
+          "name": "docType",
+          "type": "string",
+          "required": true,
+          "description": "Document kind: 'letter', 'ledger', 'notice', 'newspaper' or 'note'"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Document heading or subject line"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true,
+          "description": "Body text of the document, verbatim in-world"
+        },
+        {
+          "name": "signature",
+          "type": "string",
+          "required": false,
+          "description": "Optional sign-off, seal or attribution"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Artifact",
+      "flavor": "Artifact",
+      "root": "root",
+      "description": "Objects worth examining",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Artifact",
+      "bestFor": "Objects worth examining",
+      "exampleElements": "RPG-style inspection cards with funny stats, icons, flavor text",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "inspection card.",
+      "props": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Name of the inspected object"
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "required": true,
+          "description": "Short category, e.g. 'Relic', 'Weapon', 'Curio'"
+        },
+        {
+          "name": "rarity",
+          "type": "string",
+          "required": true,
+          "description": "Rarity tier, e.g. 'Common', 'Rare', 'Cursed'"
+        },
+        {
+          "name": "flavor",
+          "type": "string",
+          "required": true,
+          "description": "One or two sentences of inspection flavour text"
+        },
+        {
+          "name": "stats",
+          "type": "string[]",
+          "required": true,
+          "description": "Stat lines as 'Label: value' strings"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "DialogueSpotlight",
+      "flavor": "Dialogue Spotlight",
+      "root": "root",
+      "description": "A distinctive line of dialogue that should be styled to its voice",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Dialogue Spotlight",
+      "bestFor": "A distinctive line of dialogue that should be styled to its voice",
+      "exampleElements": "Quote-set typography, oversized glyphs, a signature line with a delivery tell",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "a signature line styled to its voice.",
+      "props": [
+        {
+          "name": "speaker",
+          "type": "string",
+          "required": true,
+          "description": "Who is speaking"
+        },
+        {
+          "name": "line",
+          "type": "string",
+          "required": true,
+          "description": "The signature line, quoted in its own voice"
+        },
+        {
+          "name": "tell",
+          "type": "string",
+          "required": true,
+          "description": "Delivery detail that frames the line (how it lands)"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "ReactionSpotlight",
+      "flavor": "Reaction Spotlight",
+      "root": "root",
+      "description": "One knee-jerk reaction, held for a beat",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Reaction Spotlight",
+      "bestFor": "One knee-jerk reaction, held for a beat",
+      "exampleElements": "One enlarged emoji, one internal thought, staged comedic timing",
+      "rules": [
+        "Rare: at most ~1 per turn",
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "one emoji, one thought; rare.",
+      "props": [
+        {
+          "name": "face",
+          "type": "string",
+          "required": true,
+          "description": "A single emoji or glyph for the reaction"
+        },
+        {
+          "name": "thought",
+          "type": "string",
+          "required": true,
+          "description": "One short internal thought behind the face"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "FailureAchievement",
+      "flavor": "Failure Achievement",
+      "root": "root",
+      "description": "Comedic failures, backfires, embarrassment, social disasters",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Failure Achievement",
+      "bestFor": "Comedic failures, backfires, embarrassment, social disasters",
+      "exampleElements": "Trophy container in the Style State palette: themed icon, punchy quoted title, brief description, sarcastic footer",
+      "rules": [
+        "Max 1 per response",
+        "Skip for tragic moments"
+      ],
+      "docHint": "trophy; max 1, skip tragedy.",
+      "props": [
+        {
+          "name": "icon",
+          "type": "string",
+          "required": true,
+          "description": "Emoji or short glyph for the achievement badge"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Punchy achievement title, quoted in the render"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": true,
+          "description": "Brief description of what went wrong"
+        },
+        {
+          "name": "footer",
+          "type": "string",
+          "required": true,
+          "description": "Sarcastic one-line footer"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Memory",
+      "flavor": "Memory",
+      "root": "root",
+      "description": "A flashback or recalled moment that distorts or dissolves",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Memory",
+      "bestFor": "A flashback or recalled moment that distorts or dissolves",
+      "exampleElements": "Sepia gradient treatment, dissolved/blurred edges, film-grain texture",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "recall that distorts or dissolves.",
+      "props": [
+        {
+          "name": "era",
+          "type": "string",
+          "required": true,
+          "description": "When the memory is from, e.g. \"the summer of ash\""
+        },
+        {
+          "name": "fragments",
+          "type": "string[]",
+          "required": true,
+          "description": "2-4 remembered shards, sensory and partial"
+        },
+        {
+          "name": "edge",
+          "type": "string",
+          "required": true,
+          "description": "How the recall distorts, frays or dissolves at the edges"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Entrance",
+      "flavor": "Entrance",
+      "root": "root",
+      "description": "A first appearance intro card",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Entrance",
+      "bestFor": "A first appearance intro card",
+      "exampleElements": "Cinematic card with name treatment and the signature visual that stamps them",
+      "rules": [
+        "First appearance only",
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "first appearance.",
+      "props": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Who makes the entrance"
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "required": true,
+          "description": "Their role or standing in the scene"
+        },
+        {
+          "name": "signature",
+          "type": "string",
+          "required": true,
+          "description": "The defining visual that stamps them on first sight"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {eyes, hair, glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Clash",
+      "flavor": "Clash",
+      "root": "root",
+      "description": "Physical conflict, combat, confrontations",
+      "presetSection": "Visual Toolkit (VTK)",
+      "presetEntry": "Clash",
+      "bestFor": "Physical conflict, combat, confrontations",
+      "exampleElements": "Impact frames, motion blur, staged stances, tension indicators, strike emphasis",
+      "rules": [
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "one exchange, 0-100 impact.",
+      "props": [
+        {
+          "name": "attacker",
+          "type": "string",
+          "required": true,
+          "description": "Who is pressing the attack"
+        },
+        {
+          "name": "defender",
+          "type": "string",
+          "required": true,
+          "description": "Who is bearing the brunt of it"
+        },
+        {
+          "name": "intensity",
+          "type": "number",
+          "required": true,
+          "description": "Tension / impact level on a 0..100 scale"
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": true,
+          "description": "Short caption for the exchange"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Custom",
+      "flavor": "Custom",
+      "root": "root",
+      "description": "Hand-built html + css for the one-off artifact no typed shape covers; the home for any markup a card or scenario instructs",
+      "presetSection": "Escape hatch (D60, artifact-components §1.1)",
+      "presetEntry": "Custom",
+      "bestFor": "Hand-built html + css for the one-off artifact no typed shape covers; the home for any markup a card or scenario instructs",
+      "exampleElements": "Tickets, diagrams, forms, tables — tone tokens inherit; single-quoted attributes",
+      "rules": [
+        "First-listed for salience only — typed components stay the first choice",
+        "Caps gate-enforced: html <=4000, css <=2000",
+        "No scripts, no event handlers, no remote URLs",
+        "Instructed HTML goes inside Custom(html=...), never raw into the prose"
+      ],
+      "docHint": "the escape hatch — instructed HTML lives here, never in prose.",
+      "props": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Panel title; also heads the paper-scrap fallback"
+        },
+        {
+          "name": "html",
+          "type": "string",
+          "required": true,
+          "description": "THE home for any rich markup the scene calls for — HTML a card or scenario instructs goes here, never into the prose; single-quoted attributes; no scripts/handlers/remote URLs"
+        },
+        {
+          "name": "css",
+          "type": "string",
+          "required": false,
+          "description": "Style channel for the html above (<=2000 chars); tone tokens var(--tone-1..-3, kin) inherit"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}; omit when unused"
+        }
+      ]
+    },
+    {
+      "component": "Phone",
+      "flavor": "Phone",
+      "root": "root",
+      "description": "A group chat on a messaging app: named senders, bubbles, ticks, reactions",
+      "presetSection": "Artifact reproductions (artifact-components §1.2)",
+      "presetEntry": "Phone",
+      "bestFor": "A group chat on a messaging app: named senders, bubbles, ticks, reactions",
+      "exampleElements": "Status bar with narrative clock, contact header, E2EE line, date separators, reaction pills with counts",
+      "rules": [
+        "Likeness structural, never 1:1",
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "group chat; pills carry counts.",
+      "props": [
+        {
+          "name": "thread",
+          "type": "string",
+          "required": true,
+          "description": "Contact or group name in the header"
+        },
+        {
+          "name": "messages",
+          "type": "object[]",
+          "required": true,
+          "description": "The conversation, 4-12 typical, 16 max; timestamps advance"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {me, typing, clock, battery, glyph, art}"
+        }
+      ]
+    },
+    {
+      "component": "SMS",
+      "flavor": "SMS",
+      "root": "root",
+      "description": "A text message: lock-screen banner or full thread",
+      "presetSection": "Artifact reproductions (artifact-components §1.3)",
+      "presetEntry": "SMS",
+      "bestFor": "A text message: lock-screen banner or full thread",
+      "exampleElements": "Banner: app icon, title, preview, now. Thread: bubbles, ticks, timestamps",
+      "rules": [
+        "Likeness structural, never 1:1",
+        "Never repeat prose content in visuals"
+      ],
+      "docHint": "banner or thread; Phone’s simpler sibling.",
+      "props": [
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true,
+          "description": "\"banner\" (lock-screen notification, exactly one message) or \"thread\" (full conversation)"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Sender/app title (banner) or sender name (thread)"
+        },
+        {
+          "name": "messages",
+          "type": "object[]",
+          "required": true,
+          "description": "banner: exactly one; thread: 2-12"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {me, glyph, art}"
+        }
+      ]
+    },
+    {
+      "component": "Monitor",
+      "flavor": "Monitor",
+      "root": "root",
+      "description": "The machine’s own screen: error dialog or BSOD, digital or CRT",
+      "presetSection": "Artifact reproductions (artifact-components §1.4)",
+      "presetEntry": "Monitor",
+      "bestFor": "The machine’s own screen: error dialog or BSOD, digital or CRT",
+      "exampleElements": "System dialog with dead OK; full crash screen with stop code; phosphor scanlines",
+      "rules": [
+        "CRT phosphor + BSOD blue are the only artifact-inherent literals"
+      ],
+      "docHint": "error or bsod; digital or crt.",
+      "props": [
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true,
+          "description": "\"error\" (system dialog) or \"bsod\" (full crash screen; title = stop code)"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Dialog title or stop code"
+        },
+        {
+          "name": "lines",
+          "type": "string[]",
+          "required": true,
+          "description": "3-6 typical; dialog body or crash progress lines"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {theme, glyph, art}"
+        }
+      ]
+    },
+    {
+      "component": "PostIt",
+      "flavor": "PostIt",
+      "root": "root",
+      "description": "One to three sticky notes on a wall",
+      "presetSection": "Artifact reproductions (artifact-components §1.5)",
+      "presetEntry": "PostIt",
+      "bestFor": "One to three sticky notes on a wall",
+      "exampleElements": "Tilted overlapping squares, italic pen, sticky yellow warmed to theme",
+      "rules": [
+        "1-3 notes, the model’s choice"
+      ],
+      "docHint": "sticky notes; two words beat a paragraph.",
+      "props": [
+        {
+          "name": "notes",
+          "type": "object[]",
+          "required": true,
+          "description": "1-3 notes; the count is the model’s choice"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}"
+        }
+      ]
+    },
+    {
+      "component": "SocialPost",
+      "flavor": "SocialPost",
+      "root": "root",
+      "description": "One feed post with plausible stats and the first reply only",
+      "presetSection": "Artifact reproductions (artifact-components §1.6)",
+      "presetEntry": "SocialPost",
+      "bestFor": "One feed post with plausible stats and the first reply only",
+      "exampleElements": "Avatar, name + handle, body, engagement row, one nested reply",
+      "rules": [
+        "First reply only, never a thread",
+        "Stats believable for who this is"
+      ],
+      "docHint": "one post + first reply; plausible counts.",
+      "props": [
+        {
+          "name": "author",
+          "type": "string",
+          "required": true,
+          "description": "Display name"
+        },
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "Handle without @ (the component prefixes it)"
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true,
+          "description": "Post body, verbatim"
+        },
+        {
+          "name": "stats",
+          "type": "object",
+          "required": true,
+          "description": "Engagement counts — believable for who this is"
+        },
+        {
+          "name": "reply",
+          "type": "object",
+          "required": false,
+          "description": "The first reply only; omit for post-only"
+        },
+        {
+          "name": "options",
+          "type": "object",
+          "required": false,
+          "description": "Trailing optional arg {glyph, art}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<!-- The theme preset owns `color-scheme` (app.css sets it per
+		     `[data-theme]` block), so this meta only declares that BOTH are
+		     supported: the light preset must be able to reach native scrollbars,
+		     form controls and `accent-color` widgets, which a single-value meta
+		     (or an inline `style="color-scheme: dark"` on <html>, which would
+		     outrank the stylesheet) made impossible. -->
+		<meta name="color-scheme" content="dark light" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+		<!-- The SPA shell is served without SSR, so its <title> and icon must be
+		     static here: they are what a curl / a hard reload / the tab sees
+		     before (and without) hydration. Per-route titles still ride
+		     <svelte:head> once the app mounts. -->
+		<title>Fabulist</title>
+		<link rel="icon" type="image/png" href="/favicon.png" />
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

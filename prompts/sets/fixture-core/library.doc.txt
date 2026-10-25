@@ -1,0 +1,24 @@
+# Scene Panels — Core-only fixture set (test)
+
+This set teaches 6 components: ScenePane, MeterBar, ObjectCard, BeatCard, Document, Custom. Emit only these names; every argument is positional, in the order below.
+
+## Component Signatures
+
+Arguments marked with ? are optional. Sub-components can be inline or referenced; prefer references for better streaming.
+
+### Custom (the escape hatch)
+Custom(title: string, html: string, css?: string, options?: {glyph?: string, art?: string}) — hand-built html + css for the one-off artifact no shape below covers.
+Custom exists for what no typed component can say — a ticket, a diagram, a form, a shape nothing below covers. It is listed first so you always know the escape hatch exists — typed components are the first choice, raw HTML the exception path. A card or scenario that instructs HTML output — a styled summary block, a terminal display — is asking for a panel, not for markup in the prose: build that markup inside Custom(html=..., css=...), or as Interface("terminal", ...) when it is a machine readout, and never write raw HTML into the prose itself. Harmonize with the tone tokens (var(--tone-1…-3) and kin); caps: html ≤4000, css ≤2000. Use Custom only when the other components aren't adequate or specific enough for the beat.
+Attributes in single quotes — the DSL string is double-quoted; a stray " unbalances the statement and the gate degrades it. Size the artifact in px/rem (height: 220px): a PERCENTAGE root height (height: 100%) collapses — the panel host has no definite height, so the gate refuses it. No scripts, no event handlers, no remote URLs — data: URIs and /api/ only. Caps: html ≤4000, css ≤2000. Tone tokens inherit (var(--tone-1…-3, -soft, -line), --bg-panel, --text, --line); text ≥14px.
+Not when a typed component covers the shape — chat, text, screen, notes, feed, papers, cards are typed calls at a fraction of the cost. Not when a scrap of prose would do — Custom is for artifacts, not narration in markup. Not for pure status — EnvTracker is engine-owned; the narrator never emits it.
+
+### Infrastructure (the defaults)
+ScenePane(title: string, children: component[], options?: object) — the root of any turn that emits. Its title is the placard: place and mood in four or five words. Everything rendered hangs from it.
+MeterBar(label: string, value: number, max: number, options?: object) — a pressure that mounts across the scene and will eventually break something: patience, hull, sobriety, the hours till dawn. For erosion, not events — a single blow is Clash.
+ObjectCard(name: string, kind: string, description: string, options?: object) — an item acquired or pocketed; the lightweight tag.
+BeatCard(text: string, options?: object) — one line of narration that deserves spotlight ink when no object exists. The pure fallback; most BeatCards secretly want to be prose.
+Infrastructure is a fallback, not a habit. Match the moment: letter→Document; nothing adequate or specific enough→Custom.
+
+### Scene flavors (1)
+Document(docType: string, title: string, body: string, signature?: string, options?: {glyph?: string, art?: string}) — a paper artifact in full: letter, ledger, notice, newspaper, note. Body text is the in-world document, word for word. The seal or stamp: 📜 🦅 🖋️ ❌.
+Retired flavors — never emit them: StatusPanel, Subtext, Perception, Passage, Romance, Intimacy, Afterglow, Power, Undress. Their work goes to prose — a room-taking line may be a DialogueSpotlight, a first appearance an Entrance, a scene change simply a new ScenePane title.

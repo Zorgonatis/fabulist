@@ -1,0 +1,198 @@
+# Fabulist — one service, one port, one origin, plus the models sidecar.
+#
+#   docker compose up -d         # then open http://localhost:2727
+#   docker compose down
+#
+# The default includes the MODELS SIDECAR: one llama.cpp router (Vulkan build)
+# serving the three models the engine's memory and decision paths want —
+# qwen3-reranker, embeddinggemma-2, d1-3b — on a compose-internal port.
+#
+# The sidecar needs NO download step and NO models directory: `models.ini`
+# names the three weights as HuggingFace references (all ungated), and the
+# router fetches each one into the cache volume on that model's FIRST REQUEST
+# — ~2.7 GiB once, then served from the volume across recreates. The `./models`
+# mount below remains only as the offline/local-weights override. See README.md
+# > Docker > Models sidecar.
+#
+# The ENGINE still boots with an empty ./configs (the first-run hint tells you
+# to create a connection in the UI or over the API) and writes into the mounted
+# ./data volume. Point it at the sidecar by adding `http://fabulist-models:8080/v1`
+# as a connection (README has a three-connection snippet covering embed/rerank/
+# decision), at any other model server, or drop a connections.json into
+# ./configs (configs/connections.example.json is the shape).
+#
+# The engine ALONE, with no sidecar — e.g. when a model server already runs on
+# the host or you use a hosted API:
+#
+#   docker compose -f docker-compose.app-only.yml up -d
+
+services:
+  fabulist:
+    build: .
+    image: fabulist:latest
+    ports:
+      - "2727:2727"
+    volumes:
+      # The event log + checkpoints, and the connections document. Both are
+      # user state: they survive rebuilds and `docker compose down`.
+      - ./data:/app/data
+      - ./configs:/app/configs
+    env_file:
+      # OPTIONAL. A `.env` beside this file is read as container environment on
+      # start (that is where cloud API keys belong: `api_key_env` names one of
+      # these variables). Missing file = fine, that is the first-run case.
+      # A key PASTED in the Connections drawer is written to ./configs/.env on
+      # the host (FABULIST_ENV_FILE points there, so it rides the mounted
+      # volume) — it survives container recreation. You can also put keys here.
+      # Parsing this mapping form needs Docker Compose >= 2.24.
+      - path: .env
+        required: false
+    extra_hosts:
+      # Makes the HOST reachable from the container by name. Docker Desktop
+      # resolves host.docker.internal natively; Linux needs Docker 20.10+ for
+      # the `host-gateway` spelling below.
+      - "host.docker.internal:host-gateway"
+    environment:
+      # A connection whose base_url is host-local (`http://127.0.0.1:4445`,
+      # `localhost`, `[::1]`) is rewritten to this name: inside a container
+      # loopback is the container itself, so the model server on the HOST would
+      # otherwise be unreachable. Leave the value EMPTY to disable the rewrite
+      # (the engine then dials the URL exactly as written). Remote endpoints,
+      # LAN IPs and compose service names are never rewritten.
+      FABULIST_HOST_ALIAS: host.docker.internal
+      # Issue #36: the models sidecar this file starts. At boot the engine asks
+      # it which models it serves and auto-pins the embedder/reranker/decision
+      # roles INTO EMPTY SLOTS ONLY (creating sidecar-embed/sidecar-rerank/
+      # sidecar-decision through the normal connection store). A role that
+      # already points somewhere is never touched, and a partial or unreachable
+      # sidecar is one notice — never a boot failure. This is a compose SERVICE
+      # name, so FABULIST_HOST_ALIAS never rewrites it. Leave it EMPTY (or
+      # unset) to disable auto-pinning and configure the roles by hand.
+      FABULIST_SIDECAR_URL: http://fabulist-models:8080/v1
+    restart: unless-stopped
+    # Voice input is optional and NOT installed by default, so POST /api/stt
+    # answers 503 with the install hint. To turn it on, REPLACE the `build: .`
+    # line above with this block (a second `build:` key would be a YAML error)
+    # and rebuild with `docker compose build fabulist` — it adds the
+    # fabulist[stt] extra (faster-whisper + numpy) to the image:
+    # build:
+    #   context: .
+    #   args:
+    #     INSTALL_STT: "1"
+
+  # The models sidecar: ONE llama.cpp server, Vulkan backend, router mode, one
+  # port, three model ids (rerank + embeddings + the decision model). One
+  # process owns the device; the router loads a model on first request — pulling
+  # its HuggingFace weights into the cache volume at that moment — keeps at most
+  # three resident, and sleeps an idle model after 300 s. There is no CPU
+  # profile: this build falls back to CPU natively when no Vulkan device is
+  # found (the entrypoint says so loudly), so a GPU-less host needs no second
+  # file.
+  fabulist-models:
+    # Pinned by TAG, not :latest — the d1 decision model is a new arch
+    # (lfm2-d1, upstream #30110, 2026-10-08) and an older image lacks the
+    # decision route entirely (it would 501 on /v1/systemone). b11804
+    # (revision c7fc5094, created 2026-10-22) carries
+    # tools/server/server-decision.cpp; b11846, the newest release when this
+    # was written, had no published Vulkan image yet. Index digest for the
+    # record:
+    # sha256:a644fb651975d9dea49140302577a3b945993fd5efd3400bf89c7d525d03c103
+    image: ghcr.io/ggml-org/llama.cpp:server-vulkan-b11804
+    # The image's own entrypoint is /app/llama-server. Ours validates the
+    # preset (HF ref form, cache writability), resolves the Vulkan device, then
+    # execs it (deploy/sidecar/entrypoint.sh). /bin/sh is explicit so a
+    # bind-mounted script does not need the executable bit.
+    entrypoint: ["/bin/sh", "/opt/fabulist/entrypoint.sh"]
+    volumes:
+      # llama.cpp's HuggingFace download cache. The shipped preset is HF refs,
+      # so this is where the ~2.7 GiB of weights actually lands — a NAMED
+      # volume, so it survives `docker compose down`, `up`, and every image
+      # pull: the download is paid once. `docker compose down -v` (or
+      # `docker volume rm <project>_fabulist-model-cache`) is the way to force
+      # a fresh pull. Bind a host directory here instead if you would rather
+      # see and back up the blobs.
+      - fabulist-model-cache:/cache
+      # OPTIONAL local-weights override, read-only. Not needed for the shipped
+      # HF preset; a deployment that keeps GGUFs on disk points
+      # FABULIST_MODELS_DIR at its models root and FABULIST_SIDECAR_PRESET at a
+      # preset that names /models/... paths (README.md > Docker > Models
+      # sidecar). Docker creates a missing ./models root-owned, so create it
+      # yourself if you use it.
+      - ${FABULIST_MODELS_DIR:-./models}:/models:ro
+      # Host path of the router preset (default: the shipped HF preset).
+      # Inside the container it is always /etc/fabulist/models.ini.
+      - ${FABULIST_SIDECAR_PRESET:-./deploy/sidecar/models.ini}:/etc/fabulist/models.ini:ro
+      - ./deploy/sidecar/entrypoint.sh:/opt/fabulist/entrypoint.sh:ro
+    environment:
+      # Where llama.cpp caches HuggingFace downloads. Matches the volume above;
+      # this is the ONE pinned location (llama.cpp would otherwise fall back to
+      # $HOME/.cache/huggingface/hub, inside the container, lost on recreate).
+      LLAMA_CACHE: /cache
+      # Optional. All three shipped repos are ungated and fetched anonymously;
+      # llama.cpp reads HF_TOKEN natively (it is the --hf-token default), so a
+      # future gated repo needs no new flag — just export HF_TOKEN. Empty is
+      # fine and sends no Authorization header.
+      HF_TOKEN: ${HF_TOKEN:-}
+      # Which Vulkan device to use. Vulkan enumerates in ITS OWN order (index 0
+      # is not necessarily your first card — on the maintainer's two-GPU box
+      # Vulkan0 is the NVIDIA card and Vulkan1 the AMD one), so the entrypoint
+      # refuses to guess when several devices are visible. Set ONE of these in
+      # .env:
+      #   FABULIST_SIDECAR_DEVICE=Vulkan0     (a bare `0` is accepted too)
+      #   FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"   (name substring)
+      # Exactly one visible device needs no setting; zero visible devices is
+      # the build's native CPU fallback (warned, not fatal); an explicit id
+      # that does not exist is a boot failure. Both empty = auto-or-fail.
+      FABULIST_SIDECAR_DEVICE: ${FABULIST_SIDECAR_DEVICE:-}
+      FABULIST_SIDECAR_DEVICE_MATCH: ${FABULIST_SIDECAR_DEVICE_MATCH:-}
+      # NVIDIA-on-Vulkan needs the `graphics` driver capability; without it the
+      # container can have the GPU reserved and still enumerate no Vulkan
+      # device. Harmless on non-NVIDIA hosts once the deploy block is removed.
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+    ports:
+      # Host loopback only: for scripts/sidecar_smoke.py and for pointing a
+      # host-side engine at the same router. The engine INSIDE this project
+      # uses the service name (http://fabulist-models:8080/v1) and never needs
+      # this mapping. Default 8445 because 4445 is the conventional port for an
+      # existing host model server; override with FABULIST_SIDECAR_PORT.
+      - "127.0.0.1:${FABULIST_SIDECAR_PORT:-8445}:8080"
+    devices:
+      # AMD/Intel Vulkan: the render nodes are the access path, and this line
+      # is all they need (some hosts also require the `render` group). On a
+      # NON-NVIDIA host DELETE the `deploy:` block below — it requests an
+      # NVIDIA device, and compose fails when the host has none.
+      - /dev/dri:/dev/dri
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+# Pin the compose subnet so a host firewall rule is STABLE. Docker otherwise
+# assigns the next free 172.x network on every recreate, which changes both the
+# subnet and the bridge interface name and silently invalidates any rule the
+# operator added. With ufw active (its default INPUT policy is DROP) a container
+# cannot reach a HOST-bound model server until the operator allows this range:
+#
+#   sudo ufw allow from 172.20.0.0/16 to any port 4445 proto tcp
+#   sudo ufw allow from 172.20.0.0/16 to any port 4444 proto tcp
+#
+# Or skip ufw entirely with the host-network variant (docker-compose.host.yml).
+# With the sidecar in this project the engine uses a compose service name and
+# needs no firewall rule at all; the rule is for a model server you run on the
+# host yourself.
+# The HuggingFace download cache for the models sidecar. Named (not anonymous)
+# so the weights outlive the container: refuse to re-download by keeping this
+# volume; reclaim the ~2.7 GiB with `docker volume rm <project>_fabulist-model-cache`
+# once the project is down (`docker compose down -v` does both).
+volumes:
+  fabulist-model-cache:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

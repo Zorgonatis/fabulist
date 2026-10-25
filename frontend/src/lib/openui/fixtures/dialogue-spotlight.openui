@@ -1,0 +1,2 @@
+spot = DialogueSpotlight("The Innkeeper", "Of course I'm fine.", "Flat and level — the answer she rehearsed, and the door already closing.")
+root = ScenePane("DialogueSpotlight", [spot])

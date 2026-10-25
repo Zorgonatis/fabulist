@@ -1,0 +1,11 @@
+{
+  "id": "tone_shift",
+  "description": "Emotional beat: the scene's dominant register flips within the turn.",
+  "user_msg": "I tell him it is over and offer my hand.",
+  "turn": "The standoff breaks. The cold edge leaves her voice, and by the firelight the whole room turns warm.",
+  "expected_delta": {
+    "tone": "tense→warm"
+  },
+  "expected_action_class": "dialogue",
+  "notes": "The Tone State table names the registers (Bleak / Tense / Warm / Absurd / Reverent / Frenetic / Melancholic); BTS uses the trend arrow '→' for a shift, and the schema renders a transition as old→new. 'tell' resolves to dialogue."
+}

@@ -1,0 +1,28 @@
+{
+  "id": "technology",
+  "name": "Technology",
+  "version": "1.0.0",
+  "components": [
+    "ScenePane",
+    "MeterBar",
+    "ObjectCard",
+    "BeatCard",
+    "Mindscape",
+    "Interface",
+    "Document",
+    "Artifact",
+    "DialogueSpotlight",
+    "ReactionSpotlight",
+    "FailureAchievement",
+    "Memory",
+    "Entrance",
+    "Clash",
+    "Custom",
+    "Phone",
+    "SMS",
+    "Monitor",
+    "PostIt",
+    "SocialPost"
+  ],
+  "spec_version": "eb01762f0dbf"
+}

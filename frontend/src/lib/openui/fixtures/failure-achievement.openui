@@ -1,0 +1,2 @@
+fail = FailureAchievement("🏆", "Diplomacy, Attempted", "You called the duke 'the tall one'. He is not tall.", "Some careers end in a single syllable.")
+root = ScenePane("FailureAchievement", [fail])

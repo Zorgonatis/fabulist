@@ -1,0 +1,11 @@
+{
+  "id": "weather_only",
+  "description": "Environment beat: weather changes with no move and no clock reading.",
+  "user_msg": "I look up at the gathering clouds.",
+  "turn": "A squall rolls in off the water. The light rain thickens into a downpour that drums on the roofs.",
+  "expected_delta": {
+    "weather": "downpour"
+  },
+  "expected_action_class": "inspection",
+  "notes": "Env Tracking updates weather 'on movement or significant narrative beats; weather shifts realistically across hours, not turns'. Only weather changes here; location and time are unchanged and omitted (BTS delta mode). 'look' resolves to inspection."
+}

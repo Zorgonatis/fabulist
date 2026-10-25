@@ -1,0 +1,2 @@
+card = ObjectCard("Brass Lantern", "Quest item", "Picked up in the market square; the flame leans toward the coast.", {glyph: "🗝️"})
+root = ScenePane("ObjectCard", [card])

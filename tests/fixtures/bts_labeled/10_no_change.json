@@ -1,0 +1,9 @@
+{
+  "id": "no_change",
+  "description": "Holding beat: the character does nothing that alters state; delta mode omits everything.",
+  "user_msg": "I nod and stay where I am.",
+  "turn": "Nothing stirs on the grey water. She stays put, watching the rain.",
+  "expected_delta": {},
+  "expected_action_class": "other",
+  "notes": "BTS delta mode: 'Only what CHANGED ... No filler. No \"no change\" placeholders.' An empty delta (Δ[]) is the correct output. 'nod'/'stay' match no action keyword and resolve to other."
+}

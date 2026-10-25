@@ -1,0 +1,18 @@
+Fabulist
+Copyright 2026 Fabulist contributors
+Licensed under the Apache License, Version 2.0.
+
+The full license text is in the LICENSE file at the root of this repository.
+
+Prompt preset
+
+The default prompt preset shipped with Fabulist (`prompts/factory-defaults.json`,
+seeded into a fresh install) is original authorship by the Fabulist
+contributors and is distributed under the same Apache License, Version 2.0.
+
+The preset of record this project was ported from is the private SillyTavern
+preset owned by the project's author. It is NOT included in this repository and
+is not redistributed here. Presets, character cards, world-info books and
+persona exports that a user imports are that user's material (or their
+upstream authors'), are stored as user state, and carry whatever licence their
+source attached — importing them does not relicense them.

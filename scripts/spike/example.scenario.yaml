@@ -1,0 +1,27 @@
+# Reusable example scenario for the RP spike harness.
+#
+#   uv run python -m scripts.spike.run scripts/spike/example.scenario.yaml
+#
+# The card path is RELATIVE to this file (per the scenario contract). Swap in any
+# PNG/JSON character card and tune the beats/directives for a new spike.
+name: hollowmere-example
+title: "Spike — Hollowmere Inn"
+flavor: dnd-dungeonmaster
+card: cards/HollowmereInn.json
+turns: 5
+player_model: your-model-id
+player:
+  name: Ryn
+  persona: |
+    Ryn is a road-worn ranger who asks few questions and notices everything.
+    They are dry, watchful, and slow to trust, but honest when it counts.
+    Ryn plays by probing a scene for secrets rather than charging in.
+  directives:
+    - {at: 3, note: "Ask Marla directly about the moor lights; press once if she deflects."}
+beats:
+  - {kind: in_character, content: "I shake the rain off my cloak, cross to the hearth, and scan the common room before I sit."}
+  - {kind: in_character, content: "I order a bowl of stew and a room for the night, and slide an extra coin across the bar."}
+ooc_probes:
+  - {at: 4, content: "OOC: quick recap — who is in the room and what have I learned so far?"}
+worldinfo:
+  - {keys: ["moor", "lights"], content: "The moor lights are said to lure travelers off the safe path; locals never name them aloud."}

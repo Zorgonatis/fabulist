@@ -1,0 +1,3 @@
+{# Per-turn suffix: facts / plan / active-panels + final user content. #}
+{# ``parts`` is pre-joined in Python so facts start the block and the user line ends it. #}
+{% for part in parts %}{{ part }}{% if not loop.last %}{{ "\n\n" }}{% endif %}{% endfor %}

@@ -1,0 +1,33 @@
+# Opt-out compose: the engine ALONE, with no models sidecar.
+#
+#   docker compose -f docker-compose.app-only.yml up -d
+#
+# This is the second half of issue #18: the default docker-compose.yml ships
+# the models sidecar; this file runs the same engine without it, for a machine
+# that already runs its own model server (host llama.cpp, vLLM, LM Studio) or
+# uses a hosted API.
+#
+# The engine service is INHERITED from docker-compose.yml with `extends`, so
+# there is one source of truth for it — adding a volume or env var there
+# reaches both files. `extends` copies only the service: the pinned subnet
+# below is repeated on purpose (top-level `networks:` is not inherited), which
+# keeps the documented host-firewall rule stable in this shape too.
+#
+# What the engine loses: nothing structural. `http://fabulist-models:8080/v1`
+# simply will not resolve here — point connections at whatever endpoint you do
+# run (configs/connections.example.json shows the shapes).
+services:
+  fabulist:
+    extends:
+      file: docker-compose.yml
+      service: fabulist
+    environment:
+      # The base file arms the issue #36 boot-time auto-pin; this opt-out runs
+      # NO sidecar, so clear the trigger (empty = no probe, no notice).
+      FABULIST_SIDECAR_URL: ""
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,9 @@
+{
+  "id": "junk_input",
+  "description": "Junk keystrokes with no scene content: the classic probes yield no delta and no action, regardless of prose.",
+  "user_msg": "asdf",
+  "turn": "",
+  "expected_delta": {},
+  "expected_action_class": "other",
+  "notes": "Prose-agnostic: with no interpretable turn the extractor must emit no delta and no invented action. The sibling probe 'test' behaves identically; test_eval_rig.py asserts both strings directly."
+}

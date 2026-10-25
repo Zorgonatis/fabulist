@@ -1,0 +1,10 @@
+{
+  "spec": "chara_card_v2",
+  "spec_version": "2.0",
+  "data": {
+    "name": "Corrupt Ext",
+    "description": "Extensions arrived as a scalar, not an object.",
+    "extensions": "not-an-object",
+    "unknown_data_key": 7
+  }
+}

@@ -1,0 +1,34 @@
+# Host-network variant: the no-firewall-change path.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+#
+# Use this when the host runs a firewall (ufw's default INPUT policy is DROP) and
+# you do not want to open the bridge subnet to host ports. The container shares
+# the host's network namespace, so a model server on 127.0.0.1:4445 is simply
+# 127.0.0.1:4445 — no loopback rewrite, no firewall rule, no extra_hosts.
+#
+# Trade-offs, stated plainly:
+#   * LINUX ONLY. Docker Desktop on macOS/Windows does not support this shape.
+#   * The container binds the host's 2727 directly; the `ports:` mapping is
+#     cleared below because it is meaningless (and an error) with host networking.
+#   * No network isolation between the container and the host.
+#
+# FABULIST_HOST_ALIAS is cleared so the loopback rewrite is DISABLED: with host
+# networking loopback already means the host, and rewriting it to
+# host.docker.internal would break the very thing this file exists to fix.
+#
+# SIDECAR: the models sidecar (default compose) stays a bridge service; under
+# host networking its compose NAME does not resolve, so point the engine at the
+# sidecar's published host port instead: http://127.0.0.1:8445/v1 (or
+# FABULIST_SIDECAR_PORT if you changed it).
+
+services:
+  fabulist:
+    network_mode: host
+    ports: !reset []
+    environment:
+      FABULIST_HOST_ALIAS: ""
+      # Compose service names do not resolve under host networking, so the
+      # issue #36 boot-time auto-pin targets the sidecar's PUBLISHED host port
+      # (127.0.0.1:8445 by default; override FABULIST_SIDECAR_PORT if changed).
+      FABULIST_SIDECAR_URL: http://127.0.0.1:${FABULIST_SIDECAR_PORT:-8445}/v1

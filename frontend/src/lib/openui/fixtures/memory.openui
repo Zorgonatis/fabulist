@@ -1,0 +1,2 @@
+mem = Memory("the summer of ash", ["Chalk dust in the rafters", "Her laugh, two rooms away", "The smell of lamp oil"], "The faces keep sliding off the frame.", {glyph: "🕯️"})
+root = ScenePane("Memory", [mem])

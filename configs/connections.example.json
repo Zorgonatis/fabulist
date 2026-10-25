@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Three base_url forms. JSON has no comments; this key is ignored by the engine and preserved on write.",
+    "  cloud   https://api.your-provider.example/v1   — remote; NEVER rewritten.",
+    "  host    http://127.0.0.1:4445                  — a model server on the HOST. In the Docker image FABULIST_HOST_ALIAS=host.docker.internal (set by docker-compose.yml) rewrites only the loopback host, so the container reaches the host machine instead of itself.",
+    "  sidecar http://fabulist-models:8080/v1         — the models sidecar the default docker-compose.yml starts; a compose SERVICE name on the same network, NEVER rewritten.",
+    "An empty FABULIST_HOST_ALIAS disables the rewrite; LAN IPs and remote hosts are always left alone. See README.md > Configuration.",
+    "reasoning_effort (optional) is the reasoning DEPTH for a thinking model: the provider's own top-level body field of that name. Null or absent sends NOTHING, so a connection that never declares it is unaffected. Documented values: max | xhigh | high | medium | low | minimal | none (where the field is documented the default is 'max', and one model may accept only a subset). A value outside that set fails the config load, and a call-site value still wins.",
+    "A failing HTTP status whose body names a business error code is surfaced WITH that code in the turn's error, alongside the phase and the model, so a platform content filter reads differently from a network fault — see docs/decisions (ADR-023)."
+  ],
+  "connections": {
+    "local": {
+      "base_url": "http://127.0.0.1:8080/v1",
+      "model": "your-model-id",
+      "sampling": {
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_tokens": 4096
+      },
+      "timeout": 120
+    },
+    "cloud": {
+      "base_url": "https://api.your-provider.example/v1",
+      "model": "your-cloud-model-id",
+      "api_key_env": "YOUR_PROVIDER_API_KEY",
+      "sampling": {
+        "temperature": 0.7,
+        "max_tokens": 4096
+      },
+      "reasoning_effort": "high",
+      "timeout": 300
+    }
+  },
+  "agents": {
+    "narrator": "local",
+    "extractor": "local",
+    "captioner": "local"
+  }
+}

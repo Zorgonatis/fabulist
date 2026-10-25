@@ -1,0 +1,13 @@
+{
+  "id": "first_scene",
+  "description": "Opening turn: prose establishes the scene — clock time, location, and weather all appear for the first time.",
+  "user_msg": "I climb down from the coach and look around the square.",
+  "turn": "The coach rattles to a halt at the edge of the night market. Rain beads on the striped awnings, and the guild-hall clock reads 14:35.",
+  "expected_delta": {
+    "time": "14:35",
+    "loc": "night market",
+    "weather": "light rain"
+  },
+  "expected_action_class": "travel",
+  "notes": "BTS Env Tracking header '[ Time | Location | Weather ]' sets all three at scene open. Time is normalized from the preset's 'h:mm tt' display to the schema's 24h HH:MM; location is the bare token behind BTS '@night_market'; weather is the descriptor Env Tracking carries. 'climb' resolves to travel."
+}

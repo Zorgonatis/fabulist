@@ -1,0 +1,11 @@
+{
+  "id": "inventory_add_remove",
+  "description": "Trade beat: one item gained and one item lost in the same turn.",
+  "user_msg": "I take the lantern and drop the torch.",
+  "turn": "She pockets the brass lantern and lets the spent torch fall into the mud.",
+  "expected_delta": {
+    "inv": "+lantern -torch"
+  },
+  "expected_action_class": "task",
+  "notes": "BTS inventory notation is '+item' for a gain and '-item' (with detail in parens) for a loss. A gain and a loss in one turn share the inv key, space-separated, in the schema. 'take'/'drop' resolve to the task class."
+}

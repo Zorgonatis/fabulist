@@ -1,0 +1,342 @@
+/* Chrome kit (docs/UI-LANGUAGE.md §4) — one token-driven CSS layer shared by
+ * both narration registers. Diegetic (VTK) surfaces and side-channel
+ * (Assistant) surfaces use the same primitives with different frames.
+ *
+ * Primitives:
+ *   .ui-panel             bordered surface + radius
+ *   .ui-frame-diegetic    VTK frame (document / terminal / screen / ledger)
+ *   .ui-frame-sidechannel Assistant frame (commentary / margin)
+ *   .ui-head              header bar — glyph + title + meta (mono, uppercase)
+ *   .ui-section           `▶ LABEL` section marker
+ *   .ui-tag               descriptor label
+ *   .ui-bracket           `[ BRACKET ]` label
+ *   .ui-chip              pill label
+ *   .ui-inset             nested sub-panel
+ *   .ui-stat              key/value row (exactly two children: key, value)
+ *   .ui-rule              divider; .ui-rule-dots draws a `· · ·` line
+ *   .ui-glyph             graphic slot — image / emoji / inline SVG
+ *   .ui-foot              footer tagline
+ *   .ui-glow              static glow
+ *   .ui-redact            redaction hatch
+ *   .ui-strike            struck-through line
+ *   .ui-texture           dot background; .ui-texture-grid / .ui-texture-grain
+ *
+ * Alternation helper: .ui-alt sets --tone / --tone-soft / --tone-line from
+ * tone-2 on odd children and tone-3 on even ones. Themed primitives read
+ * var(--tone, var(--tone-1)) and fall back to the base accent outside .ui-alt.
+ *
+ * Motion: .ui-anim-fade / .ui-anim-rise / .ui-anim-pulse. Keyframes touch
+ * opacity / transform / color only — box-shadow is never animated — and all
+ * three switch off under prefers-reduced-motion: reduce.
+ *
+ * Tokens: only --bg-*, --text-*, --line*, --tone-*, --font-*. No colour
+ * literals. Every font-size uses --font-ui (14px) or larger, so §6's 11px
+ * Assistant footer is raised to the chrome floor. The system register's mono
+ * stack is written literally because no --font-mono token exists.
+ */
+
+/* System register: monospace, uppercase, letterspaced (§3). */
+.ui-head,
+.ui-section,
+.ui-tag,
+.ui-bracket,
+.ui-chip,
+.ui-stat > :first-child,
+.ui-rule-dots,
+.ui-redact {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* — Surfaces — */
+
+.ui-panel {
+	padding: 0.75rem 0.85rem;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--bg-panel);
+	color: var(--text);
+}
+
+/* VTK frame: square-ish, heavy rule, tone-capped top edge. */
+.ui-frame-diegetic {
+	padding: 0.75rem 0.85rem;
+	border: 1px solid var(--line-strong);
+	border-top: 2px solid var(--tone, var(--tone-1));
+	border-radius: 3px;
+	background: var(--bg-panel);
+	color: var(--text);
+}
+
+/* Assistant frame: soft corners, tone rail down the left margin. */
+.ui-frame-sidechannel {
+	padding: 0.75rem 0.85rem;
+	border: 1px solid var(--line);
+	border-left: 3px solid var(--tone, var(--tone-1));
+	border-radius: 10px;
+	background: var(--bg-raised);
+	color: var(--text);
+}
+
+.ui-inset {
+	padding: 0.5rem 0.6rem;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--bg-inset);
+	font-size: var(--font-ui);
+	color: var(--text-muted);
+}
+
+/* — Labels — */
+
+.ui-head {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	padding-bottom: 0.4rem;
+	border-bottom: 1px solid var(--line);
+	font-size: var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	color: var(--text-muted);
+}
+
+.ui-section {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-size: var(--font-ui);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+	color: var(--tone, var(--tone-1));
+}
+.ui-section::before {
+	content: '▶';
+	line-height: 1;
+}
+
+.ui-tag {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.1rem 0.4rem;
+	border: 1px solid var(--tone-line, var(--tone-1-line));
+	border-radius: 3px;
+	background: var(--tone-soft, var(--tone-1-soft));
+	font-size: var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+}
+
+.ui-bracket {
+	font-size: var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-dim);
+}
+.ui-bracket::before {
+	content: '[ ';
+}
+.ui-bracket::after {
+	content: ' ]';
+}
+
+.ui-chip {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.12rem 0.5rem;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--bg-raised);
+	font-size: var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--text-muted);
+}
+
+/* — Content — */
+
+/* Exactly two children: key then value. */
+.ui-stat {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: baseline;
+	column-gap: 0.75rem;
+	padding: 0.15rem 0;
+	font-size: var(--font-ui);
+}
+.ui-stat > :first-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-dim);
+}
+.ui-stat > :last-child {
+	color: var(--text);
+}
+
+.ui-rule {
+	margin: 0.6rem 0;
+	border: 0;
+	border-top: 1px solid var(--line);
+}
+.ui-rule-dots {
+	border: 0;
+	text-align: center;
+	font-size: var(--font-ui);
+	letter-spacing: 0.4em;
+	color: var(--text-dim);
+}
+.ui-rule-dots::before {
+	content: '· · ·';
+}
+
+.ui-glyph {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1;
+	font-size: 1.5rem;
+}
+.ui-glyph > img,
+.ui-glyph > svg {
+	display: block;
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+}
+
+.ui-foot {
+	margin-top: 0.5rem;
+	padding-top: 0.4rem;
+	border-top: 1px solid var(--line);
+	font-size: var(--font-ui);
+	letter-spacing: 0.03em;
+	color: var(--text-dim);
+}
+
+/* Static only — box-shadow is never animated anywhere in this kit. */
+.ui-glow {
+	box-shadow:
+		0 0 0 1px var(--tone-line, var(--tone-1-line)),
+		0 0 18px -4px var(--tone-soft, var(--tone-1-soft));
+}
+
+.ui-redact {
+	display: inline-block;
+	padding: 0 0.3rem;
+	border: 1px solid var(--line-strong);
+	background-color: var(--bg-inset);
+	background-image: repeating-linear-gradient(
+		45deg,
+		var(--line-strong) 0 2px,
+		transparent 2px 6px
+	);
+	font-size: var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-dim);
+	user-select: none;
+}
+
+.ui-strike {
+	color: var(--text-dim);
+	text-decoration: line-through;
+}
+
+/* — Backgrounds — */
+
+/* Texture fills are pattern, not boundary: they take --line-deco (decorative,
+ * ~1.1:1) so a brightening of --line for its 3:1 boundary role cannot turn a
+ * backdrop into a grid over the content. */
+.ui-texture {
+	background-image: radial-gradient(circle, var(--line-deco) 1px, transparent 1.6px);
+	background-size: 8px 8px;
+}
+.ui-texture-grid {
+	background-image:
+		linear-gradient(var(--line-deco) 1px, transparent 1px),
+		linear-gradient(90deg, var(--line-deco) 1px, transparent 1px);
+	background-size: 16px 16px;
+}
+.ui-texture-grain {
+	background-image:
+		repeating-linear-gradient(0deg, var(--line-deco) 0 1px, transparent 1px 3px),
+		repeating-linear-gradient(90deg, var(--line-deco) 0 1px, transparent 1px 3px);
+	background-size: 3px 3px;
+}
+
+/* — Alternation helper — */
+
+.ui-alt {
+	--tone: var(--tone-2);
+	--tone-soft: var(--tone-2-soft);
+	--tone-line: var(--tone-2-line);
+}
+.ui-alt:nth-child(even) {
+	--tone: var(--tone-3);
+	--tone-soft: var(--tone-3-soft);
+	--tone-line: var(--tone-3-line);
+}
+
+/* — Motion (opacity / transform / color only) — */
+
+@keyframes ui-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes ui-rise-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes ui-tone-pulse {
+	0%,
+	100% {
+		color: var(--text-muted);
+	}
+	50% {
+		color: var(--tone, var(--tone-1));
+	}
+}
+
+.ui-anim-fade {
+	animation: ui-fade-in 0.28s ease-out both;
+}
+.ui-anim-rise {
+	animation: ui-rise-in 0.32s ease-out both;
+}
+.ui-anim-pulse {
+	animation: ui-tone-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ui-anim-fade,
+	.ui-anim-rise,
+	.ui-anim-pulse {
+		animation: none;
+	}
+}
+
+/* Reveal contract (artifact components canon, D61): every artifact panel's
+ * entrance stagger reads these vars so ALL content is fully readable <=3.5s
+ * from mount. Components consume them WITH literal fallbacks
+ * (var(--reveal-stagger, 250ms)) so a panel outside a .ui-frame-diegetic host
+ * still animates; reduced-motion is honored per-component, not here. */
+.ui-frame-diegetic {
+	--reveal-stagger: 250ms;
+	--reveal-budget: 3500ms;
+}

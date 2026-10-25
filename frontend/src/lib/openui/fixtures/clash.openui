@@ -1,0 +1,2 @@
+fight = Clash("Innkeeper", "You", 88, "a haymaker that whistles", {glyph: "⚡"})
+root = ScenePane("Clash", [fight])

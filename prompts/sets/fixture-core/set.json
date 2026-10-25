@@ -1,0 +1,14 @@
+{
+  "id": "fixture-core",
+  "name": "Core-only fixture set (test)",
+  "version": "0.0.0",
+  "components": [
+    "ScenePane",
+    "MeterBar",
+    "ObjectCard",
+    "BeatCard",
+    "Document",
+    "Custom"
+  ],
+  "spec_version": "6e40be991d98"
+}

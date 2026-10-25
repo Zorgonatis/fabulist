@@ -1,0 +1,2 @@
+term = Interface("terminal", "DAEDALUS CORE // FAULT LOG", ["[ OK ] coolant loop ........ stable", "[ OK ] containment ......... stable", "[!!] heartbeat detected in core", "recommend: do not greet it"], {art: "╔════════════════════╗\n║    IT IS AWAKE.    ║\n║   do not answer.   ║\n╚════════════════════╝", glyph: "📡"})
+root = ScenePane("Daedalus — aft spine", [term])

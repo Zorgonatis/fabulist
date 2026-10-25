@@ -1,0 +1,1303 @@
+{
+  "activation_map": {
+    "attribution": "attribution",
+    "critic": "critic",
+    "dsl": "validate",
+    "env_hud": "env_hud",
+    "lanes": "npc_lanes",
+    "narrate": "narrate",
+    "plan": "planner",
+    "world_state": "bts"
+  },
+  "generated_from": {
+    "bindings": "fabulist.prompts.agent_sets.DEFAULT_BINDINGS",
+    "flows": "fabulist.prompts.modules.DEFAULT_FLOWS",
+    "node_set": "fabulist.flow.manifest.TURN_NODES",
+    "off_turn_flows": "fabulist.flow.manifest.OFF_TURN_FLOWS",
+    "stage_names": "fabulist.graph.nodes.STAGE_NAMES",
+    "step_catalog": "fabulist.prompts.catalog.INTERACTION_CATALOG"
+  },
+  "graphs": [
+    {
+      "attached_to": null,
+      "edges": [
+        {
+          "cap": null,
+          "condition": "plan due",
+          "from": "pre_turn",
+          "id": "e1",
+          "kind": "branch",
+          "label": "due",
+          "to": "planner"
+        },
+        {
+          "cap": null,
+          "condition": "no plan due",
+          "from": "pre_turn",
+          "id": "e1a",
+          "kind": "branch",
+          "label": "skip",
+          "to": "npc_lanes"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "planner",
+          "id": "e1e",
+          "kind": "flow",
+          "label": null,
+          "to": "npc_lanes"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "npc_lanes",
+          "id": "e1b",
+          "kind": "fanout",
+          "label": "per member",
+          "to": "npc_lane"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "npc_lanes",
+          "id": "e1c",
+          "kind": "flow",
+          "label": "no cast",
+          "to": "narrate"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "npc_lane",
+          "id": "e1d",
+          "kind": "flow",
+          "label": null,
+          "to": "narrate"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "narrate",
+          "id": "e2",
+          "kind": "flow",
+          "label": null,
+          "to": "commit"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "commit",
+          "id": "e2b",
+          "kind": "flow",
+          "label": null,
+          "to": "validate"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "validate",
+          "id": "e3",
+          "kind": "flow",
+          "label": null,
+          "to": "decision_gate"
+        },
+        {
+          "cap": null,
+          "condition": "needs critic",
+          "from": "decision_gate",
+          "id": "e4",
+          "kind": "branch",
+          "label": "flags",
+          "to": "critic"
+        },
+        {
+          "cap": null,
+          "condition": "clean",
+          "from": "decision_gate",
+          "id": "e4b",
+          "kind": "branch",
+          "label": "clean",
+          "to": "bts"
+        },
+        {
+          "cap": null,
+          "condition": "verdict == ok",
+          "from": "critic",
+          "id": "e5",
+          "kind": "branch",
+          "label": "ok",
+          "to": "bts"
+        },
+        {
+          "cap": null,
+          "condition": "verdict == diffs",
+          "from": "critic",
+          "id": "e6",
+          "kind": "branch",
+          "label": "diffs",
+          "to": "bts"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "bts",
+          "id": "e10",
+          "kind": "flow",
+          "label": null,
+          "to": "env_hud"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "env_hud",
+          "id": "e11",
+          "kind": "flow",
+          "label": null,
+          "to": "attribution"
+        },
+        {
+          "cap": null,
+          "condition": null,
+          "from": "attribution",
+          "id": "e12",
+          "kind": "flow",
+          "label": null,
+          "to": "done"
+        }
+      ],
+      "entry": "pre_turn",
+      "id": "turn_flow",
+      "kind": "turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "pre_turn",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "No stage frame is emitted today; static in wave 1.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "engine-owned rules clock/classifier"
+          },
+          "runs": {
+            "call_site": "fabulist.graph.nodes.make_pre_turn_node",
+            "description": "Classify the action and advance the clock; compile injected facts.",
+            "interaction": null,
+            "kind": "fixed"
+          },
+          "title": "Pre-turn"
+        },
+        {
+          "activation": [
+            "plan"
+          ],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "narrator",
+            "interaction": "planner",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "planner",
+          "inspector": {
+            "agent_filter": "planner",
+            "events": [
+              "plan",
+              "plan_refresh_failed",
+              "entity_establish",
+              "entity_set",
+              "entity_update",
+              "entity_move",
+              "entity_retire",
+              "entity_summary",
+              "validation_notice"
+            ],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "W9.20: the plan junction's arm — runs BEFORE the lanes and the narration, only when the preset's cadence says a plan is due (turn 1 is mandatory), never per turn. W9.31: the run starts with the bootstrap (first run) or repair (later runs) tool phase.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "planner"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "W9.31: first the seed phase — one bounded entity-tool loop that bootstraps the object stores on the session's first run and repairs them on every later one — then one steering pass: the story strings, the scene date/time, weather and the facts the plan holds established.",
+            "interaction": "planner",
+            "kind": "model_pass"
+          },
+          "title": "Planner"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "completion.narration",
+            "interaction": "npc",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": {
+            "kind": "per_member",
+            "max_parallel": 4,
+            "merge": "narrate",
+            "nodes": [
+              "npc_lane"
+            ],
+            "source": "cast_presence"
+          },
+          "id": "npc_lanes",
+          "inspector": {
+            "agent_filter": "npc",
+            "events": [],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "One lane per ACTIVE cast member (intent + narrative), pooled max_parallel at a time, merged by the narrator. Zero lanes with no cast: the turn is byte-identical.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "npc"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Every active cast member's intent, 4 requests in flight.",
+            "interaction": "npc",
+            "kind": "model_pass"
+          },
+          "title": "NPC lanes"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "completion.narration",
+            "interaction": "npc",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "npc_lane",
+          "inspector": {
+            "agent_filter": "npc",
+            "events": [
+              "npc_lane"
+            ],
+            "kind": "model_pass"
+          },
+          "kind": "fanout",
+          "meta": {
+            "description": "W9.17: the fan-out's per-member node — ONE model pass per `Send`, bounded by the npc_lanes pool. Its rows are written at the fan-in join in member order, never completion order.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "npc"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "One ACTIVE cast member's intent, narrative and lines.",
+            "interaction": "npc",
+            "kind": "model_pass"
+          },
+          "title": "NPC lane"
+        },
+        {
+          "activation": [
+            "narrate"
+          ],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "narrator",
+            "interaction": "narrate",
+            "source": "agent_bindings"
+          },
+          "composition": {
+            "edges": [
+              {
+                "cap": null,
+                "condition": null,
+                "from": "narrator_system",
+                "id": "e_narrator_system_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              },
+              {
+                "cap": null,
+                "condition": null,
+                "from": "library",
+                "id": "e_library_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              },
+              {
+                "cap": null,
+                "condition": null,
+                "from": "history",
+                "id": "e_history_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              },
+              {
+                "cap": null,
+                "condition": null,
+                "from": "facts",
+                "id": "e_facts_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              },
+              {
+                "cap": null,
+                "condition": null,
+                "from": "user",
+                "id": "e_user_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              },
+              {
+                "cap": null,
+                "condition": null,
+                "from": "recalled",
+                "id": "e_recalled_sink",
+                "kind": "flow",
+                "label": null,
+                "to": "assembled_prompt"
+              }
+            ],
+            "entry": "narrator_system",
+            "kind": "composition",
+            "nodes": [
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "narrator_system",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: stable_prefix",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "step_editor",
+                  "step_id": "narrate"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Narrator system block (the cached system prompt).",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "Narrator system prompt"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "library",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: stable_prefix",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "step_editor",
+                  "step_id": "narrate"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Generated OpenUI component library doc.",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "OpenUI component library"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "history",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: neutral",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "fixed",
+                  "reason": "engine-supplied treated history"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Treated chat history.",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "Chat history"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "facts",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: dynamic_tail",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "fixed",
+                  "reason": "engine-injected facts"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Per-turn state facts.",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "World facts"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "user",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: neutral",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "fixed",
+                  "reason": "engine-supplied user message"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "The turn's final user message (may carry injected facts).",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "User message"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "recalled",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "fixed_stage"
+                },
+                "kind": "trigger",
+                "meta": {
+                  "description": "Region: dynamic_tail",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "fixed",
+                  "reason": "engine recall seam"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Vector recall block.",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "Recalled context (RAG reference)"
+              },
+              {
+                "activation": [],
+                "agent": null,
+                "composition": null,
+                "fanout": null,
+                "id": "assembled_prompt",
+                "inspector": {
+                  "agent_filter": null,
+                  "events": [],
+                  "kind": "terminal"
+                },
+                "kind": "terminal",
+                "meta": {
+                  "description": "Linear projection of the W6 flow (one source, two editors).",
+                  "notes": []
+                },
+                "prompt_surface": {
+                  "door": "none",
+                  "reason": "composition output"
+                },
+                "runs": {
+                  "call_site": null,
+                  "description": "Ordered message list the narrator caller receives.",
+                  "interaction": null,
+                  "kind": "fixed"
+                },
+                "title": "Assembled prompt"
+              }
+            ],
+            "regions": [
+              {
+                "id": "stable_prefix",
+                "kind": "stable_prefix",
+                "order": 0,
+                "title": "Stable prefix (cache contract)"
+              },
+              {
+                "id": "neutral",
+                "kind": "neutral",
+                "order": 1,
+                "title": "Conversation (neutral)"
+              },
+              {
+                "id": "dynamic_tail",
+                "kind": "dynamic_tail",
+                "order": 2,
+                "title": "Dynamic tail"
+              }
+            ],
+            "sink": "assembled_prompt",
+            "title": "Narrator prompt assembly"
+          },
+          "fanout": null,
+          "id": "narrate",
+          "inspector": {
+            "agent_filter": "narrate",
+            "events": [],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "The in-character streaming pass. ONE draft streams; on validator flags the same node repairs it in-loop with targeted `patch_prose` / `patch_dsl` edits (working memory, pre-commit — W9.24), and the repair iterations annotate this slot's label.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "narrate"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Streaming prose + openui DSL.",
+            "interaction": "narrate",
+            "kind": "model_pass"
+          },
+          "title": "Narrator turn"
+        },
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "commit",
+          "inspector": {
+            "agent_filter": null,
+            "events": [
+              "narrative"
+            ],
+            "kind": "fixed_stage"
+          },
+          "kind": "engine",
+          "meta": {
+            "description": "The node boundary that separates streamed from kept (D4/D10).",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "event-log commit, no prompt"
+          },
+          "runs": {
+            "call_site": "fabulist.graph.nodes._commit_narrative",
+            "description": "Append the user (echo-deduped) + narrative events; a cancelled turn never reaches it.",
+            "interaction": null,
+            "kind": "fixed"
+          },
+          "title": "Commit"
+        },
+        {
+          "activation": [
+            "dsl"
+          ],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "validate",
+          "inspector": {
+            "agent_filter": null,
+            "events": [
+              "validator_flags"
+            ],
+            "kind": "gate"
+          },
+          "kind": "gate",
+          "meta": {
+            "description": "Emitted stage name is 'dsl'.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "deterministic gate + resynthesizer"
+          },
+          "runs": {
+            "call_site": "fabulist.graph.nodes.validate_dsl",
+            "description": "Deterministic DSL gate; re-synthesizes on failure.",
+            "interaction": null,
+            "kind": "fixed"
+          },
+          "title": "Validate"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": null,
+            "interaction": null,
+            "source": "engine"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "decision_gate",
+          "inspector": {
+            "agent_filter": "narrate_repair",
+            "events": [],
+            "kind": "gate"
+          },
+          "kind": "gate",
+          "meta": {
+            "description": "Advisory flags only; no stage frame today. Static in wave 1.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "decision client, not a W6 step"
+          },
+          "runs": {
+            "call_site": "fabulist.graph.nodes._run_turn_gate",
+            "description": "d1-3b batched advisory calls (slop map + movement), chunked at 30 questions.",
+            "interaction": null,
+            "kind": "model_pass"
+          },
+          "title": "Decision gate"
+        },
+        {
+          "activation": [
+            "critic"
+          ],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "extractor",
+            "interaction": "critic",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "critic",
+          "inspector": {
+            "agent_filter": "critic",
+            "events": [
+              "critic_verdict"
+            ],
+            "kind": "gate"
+          },
+          "kind": "gate",
+          "meta": {
+            "description": "Branches: ok/diffs -> bts (keep the turn). A fail verdict keeps the turn too and logs its verdict — the regenerate path is retired (W9.24). The planner runs BEFORE the narration, so no verdict routes to it (W9.20).",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "critic"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Quality gate: ok | diffs (a fail keeps the turn).",
+            "interaction": "critic",
+            "kind": "model_pass"
+          },
+          "title": "Critic"
+        },
+        {
+          "activation": [
+            "world_state"
+          ],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "extractor",
+            "interaction": "bts",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "bts",
+          "inspector": {
+            "agent_filter": "bts",
+            "events": [
+              "world_state",
+              "world_state_failed",
+              "entity_establish",
+              "entity_set",
+              "entity_update",
+              "entity_move",
+              "entity_retire",
+              "entity_summary",
+              "validation_notice"
+            ],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "Emitted stage name is 'world_state'.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "bts"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "World-state delta / checkpoint.",
+            "interaction": "bts",
+            "kind": "model_pass"
+          },
+          "title": "World tracker (BTS)"
+        },
+        {
+          "activation": [
+            "env_hud"
+          ],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "env_hud",
+          "inspector": {
+            "agent_filter": null,
+            "events": [
+              "env_hud",
+              "env_hud_failed"
+            ],
+            "kind": "fixed_stage"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "engine-emitted HUD, never narrator"
+          },
+          "runs": {
+            "call_site": "fabulist.state.env_hud.env_hud_statement",
+            "description": "Engine-emitted EnvTracker HUD statement (D38).",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Env HUD"
+        },
+        {
+          "activation": [
+            "attribution"
+          ],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "attribution",
+          "inspector": {
+            "agent_filter": null,
+            "events": [
+              "attribution",
+              "attribution_failed"
+            ],
+            "kind": "fixed_stage"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "Emitted stage name is 'attribution'. The row is engine-emitted: the markup pass resolves each quoted line from the palette colour the narrator wrapped it in, then the node records first-sighting colours.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "none",
+            "reason": "parses the narrator's colour markup; no prompt of its own"
+          },
+          "runs": {
+            "call_site": "fabulist.state.attribution.parse_attribution",
+            "description": "Colour-markup per-quote attribution: each quoted line resolves from the speaker's palette colour the narrator wrote — no model call (owner ruling Q2=B, W9.28).",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Attributing speakers"
+        },
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "done",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "terminal"
+          },
+          "kind": "terminal",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "none",
+            "reason": "terminal"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Turn complete; post-turn hooks fire after 'done'.",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Done"
+        }
+      ],
+      "title": "Turn flow"
+    },
+    {
+      "attached_to": "pre_turn",
+      "edges": [
+        {
+          "cap": null,
+          "condition": null,
+          "from": "recall_embed",
+          "id": "oa1",
+          "kind": "attach",
+          "label": "recall block",
+          "to": "pre_turn"
+        }
+      ],
+      "entry": "recall_embed",
+      "id": "recall",
+      "kind": "off_turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": null,
+            "interaction": null,
+            "source": "engine"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "recall_embed",
+          "inspector": {
+            "agent_filter": null,
+            "events": [
+              "recall_queries"
+            ],
+            "kind": "fixed_stage"
+          },
+          "kind": "trigger",
+          "meta": {
+            "description": "No stage frame; off-turn in wave 1.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "memory seam, not a W6 step"
+          },
+          "runs": {
+            "call_site": "fabulist.memory.embedder.embed_texts",
+            "description": "Embed the user message and surface nearest older turns (W3.2).",
+            "interaction": null,
+            "kind": "embedder"
+          },
+          "title": "Recall embed"
+        }
+      ],
+      "title": "Pre-turn recall"
+    },
+    {
+      "attached_to": "narrate",
+      "edges": [
+        {
+          "cap": null,
+          "condition": null,
+          "from": "dsl_statement",
+          "id": "ob1",
+          "kind": "flow",
+          "label": null,
+          "to": "imagegen_call"
+        }
+      ],
+      "entry": "dsl_statement",
+      "id": "imagegen",
+      "kind": "off_turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "dsl_statement",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "trigger",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "none",
+            "reason": "narrator output, not an authored step"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "An image-triggering DSL statement in the narrator reply.",
+            "interaction": null,
+            "kind": "fixed"
+          },
+          "title": "Narrative DSL"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "imagegen",
+            "interaction": null,
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "imagegen_call",
+          "inspector": {
+            "agent_filter": "imagegen",
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "engine hook, no W6 step"
+          },
+          "runs": {
+            "call_site": "fabulist.api.imagegen_api",
+            "description": "Render the DSL-requested image.",
+            "interaction": null,
+            "kind": "hook"
+          },
+          "title": "Image generation"
+        }
+      ],
+      "title": "Image generation"
+    },
+    {
+      "attached_to": "bts",
+      "edges": [
+        {
+          "cap": null,
+          "condition": "over_budget",
+          "from": "budget_check",
+          "id": "oc1",
+          "kind": "flow",
+          "label": null,
+          "to": "summarize"
+        }
+      ],
+      "entry": "budget_check",
+      "id": "compaction",
+      "kind": "off_turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "budget_check",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "trigger",
+          "meta": {
+            "description": "Runs AFTER 'done'; never on the turn stream (D42).",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "post-turn hook"
+          },
+          "runs": {
+            "call_site": "fabulist.graph.compaction.CompactService.compact",
+            "description": "Post-turn hook (monitor-forced at 90%) and the [Compact] button: summarize the whole history into an era (W9.26 §2.3).",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Budget check"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "summarizer",
+            "interaction": "summarize",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "summarize",
+          "inspector": {
+            "agent_filter": "summarizer",
+            "events": [],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "summarize"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Compact long history into a summary.",
+            "interaction": "summarize",
+            "kind": "model_pass"
+          },
+          "title": "Summarize"
+        }
+      ],
+      "title": "Compaction"
+    },
+    {
+      "attached_to": "done",
+      "edges": [
+        {
+          "cap": null,
+          "condition": null,
+          "from": "event",
+          "id": "od1",
+          "kind": "flow",
+          "label": null,
+          "to": "assistant_consult"
+        }
+      ],
+      "entry": "event",
+      "id": "assistant_hooks",
+      "kind": "off_turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "event",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "trigger",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "fixed",
+            "reason": "event trigger"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "A per-turn assistant hook or a manual consult.",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Event"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "narrator",
+            "interaction": "assistant",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "assistant_consult",
+          "inspector": {
+            "agent_filter": "narrator",
+            "events": [],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "assistant"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "A side assistant's reply.",
+            "interaction": "assistant",
+            "kind": "model_pass"
+          },
+          "title": "Assistant consult"
+        }
+      ],
+      "title": "Assistant hooks"
+    },
+    {
+      "attached_to": "done",
+      "edges": [
+        {
+          "cap": null,
+          "condition": null,
+          "from": "due_check",
+          "id": "oh1",
+          "kind": "attach",
+          "label": "after done",
+          "to": "done"
+        },
+        {
+          "cap": null,
+          "condition": "due or run-now",
+          "from": "due_check",
+          "id": "oh2",
+          "kind": "flow",
+          "label": null,
+          "to": "proposal_lanes"
+        }
+      ],
+      "entry": "due_check",
+      "id": "historian",
+      "kind": "off_turn",
+      "nodes": [
+        {
+          "activation": [],
+          "agent": null,
+          "composition": null,
+          "fanout": null,
+          "id": "due_check",
+          "inspector": {
+            "agent_filter": null,
+            "events": [],
+            "kind": "fixed_stage"
+          },
+          "kind": "trigger",
+          "meta": {
+            "description": "Runs AFTER 'done' in its own task, never on the turn stream: two cheap chain reads when not due.",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "none",
+            "reason": "post-turn hook"
+          },
+          "runs": {
+            "call_site": "fabulist.state.historian.HistorianRunner.is_due",
+            "description": "Post-turn hook: is the preset's cadence up (or did the owner press run-now)?",
+            "interaction": null,
+            "kind": "engine"
+          },
+          "title": "Due check"
+        },
+        {
+          "activation": [],
+          "agent": {
+            "bound_agent": null,
+            "default_agent": "extractor",
+            "interaction": "proposals",
+            "source": "agent_bindings"
+          },
+          "composition": null,
+          "fanout": null,
+          "id": "proposal_lanes",
+          "inspector": {
+            "agent_filter": "proposals",
+            "events": [
+              "historian_run",
+              "asset_proposal"
+            ],
+            "kind": "model_pass"
+          },
+          "kind": "stage",
+          "meta": {
+            "description": "W9.23 §3.6: the same lane system the turn used to run, driven by the historian over the window since the last run. It files `asset_proposal` rows for the owner's review home — no lane writes an asset, and no cast row is ever filed here (cast proposals are the turn's).",
+            "notes": []
+          },
+          "prompt_surface": {
+            "door": "step_editor",
+            "step_id": "proposals"
+          },
+          "runs": {
+            "call_site": null,
+            "description": "Touched-entity evidence over the run window + the should-we-propose verdict, then one extractor pass per data type (world / actors / books).",
+            "interaction": "proposals",
+            "kind": "model_pass"
+          },
+          "title": "Proposal lanes"
+        }
+      ],
+      "title": "Historian"
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,3 @@
+{# Stable-prefix system prompt: framing + directive blocks in fixed declared order. #}
+{# Order is authoritative (parts.DEFAULT_DIRECTIVES); toggles only drop entries. #}
+{{ framing }}{% for d in directives %}{{ "\n\n" }}## {{ d.name }}{{ "\n\n" }}{{ d.content }}{% endfor %}

@@ -1,0 +1,2 @@
+react = ReactionSpotlight("😬", "That was not the question I meant to ask.")
+root = ScenePane("ReactionSpotlight", [react])

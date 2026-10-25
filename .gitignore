@@ -1,0 +1,48 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+frontend/.svelte-kit/
+frontend/build/
+
+# Disposable spikes (W0.4 and later)
+spikes/
+
+# user-specific runtime config + data
+configs/connections.json
+data/
+configs/*.bak-*
+
+# the models sidecar's weights root (mounted by docker-compose.yml)
+/models/
+
+# artifact-component design references (local-only design material)
+docs/references/
+
+# draw.io desktop lock/temp files
+docs/diagrams/.*dtmp
+
+# secrets (env file loaded by the engine service)
+.env
+
+# local-only working notes (current state, full decision log, machine ops)
+private/
+
+# the pre-split working tree (personal state, old history) — moved here by the owner
+/archive/
+
+# local project context (Pi APPEND_SYSTEM): personal, unshipped
+.pi/APPEND_SYSTEM.md
+
+# internal process docs live in private/ (quarantined 2026-10-23)
+docs/plans/
+docs/archive/
+docs/drafts/
+docs/PACKING-PLAN.md
+docs/COMFY-PLAN.md
+docs/D1-3B-*.md

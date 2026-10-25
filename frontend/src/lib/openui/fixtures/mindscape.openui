@@ -1,0 +1,2 @@
+mind = Mindscape("Cracks in the Facade", [{text: "Hold it together", weight: 45, kind: "thought"}, {text: "IT IS ALREADY OPEN", weight: 95, kind: "scream"}, {text: "they can smell fear", weight: 20, kind: "aside"}, {text: "I am fine", weight: 70, kind: "thought"}], "grain", "", "dread", {glyph: "(・ε・)"})
+root = ScenePane("Mindscape", [mind])

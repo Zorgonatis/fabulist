@@ -1,0 +1,2 @@
+entrance = Entrance("Vess", "the harbourmaster's auditor", "A coat that has outlived three owners.", {markers: "Eyes: grey as wet slate; Voice: never louder than the tide", glyph: "🎩"})
+root = ScenePane("Entrance", [entrance])

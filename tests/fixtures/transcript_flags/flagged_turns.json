@@ -1,0 +1,372 @@
+{
+ "_comment": "Synthetic transcript cases for item 14 (a validator note styling the whole message). Each entry mirrors one narrative row plus the validator_flags row that followed it in the same session (the anchor the API's validation_details uses), rebuilt from invented prose so no real session data is committed. Every case keeps the SHAPE that made a flagged prose run read as a component container \u2014 segment kinds and lengths, the anchoring prose run and its share of the message \u2014 while the prose itself is reduced to a 100-char head. Evidence strings are the actual rule matches: 4-word shingles for ``parrot`` (the user message the prose echoed back), the slop phrase otherwise. Session ids and cast names are placeholders.",
+ "cases": [
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 63,
+   "validator_seq": 65,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"dip is being handled\", \"garlic dip is being\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 1778
+    },
+    {
+     "kind": "dsl",
+     "len": 34
+    }
+   ],
+   "flagged_fraction": 0.981,
+   "head": "Through the hatch, Wren's voice drifts up from the taproom, a higher and sharper version of her usual tone as "
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 81,
+   "validator_seq": 82,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"bulb in the hall\", \"dead bulb in the\", \"the dead bulb in\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2133
+    }
+   ],
+   "flagged_fraction": 1.0,
+   "head": "The grey harbour light filters through the salt streaked glass, lighting the dust motes over the bar and the d"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 94,
+   "validator_seq": 96,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"2am and also why\", \"a haunted cellar at\", \"after the market stall\", \"again also why does\", \"also why does the\", \"also why does your\", \"and also why does\", \"and yes the crate\", \"and yes the ferry\", \"at 2am and also\", \"back room smell like\", \"bell ring when nobody\", \"cellar at 2am and\", \"crate of fish was\", \"did you eat after\", \"does the bell ring\", \"does your back room\", \"eat after the market\", \"ferry was late again\", \"haunted cellar at 2am\", \"in did you eat\", \"late again also why\", \"like a haunted cellar\", \"market stall and yes\", \"mostly and yes the\", \"nobody walks in did\", \"of fish was weird\", \"ring when nobody walks\", \"room smell like a\", \"smell like a haunted\", \"stall and yes the\", \"the bell ring when\", \"the crate of fish\", \"the ferry was late\", \"the market stall and\", \"walks in did you\", \"was late again also\", \"when nobody walks in\", \"why does the bell\", \"why does your back\", \"yes the crate of\", \"yes the ferry was\", \"you eat after the\", \"your back room smell\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2112
+    },
+    {
+     "kind": "dsl",
+     "len": 41
+    }
+   ],
+   "flagged_fraction": 0.981,
+   "head": "The walk from the cold quay to the morning taproom is a blur of grey light and steam. The chandler's bell"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 109,
+   "validator_seq": 111,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"deposit need by 6\", \"light deposit need by\", \"ring light deposit need\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2217
+    },
+    {
+     "kind": "dsl",
+     "len": 39
+    }
+   ],
+   "flagged_fraction": 0.983,
+   "head": "Wren is curled into a tight ball at the far end of the settle, the blue light of her slate painting her face p"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 123,
+   "validator_seq": 124,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"after this late shift\", \"bulb tonight can you\", \"can you eat after\", \"do the bulb tonight\", \"eat after this late\", \"the bulb tonight can\", \"tonight can you eat\", \"you eat after this\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2082
+    }
+   ],
+   "flagged_fraction": 1.0,
+   "head": "Wren turns away from the dark window, catching the movement by the bar. She doesn't cross the room immediately"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 149,
+   "validator_seq": 151,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"asking you to buy\", \"buy me tea when\", \"me tea when i\", \"not asking you to\", \"tea when i m\", \"to buy me tea\", \"when i m back\", \"you to buy me\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2215
+    },
+    {
+     "kind": "dsl",
+     "len": 35
+    }
+   ],
+   "flagged_fraction": 0.984,
+   "head": "The slate in Wren's lap buzzes, the vibration rattling against the table. She looks down, seeing the note"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c001",
+   "narrative_seq": 177,
+   "validator_seq": 179,
+   "rule_id": "parrot",
+   "check": "parrot",
+   "evidence": "\"and the bill this\", \"at the figures together\", \"bill this month i\", \"box and the bill\", \"can leave it until\", \"can look at the\", \"delivery box and the\", \"figures together no judgment\", \"i noticed the numbers\", \"if you want we\", \"judgment if you want\", \"leave it until later\", \"look at the figures\", \"month i noticed the\", \"no judgment if you\", \"noticed the numbers can\", \"numbers can look at\", \"the bill this month\", \"the figures together no\", \"the numbers can look\", \"the unopened delivery box\", \"this month i noticed\", \"together no judgment if\", \"unopened delivery box and\", \"want we can leave\", \"we can leave it\", \"you want we can\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 1929
+    },
+    {
+     "kind": "dsl",
+     "len": 41
+    }
+   ],
+   "flagged_fraction": 0.979,
+   "head": "The slate in Wren's hand vibrates, the hum echoing the quiet of the taproom. She doesn't look"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c002",
+   "narrative_seq": 72,
+   "validator_seq": 73,
+   "rule_id": "silence_stretched",
+   "check": "slop",
+   "evidence": "\"silence stretching\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 703
+    },
+    {
+     "kind": "dsl",
+     "len": 218
+    },
+    {
+     "kind": "prose",
+     "len": 75
+    },
+    {
+     "kind": "dsl",
+     "len": 53
+    }
+   ],
+   "flagged_fraction": 0.67,
+   "head": "Wren does not move to greet you. She watches the fire, her expression flat, the silence stretching long enough"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c003",
+   "narrative_seq": 6,
+   "validator_seq": 7,
+   "rule_id": "ozone",
+   "check": "slop",
+   "evidence": "\"ozone\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 780
+    },
+    {
+     "kind": "dsl",
+     "len": 167
+    },
+    {
+     "kind": "prose",
+     "len": 125
+    },
+    {
+     "kind": "dsl",
+     "len": 85
+    },
+    {
+     "kind": "prose",
+     "len": 64
+    },
+    {
+     "kind": "dsl",
+     "len": 66
+    }
+   ],
+   "flagged_fraction": 0.606,
+   "head": "The door thuds shut, trapping the smell of damp wool and ozone inside. Water runs from your coat, pooling"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c004",
+   "narrative_seq": 13,
+   "validator_seq": 14,
+   "rule_id": "ozone",
+   "check": "slop",
+   "evidence": "\"ozone\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 657
+    },
+    {
+     "kind": "dsl",
+     "len": 250
+    },
+    {
+     "kind": "dsl",
+     "len": 57
+    }
+   ],
+   "flagged_fraction": 0.682,
+   "head": "The gate looms over the lane, two slabs of grey stone that climb forty feet upward into the"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c005",
+   "narrative_seq": 102,
+   "validator_seq": 103,
+   "rule_id": "ozone",
+   "check": "slop",
+   "evidence": "\"ozone\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 921
+    },
+    {
+     "kind": "dsl",
+     "len": 92
+    },
+    {
+     "kind": "dsl",
+     "len": 208
+    },
+    {
+     "kind": "dsl",
+     "len": 150
+    },
+    {
+     "kind": "dsl",
+     "len": 97
+    }
+   ],
+   "flagged_fraction": 0.627,
+   "head": "The sudden quiet of the shop is broken only by the buzz of the old sign. Otto doesn't move for a"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c006",
+   "narrative_seq": 4,
+   "validator_seq": 6,
+   "rule_id": "ozone",
+   "check": "slop",
+   "evidence": "\"ozone\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 661
+    },
+    {
+     "kind": "dsl",
+     "len": 157
+    },
+    {
+     "kind": "prose",
+     "len": 106
+    },
+    {
+     "kind": "dsl",
+     "len": 51
+    },
+    {
+     "kind": "dsl",
+     "len": 44
+    }
+   ],
+   "flagged_fraction": 0.649,
+   "head": "The room is a box of white and beige. Morning light cuts through a gap in the curtains, lighting dust"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c007",
+   "narrative_seq": 43,
+   "validator_seq": 45,
+   "rule_id": "voice_texture",
+   "check": "slop",
+   "evidence": "\"guttural\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 2110
+    },
+    {
+     "kind": "dsl",
+     "len": 62
+    }
+   ],
+   "flagged_fraction": 0.971,
+   "head": "The tapping of the claw stops abruptly. The quiet that follows is heavy, broken only by the erratic *zzz*"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c008",
+   "narrative_seq": 15,
+   "validator_seq": 16,
+   "rule_id": "ozone",
+   "check": "slop",
+   "evidence": "\"ozone\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 1950
+    },
+    {
+     "kind": "dsl",
+     "len": 619
+    }
+   ],
+   "flagged_fraction": 0.759,
+   "head": "The air inside the shop is sterile, smelling of ozone and a heavy floral perfume that clings to the back of"
+  },
+  {
+   "session_id": "deadbeefdeadbeefdeadbeef0000c008",
+   "narrative_seq": 50,
+   "validator_seq": 51,
+   "rule_id": "voice_texture",
+   "check": "slop",
+   "evidence": "\"gravelly\"",
+   "segment_index": 0,
+   "segments": [
+    {
+     "kind": "prose",
+     "len": 828
+    },
+    {
+     "kind": "dsl",
+     "len": 183
+    },
+    {
+     "kind": "prose",
+     "len": 148
+    },
+    {
+     "kind": "dsl",
+     "len": 48
+    }
+   ],
+   "flagged_fraction": 0.686,
+   "head": "The clerk's smile stiffens for a heartbeat at the bluntness of the request. They recover instantly,"
+  }
+ ]
+}

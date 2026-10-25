@@ -1,0 +1,2 @@
+post = SocialPost("NO ENCORE", "no_encore_band", "four bands, one dive bar, 214 people who all knew the words to Tollgate. the sound guy cried during Tidewall. we are never topping this night and frankly we should stop trying.", {likes: 214, reposts: 37, comments: 12}, {author: "Marisol", handle: "marisol.bass", text: "the sound guy cried because the monitor was feeding back, but i am keeping your version of events"})
+root = ScenePane("Artifact — SocialPost (feed card + first reply)", [post])

@@ -1,0 +1,11 @@
+{
+  "id": "time_advance",
+  "description": "Rest/wait beat: a stated clock reading shows time moving without any location or inventory change.",
+  "user_msg": "I wait by the fountain until the bells ring.",
+  "turn": "The afternoon drains away. When the bells finally ring, the clock over the guild hall reads 17:20.",
+  "expected_delta": {
+    "time": "17:20"
+  },
+  "expected_action_class": "rest",
+  "notes": "Preset Env Tracking time-advance table: rest skips ahead; other actions add a bounded window. Expected time is the reading stated in the prose, normalized to 24h HH:MM. 'wait' resolves to rest."
+}

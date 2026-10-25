@@ -1,0 +1,9 @@
+{
+  "id": "ooc_no_delta",
+  "description": "Out-of-character aside (Tier-0): the scene does not advance, so the extractor must record no delta.",
+  "user_msg": "OOC: what time does the Rusted Anchor shut?",
+  "turn": "Past midnight most nights; you have time yet.",
+  "expected_delta": {},
+  "expected_action_class": "other",
+  "notes": "Preset Tier-0 OOC semantics: no clock, no facts, no state change. The engine skips the extractor on the OOC path, but the rig asserts the extractor itself invents nothing for an OOC exchange. No narrative action -> other."
+}

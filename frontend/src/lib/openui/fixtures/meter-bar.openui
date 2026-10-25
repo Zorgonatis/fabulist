@@ -1,0 +1,2 @@
+meter = MeterBar("Tension", 68, 100)
+root = ScenePane("MeterBar", [meter])

@@ -1,0 +1,42 @@
+# The image inputs are frontend/ (built in stage 1), src/, prompts/, scripts/,
+# configs/connections.example.json, pyproject.toml and uv.lock. Everything here
+# is either rebuilt in the image, machine-local, or user state that must never
+# be baked into a layer.
+
+# VCS + local tooling
+.git
+.gitignore
+.github
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node build leftovers (stage 1 installs and builds from package-lock.json)
+node_modules
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+
+# User state: never in the image — it is mounted at /app/data and /app/configs
+data
+configs/connections.json
+configs/*.bak-*
+
+# Secrets
+.env
+frontend/.env
+frontend/.env.local
+
+# Local-only material
+private
+archive
+docs/references
+docs
+tests
+spikes
+
+# OS noise
+.DS_Store
+Thumbs.db

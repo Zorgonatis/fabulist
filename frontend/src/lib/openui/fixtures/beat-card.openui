@@ -1,0 +1,2 @@
+beat = BeatCard("The innkeeper avoids your eyes when the name is spoken.")
+root = ScenePane("BeatCard", [beat])

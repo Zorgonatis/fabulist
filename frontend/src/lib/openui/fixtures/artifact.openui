@@ -1,0 +1,3 @@
+key = Artifact("The Landlady's Key", "Relic", "legendary", "Cut from the door of a house that no longer exists, and it remembers every tenant it ever let in. It has already made up its mind about you.", ["Opens: exactly one door", "Refuses: cops", "Sass: 12", "Charm: +12", "Debt: −3 favours", "Cursed: extremely"], {glyph: "🗝️"})
+spoon = Artifact("Bent Spoon", "Utensil", "trash", "Pried open exactly one window in its whole career, and will not be doing it again. One bowl of soup from its lifetime remains unaccounted for.", ["Bend: 47°", "Soup: +2 morale", "Trust: −1", "Provenance unknown"])
+root = ScenePane("Artifact", [key, spoon])

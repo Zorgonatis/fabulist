@@ -1,0 +1,2 @@
+letter = Document("letter", "To the Harbourmaster", "The tide took the lamps before dawn, and the fog took the eastern pier.\n\nDo not send the boy. He is the last of the line, and the water already knows his name.", "— A friend", {glyph: "📜"})
+root = ScenePane("Document", [letter])

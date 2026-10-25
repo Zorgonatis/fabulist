@@ -1,0 +1,318 @@
+{
+  "agents": [
+    {
+      "debug_capture": true,
+      "default_agent": "narrator",
+      "disposition": "assistant_reply + assistant_panel system events -> panel/transcript surfaces (D25)",
+      "flow": [
+        "system",
+        "history",
+        "user"
+      ],
+      "input_builder": "fabulist.wiring._assistant_flow_messages",
+      "name": "assistant",
+      "output_schema": "assistant reply prose + optional openui DSL (`asst = AssistantCard(...)` statement)",
+      "registry": true,
+      "structural_types": [
+        "history",
+        "system",
+        "user"
+      ],
+      "task": "narration",
+      "trigger": "manual consult (POST .../assistants) and the D38 per-turn assistant hook (fire-and-forget, after the turn commits)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "extractor",
+      "disposition": "system/world_state event (latest-wins) + flat state-delta fold keys (loc/weather/tone/inv); injected pre-turn as continuity notes (D21)",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._bts_flow_messages",
+      "name": "bts",
+      "output_schema": "one BTS block over the nine v3.0.1 categories; delta by default, checkpoint on MODE: checkpoint",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "state",
+      "trigger": "post-turn, after the narrative commits (BtsRunner; bts_enabled). A tool loop: the model reads the registry / cast roster / recent turns, then changes the world with one validated action per call (establish, move, set, update, retire, rename, flag) inside a per-turn budget, and closes the turn with a completion that calls no tool. The engine appends each action and commits one world_state render plus the flat state-delta (W9.29)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "captioner",
+      "disposition": "image_caption system event -> folded asset caption; VLM content-part fallback (D14)",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._caption_flow_messages",
+      "name": "caption",
+      "output_schema": "one image caption string",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "extraction",
+      "trigger": "media attachment upload (POST /api/sessions/{id}/attachments)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "extractor",
+      "disposition": "ok keeps the turn; diffs -> revision event applied on top (D10), edit by edit (a rejected edit is logged with its diagnosis and the landed subset still commits); fail -> the turn is KEPT and the verdict logged (the regeneration is retired, W9.24 §3.3.7); a rejected edit or an unparseable verdict is non-fatal (keep the delivered turn)",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._critic_flow_messages",
+      "name": "critic",
+      "output_schema": "one fenced JSON verdict {verdict: ok|diffs|fail, reason, edits} (a legacy regen_feedback key is tolerated and ignored)",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "extraction",
+      "trigger": "post-turn, in-graph at the tail of post_turn immediately after the narrative event is appended (D49); the turn lock is held until it returns. A fail verdict keeps the turn and logs its verdict — the regeneration it used to request is retired (W9.24)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "call_site": "fabulist.graph.nodes._model_resynthesizer",
+      "debug_capture": true,
+      "default_agent": "narrator",
+      "disposition": "replaces the turn's DSL segments in graph.nodes.narrator (one attempt, capped by revalidate_with_retry)",
+      "input_builder": "fabulist.graph.nodes._repair_messages",
+      "name": "dsl_resynthesizer",
+      "note": "second narrator model call; loads the narrator caller, so its usage and debug capture ride that caller (labelled 'narrate') and it is indistinguishable as its own pass",
+      "output_schema": "a corrected narrator reply (prose + openui DSL), re-segmented",
+      "registry": false,
+      "task": null,
+      "trigger": "in-turn, only when the deterministic DSL gate cannot repair the narrator reply (validate_dsl not ok)",
+      "type": null,
+      "usage": true
+    },
+    {
+      "call_site": "fabulist.memory.embedder.embed_texts",
+      "debug_capture": false,
+      "default_agent": null,
+      "disposition": "derived memory index / recall query (D5, never truth)",
+      "input_builder": "fabulist.memory.embedder._build_request",
+      "name": "embedder",
+      "note": "direct httpx call to POST {endpoint}/v1/embeddings; no registry interaction, no usage row, no debug capture",
+      "output_schema": "one 768-dim vector per input text",
+      "registry": false,
+      "task": null,
+      "trigger": "pre-turn recall query embed + post-turn memory indexing (D13 EmbeddingGemma service)",
+      "type": null,
+      "usage": false
+    },
+    {
+      "debug_capture": false,
+      "default_agent": "extractor",
+      "disposition": "state-delta event -> the log's one state fold (D9) -> state dashboard",
+      "flow": [
+        "system",
+        "turn_payload"
+      ],
+      "input_builder": "fabulist.wiring._extract_flow_messages",
+      "name": "extract",
+      "output_schema": "one Δ[...] pipe-YAML state-delta line over extractor.DELTA_KEYS + action_class (one repair retry on malformed output)",
+      "registry": true,
+      "structural_types": [
+        "system",
+        "turn_payload"
+      ],
+      "task": "extraction",
+      "trigger": "post-turn, after the narrative commits; only reached when world-state tracking is disabled (bts_enabled=False)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "narrator",
+      "disposition": "graph.nodes narrator parser -> narrative event (log, D10) + DSL segments -> transcript + OpenUI render",
+      "flow": [
+        "narrator_system",
+        "library",
+        "history",
+        "facts",
+        "user",
+        "recalled"
+      ],
+      "input_builder": "fabulist.wiring.make_narrator_message_builder",
+      "name": "narrate",
+      "output_schema": "prose + openui DSL statements (components from prompts/generated/library.spec.json); never state/env/clock (D9/D38)",
+      "registry": true,
+      "structural_types": [
+        "facts",
+        "history",
+        "library",
+        "narrator_system",
+        "recalled",
+        "user"
+      ],
+      "task": "narration",
+      "trigger": "pre-turn in-character turn: ONE streaming draft per send/regenerate; on validator flags the narrator repairs in-loop with targeted patch_prose / patch_dsl edits before the turn commits (W9.24/W9.25; graph narrator node)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "completion.narration",
+      "disposition": "system/npc_lane event per member + one npc_lanes summary row; the lane results are rendered into ONE system message at the END of the narrator prompt (W9.13/D5) and stitched into the turn's prose",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._npc_flow_messages",
+      "name": "npc",
+      "output_schema": "one JSON lane result {intent, narrative, lines:[{text, tone}]} (no forced tool_choice, R29; shape failure skips the lane)",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "narration",
+      "trigger": "pre-turn, in-graph at the npc_lanes node between pre_turn and narrate; one call per dispatched cast member — narrative-voice lane on the narration task (W9.25); max_lanes bounds concurrency, the dispatch policy bounds the set",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "narrator",
+      "disposition": "streamed to the client; engine appends a `user` + `ooc` event (graph/engine.py _run_ooc)",
+      "flow": [
+        "system",
+        "history",
+        "facts",
+        "user"
+      ],
+      "input_builder": "fabulist.wiring.make_ooc_message_builder",
+      "name": "ooc",
+      "output_schema": "plain prose reply (no narrative/state commit)",
+      "registry": true,
+      "structural_types": [
+        "facts",
+        "history",
+        "system",
+        "user"
+      ],
+      "task": "narration",
+      "trigger": "out-of-character turn ([OOC]-flagged user message); never enters the graph, no clock/scene advance",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "narrator",
+      "disposition": "plan system event (created_from=graph, latest wins, D9) + a state-delta seeding the planned weather/forecast (and the opening time on turn 1); the narrator prompt and the lanes' beat read its render. A failed or refused refresh keeps the previous plan and never fails the turn",
+      "flow": [
+        "system"
+      ],
+      "input_builder": "fabulist.wiring._planner_flow_messages",
+      "name": "planner",
+      "output_schema": "ONE plan payload {strings: [4-6], datetime?, weather?, forecast?, established?, <preset-defined extras>} (no forced tool_choice on a connection without the capability, M6/§4)",
+      "registry": true,
+      "structural_types": [
+        "system"
+      ],
+      "task": "narration",
+      "trigger": "in-graph at the plan junction before the lanes and the narration; runs only when no plan exists yet (turn 1) or the preset's cadence says a refresh is due — never per turn (W9.20)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "extractor",
+      "disposition": "a system/asset_proposal event per item, judged per item by the decision model and queued for the owner's review home; NOTHING is written to an asset — agents propose, the owner disposes (W9.22 §1 doctrine 3), and apply/undo are later log appends (Wave 4)",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._proposals_flow_messages",
+      "name": "proposals",
+      "output_schema": "ONE JSON batch of {kind, action, target, patch, evidence} rows for a single data type (world | actors | books); no prose, no statements, and a malformed batch skips the lane (W9.22 §3)",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "extraction",
+      "trigger": "post-turn, OFF-TURN: the historian agent — cadence like the planner, default every 10 turns, or on demand — runs the three type lanes after the turn settles; never in the turn flow (W9.23 R3)",
+      "type": "completion",
+      "usage": true
+    },
+    {
+      "call_site": "fabulist.memory.rerank.rerank_documents",
+      "debug_capture": false,
+      "default_agent": null,
+      "disposition": "reorders the pre-turn recall block; the score is not persisted",
+      "input_builder": "fabulist.memory.rerank.build_rerank_payload",
+      "name": "reranker",
+      "note": "direct httpx call to the embeddings/rerank service; no registry interaction, no usage row, no debug capture",
+      "output_schema": "scored, best-first [{index, score, ...}] entries",
+      "registry": false,
+      "task": null,
+      "trigger": "memory recall, only when rerank is enabled (default off, D25)",
+      "type": null,
+      "usage": false
+    },
+    {
+      "call_site": "fabulist.media.stt.transcribe",
+      "debug_capture": false,
+      "default_agent": null,
+      "disposition": "transcript text -> asset/turn text event",
+      "input_builder": "fabulist.media.stt.transcribe",
+      "name": "stt",
+      "note": "in-process faster-whisper model (no HTTP service); no registry interaction, no usage row, no debug capture",
+      "output_schema": "SttResult {text, language, duration_s}",
+      "registry": false,
+      "task": null,
+      "trigger": "audio attachment ingestion (local whisper transcription)",
+      "type": null,
+      "usage": false
+    },
+    {
+      "debug_capture": true,
+      "default_agent": "summarizer",
+      "disposition": "summary event (log) -> narrator facts block; raw narratives retained (D9/D10)",
+      "flow": [
+        "system",
+        "payload"
+      ],
+      "input_builder": "fabulist.wiring._summarize_flow_messages",
+      "name": "summarize",
+      "output_schema": "one compaction summary text (covers_seqs span)",
+      "registry": true,
+      "structural_types": [
+        "payload",
+        "system"
+      ],
+      "task": "extraction",
+      "trigger": "the compact service (CompactService.compact) — [Compact] button, or the context monitor forcing at 90% of the usable budget (W9.26); chunked map-reduce against the summarizer's own window",
+      "type": "completion",
+      "usage": true
+    }
+  ],
+  "generated_from": {
+    "bindings": "fabulist.prompts.agent_sets.DEFAULT_BINDINGS",
+    "flow_structural_types": "fabulist.prompts.modules.FLOW_STRUCTURAL_TYPES",
+    "flows": "fabulist.prompts.modules.DEFAULT_FLOWS",
+    "interaction_catalog": "fabulist.prompts.catalog.INTERACTION_CATALOG",
+    "interaction_tasks": "fabulist.connections.taxonomy.INTERACTION_TASKS",
+    "interactions": "fabulist.prompts.agent_sets.INTERACTIONS",
+    "message_builders": "src/fabulist/wiring.py"
+  },
+  "resynthesizer_note": "The DSL re-synthesis pass is a second, uncounted narrator model call: it is absent from INTERACTIONS (not preset-bindable by name), gets no dedicated usage row or debug-capture row, and is not a distinct step on the turn stream. Its cost/attribution rides the narrator caller (labelled 'narrate'), so today it is invisible as its own pass (RESUME 2026-10-12 gotcha).",
+  "schema_version": 1
+}

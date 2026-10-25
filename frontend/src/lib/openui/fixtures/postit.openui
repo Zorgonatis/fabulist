@@ -1,0 +1,3 @@
+wall = PostIt([{text: "THE LIGHTHOUSE IS A TRANSMITTER. It has never once been lit for a ship."}, {text: "Kess signed the harbour ledger twice, eleven years apart — same hand, same ink."}, {text: "Ask why the fog always comes from the east."}])
+confession = PostIt([{text: "I knew the tide would take them. I untied the boat myself. — D."}])
+root = ScenePane("Screens — the wall behind the desk", [wall, confession])

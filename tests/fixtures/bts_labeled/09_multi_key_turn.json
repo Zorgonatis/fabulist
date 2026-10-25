@@ -1,0 +1,13 @@
+{
+  "id": "multi_key_turn",
+  "description": "Compound beat: location, time, and inventory all change in one turn.",
+  "user_msg": "I take the rope and go to the watchtower.",
+  "turn": "At 06:40 she reaches the watchtower and slings the coil of rope over one shoulder.",
+  "expected_delta": {
+    "time": "06:40",
+    "loc": "watchtower",
+    "inv": "+rope"
+  },
+  "expected_action_class": "travel",
+  "notes": "A scene transition (location change) is a BTS checkpoint trigger; the turn also carries an Env time reading and a '+item' gain. Multiple keys stay separate pipe entries. 'go to' resolves to travel (travel outranks task in the classifier)."
+}

@@ -1,0 +1,11 @@
+{
+  "id": "location_change",
+  "description": "Movement beat: the character leaves one place and arrives at another; only loc changes.",
+  "user_msg": "I go to the docks.",
+  "turn": "She leaves the warmth of the market and walks the wet lane down to the docks.",
+  "expected_delta": {
+    "loc": "docks"
+  },
+  "expected_action_class": "travel",
+  "notes": "BTS location delta is '@night_market → @docks'; the schema keeps the bare destination token. Env Tracking advances travel time in the real pipeline, but the clock-derived time is folded in by post_turn, not emitted by prose reading, so this rig expects only what the turn states. 'go to' resolves to travel."
+}

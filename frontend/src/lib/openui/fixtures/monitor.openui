@@ -1,0 +1,3 @@
+fault = Monitor("error", "Reactor Core — Unhandled Fault", ["Coolant loop D-7 stopped answering at 03:14.", "Pressure is still climbing. We are holding the core at 41%.", "If this dialog is still on the screen in ten minutes, leave the building."], {theme: "crt"})
+crash = Monitor("bsod", "CRITICAL_PROCESS_DIED", ["27% complete", "For more information about this issue and possible fixes, visit the lab support terminal", "If you call a support person, give them this info: Stop code: CRITICAL_PROCESS_DIED"])
+root = ScenePane("Screens — the reactor room terminal", [fault, crash])

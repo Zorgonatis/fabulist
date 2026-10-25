@@ -1,0 +1,643 @@
+@import './lib/openui/chrome.css';
+
+/* Fabulist global stylesheet: the theme tokens, as CSS custom properties.
+ *
+ * FOUR first-party presets (issues #12 / #37): `light`, `dark` (the default),
+ * `oled` and `savilen`, selected by the appearance setting and applied as
+ * `<html data-theme='…'>` (frontend/src/lib/theme/apply.ts). The catalog is
+ * presented greyscale-first, white → black (light, dark, oled), then coloured
+ * themes in RGB hue order (savilen; see `fabulist.theme.appearance` for the
+ * sort key). `:root` IS the dark preset — an absent or unknown `data-theme`
+ * falls back to it, so a stale bookmarked value can never render an unstyled app.
+ *
+ * The differing token set per preset is exactly:
+ *   surfaces (--bg … --bg-active, six), text (--text/-muted/-dim),
+ *   lines (--line/-strong), accent geometry (--accent-l/-hover-l/-strong-l plus
+ *   the preset's base --accent-sat), color-scheme, and the status colours.
+ * Everything else (typography scale, --z-* lanes, radii, tone geometry) is
+ * shared and authored once in `:root`.
+ *
+ * Constraints: deterministic (no animated shadows), text held at WCAG AA on the
+ * surfaces it actually sits on, non-text boundaries (lines) at the 3:1 graphical
+ * minimum where they border interactive chrome, and the 14px font floor enforced
+ * in the flavor components — sizes are untouched here. The ratios quoted below
+ * are WCAG relative-luminance contrast, computed from the token expressions at
+ * neutral warmth and at the palette's maximum warmth (+6%), which is the binding
+ * case for every surface they sit on (tests/test_theme_contrast_ladder.py
+ * recomputes the whole table for all four presets).
+ *
+ * Precedence (owner ruling D-D, issue #12): base -> preset -> user CSS ->
+ * session TONE. Tone tokens are inline custom properties on <html> (set by
+ * chat/+page.svelte from GET /api/sessions/{id}/theme), so the fiction's palette
+ * outranks pasted CSS; a reader who wants to pin a hue writes `!important` in
+ * their CSS and the appearance drawer says so in one sentence. NOTHING in this
+ * file uses `!important` — that is what keeps the contract true.
+ */
+:root {
+	color-scheme: dark;
+
+	/* Surfaces — one luminance ladder, dark page to selected row, and the WHOLE
+	 * ladder rides --bg-warmth (R4 tone theming), not just the page: each rung is
+	 * `calc(<base>% + max(0%, var(--bg-warmth)))`, so a warm preset lightens every
+	 * layer together and the steps between them survive the tone. Adjacent steps,
+	 * measured against their immediate neighbour (neutral → max warmth +6):
+	 *   bg→inset 1.16→1.21 · inset→panel 1.18→1.21 · panel→raised 1.22→1.24
+	 *   raised→hover 1.17→1.16 · raised→active 1.29→1.30 · bg→raised 1.67→1.81
+	 * The floor is 1.15:1 on purpose: below that a layer change is not legible
+	 * on a dark page (the previous ladder bottomed out at 1.03:1, so an input
+	 * well inside a panel or a card on a drawer was, in practice, invisible).
+	 *
+	 * Why `max(0%, …)`: only the warming half moves the ladder. A cool preset
+	 * darkens the page, which raises every ratio against it, while a *uniform*
+	 * down-shift would squeeze the ladder against black — at dark tone (-7%)
+	 * a shifted input well collapses back to ~1.09:1, the same defect at the
+	 * other end. Holding the neutral ladder on the cooling side keeps every
+	 * step >= 1.15:1 across the palette's full warmth range (-7% … +6%). */
+	--bg: hsl(252, 20%, calc(7% + var(--bg-warmth))); /* page; #100e15 at neutral */
+	--bg-panel: hsl(252, 20%, calc(20% + max(0%, var(--bg-warmth)))); /* drawers / sidebars */
+	--bg-raised: hsl(252, 20%, calc(26.5% + max(0%, var(--bg-warmth)))); /* cards / bubbles / buttons */
+	--bg-inset: hsl(252, 20%, calc(14% + max(0%, var(--bg-warmth)))); /* inputs / code wells */
+	--bg-hover: hsl(252, 20%, calc(31% + max(0%, var(--bg-warmth)))); /* hover wash */
+	--bg-active: hsl(252, 20%, calc(34% + max(0%, var(--bg-warmth)))); /* selected / current row */
+
+	/* Text — --text-dim is a micro-label (11px) colour, so it has to clear AA
+	 * 4.5:1 on the surfaces it is used on rather than merely look dim, at the
+	 * lightest rung it can land on (a warm-tone raised card): 4.70:1 there,
+	 * 5.75:1 on neutral raised, 5.84:1 on a warm panel, 7.05:1 on a warm inset.
+	 * --text-muted stays a clear step above it (5.61:1 on warm raised) and body
+	 * text sits at 7.58:1 on warm raised / 9.28:1 at neutral. */
+	--text: #e8e6f0;
+	--text-muted: #c9c7d1;
+	--text-dim: #b9b6c3;
+
+	/* Lines — a boundary that identifies a surface is non-text UI (WCAG
+	 * 1.4.11) and needs 3:1 against what it is drawn on. --line: 3.90:1 on
+	 * neutral --bg-raised and 4.77:1 on --bg-panel; the warm-tone raised card
+	 * (the lightest place it is used) is the binding case at 3.18:1.
+	 * --line-strong (frames, heavy rules, scrollbars) owns the transient
+	 * washes: 4.40:1 neutral / 3.60:1 warm on --bg-hover, 3.99:1 / 3.22:1 on
+	 * --bg-active. Anything drawn ON a wash uses --line-strong, never --line
+	 * (--line is 3.34:1 there at neutral but only 2.73:1 once the wash warms). */
+	--line: #9993ae;
+	--line-strong: #afabbf;
+	/* Decorative fill only (the openui texture primitives: dots / grid / grain).
+	 * Never use this as a boundary — it is deliberately ~1.1:1 on the surfaces
+	 * it paints (1.12:1 neutral panel, 1.08:1 warm panel, 1.32:1 inset), where
+	 * the 3:1 boundary roles above would read as a loud grid over the content
+	 * sitting on the texture. */
+	--line-deco: #353144;
+
+	/* Accent — the existing purple family, shifted lighter for dark.
+	 * R4 token composition: tone tokens override the custom props below;
+	 * defaults reproduce the original palette exactly (hsl 262 72% 66% = #8b5cf6).
+	 *
+	 * The three lightnesses are PRESET GEOMETRY (issue #12): a preset retunes
+	 * --accent-l / --accent-hover-l / --accent-strong-l (and its neutral base
+	 * --accent-sat) instead of the stylesheet hard-coding 66/60/78, so the light
+	 * preset can put the same hue family on a pale page and Savilen can put the
+	 * reference teal on a near-black one. `--accent-strong` is the accent-as-text
+	 * role, so it is the one that has to clear AA on its preset's surfaces:
+	 * 5.10:1 on dark raised. */
+	--accent-hue: 262;
+	--accent-sat: 72%;
+	--bg-warmth: 0%;
+	--accent-l: 66%;
+	--accent-hover-l: 60%;
+	--accent-strong-l: 78%;
+	--accent: hsl(var(--accent-hue), var(--accent-sat), var(--accent-l));
+	--accent-hover: hsl(var(--accent-hue), var(--accent-sat), var(--accent-hover-l));
+	--accent-strong: hsl(var(--accent-hue), var(--accent-sat), var(--accent-strong-l));
+	--accent-soft: hsl(var(--accent-hue), var(--accent-sat), var(--accent-l), 0.16);
+	--accent-line: hsl(var(--accent-hue), var(--accent-sat), var(--accent-l), 0.45);
+	--on-accent: #ffffff;
+
+	/* Tones (UI-LANGUAGE §2) — DERIVED once here from the R4 accent (issue #14),
+	   never authored per component and never invented from freeform text. The
+	   rotation is geometric and fixed by the owner ruling:
+	     --tone-1 = hsl(H, Sa, Lt)      the base accent (reserved emphasis)
+	     --tone-2 = hsl(H+30, Sa, Lt)   analogous, warm side
+	     --tone-3 = hsl(H-30, Sa, Lt)   analogous, cool side
+	     --tone-4 = hsl(H+180, Sc, Lc)  a TRUE complement (was a ±150° pair
+	                                    with no complement at all)
+	   where Sa = min(--accent-sat, the preset's cap), and the complement keeps a
+	   reduced saturation Sc = factor × Sa at its own lightness Lc. Every tone
+	   carries soft/line variants at the preset's alphas (0.16 / 0.45), so a
+	   rotated accent moves hover, strong, fills and borders together.
+	   Presets (same offsets, different clamp/lightness):
+	     dark    cap 68%  Lt 66%  · comp 55% × Sa at 64%   (default, this block)
+	     oled    cap 60%  Lt 82%  · comp 55% × Sa at 74%
+	     light   cap 55%  Lt 44%  · comp 60% × Sa at 40%
+	     savilen cap 68%  Lt 60%  · comp 55% × Sa at 58%
+	   Components consume var(--tone, var(--tone-1)); chrome.css .ui-alt still
+	   alternates tone-2/tone-3 and is unchanged. tests/test_theme_tokens.py
+	   evaluates these expressions and pins the geometry. */
+	--tone-1: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 66%);
+	--tone-2: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 66%);
+	--tone-3: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 66%);
+	--tone-4: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 64%);
+	--tone-1-soft: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 66%, 0.16);
+	--tone-2-soft: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 66%, 0.16);
+	--tone-3-soft: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 66%, 0.16);
+	--tone-4-soft: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 64%, 0.16);
+	--tone-1-line: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 66%, 0.45);
+	--tone-2-line: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 66%, 0.45);
+	--tone-3-line: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 66%, 0.45);
+	--tone-4-line: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 64%, 0.45);
+
+	/* Status */
+	--danger: #b91c1c; /* solid fills/badges (unchanged) */
+	--danger-text: #f87171; /* danger text on dark (AA) */
+	--danger-soft: rgba(185, 28, 28, 0.18);
+	--warn: #fbbf24;
+	--ok: #34d399;
+
+	/* Assistant identity (olive family, lightened for dark) */
+	--assistant-accent: #aebc5a;
+	--assistant-accent-soft: rgba(174, 188, 90, 0.16);
+
+	/* Scrims + shadows (static) */
+	--scrim: rgba(0, 0, 0, 0.55);
+	--shadow: rgba(0, 0, 0, 0.45);
+
+	/* Typography scale (UX shell pass 1, D20). The 14px floor is the shell
+	   default (`--font-ui`); only true micro-labels drop to 11px, and they no
+	   longer force uppercase — that fought readability. */
+	--font-h1: 1.5rem; /* 24px — thread title */
+	--font-lg: 1.125rem; /* 18px — drawer titles */
+	--font-body: 0.9375rem; /* 15px — running prose / inputs */
+	--font-ui: 0.875rem; /* 14px — shell floor (buttons, rows, labels) */
+	--font-small: 0.8125rem; /* 13px — secondary copy */
+	--font-micro: 0.6875rem; /* 11px — true micro-labels only */
+
+	/* Z-order lane (UX shell pass 1): rail < dock < floating panes < scrims <
+	   drawers. DraggablePane claims slots inside [--z-pane, --z-pane-max] so a
+	   busy pane can never climb over a modal drawer. */
+	--z-rail: 1;
+	--z-dock: 5;
+	--z-pane: 10;
+	--z-pane-max: 17;
+	--z-studio: 18;
+	--z-scrim: 20;
+	--z-drawer: 21;
+	--z-drawer-top: 23;
+}
+
+/* ── Preset: OLED (issue #37) ───────────────────────────────────────────────
+ * The display-driven preset: the page and every PANEL are true black (#000), so
+ * an OLED's pixels are off and the screen's own contrast carries the picture. On
+ * a zero-luminance rung a luminance step is mathematically impossible, so this
+ * preset makes ONE deliberate exception to the #21 step floors: bg / inset /
+ * panel all resolve to #000 and their separation is drawn by --line-strong
+ * (3:1 on every rung, measured below), not by a lifted fill. Every rung that can
+ * move still holds its floor — panel→raised 1.21, raised→hover 1.18,
+ * raised→active 1.38 at every tone. Text is near-white rather than pure white so
+ * the display's own brightness stays the reader's dial; worst measured (a warm
+ * active row): --text 9.0:1, --text-muted 6.78:1, --text-dim 5.07:1,
+ * --line-strong 3.36:1. A warm tone lifts the black page to #0f0f0f, which is
+ * the one thing a true-black theme cannot refuse — the tone is the fiction's.
+ * Greyscale by construction: --accent-sat is 0%, so the neutral chrome is grey;
+ * a session tone still supplies its own hue/sat inline (ruling D-D), exactly as
+ * on every other preset.
+ */
+:root[data-theme='oled'] {
+	color-scheme: dark;
+
+	--bg: hsl(0, 0%, calc(0% + var(--bg-warmth))); /* true black page */
+	--bg-inset: hsl(0, 0%, calc(0% + max(0%, var(--bg-warmth)))); /* black well */
+	--bg-panel: hsl(0, 0%, calc(0% + max(0%, var(--bg-warmth)))); /* actual-black panel */
+	--bg-raised: hsl(0, 0%, calc(10% + max(0%, var(--bg-warmth))));
+	--bg-hover: hsl(0, 0%, calc(15.5% + max(0%, var(--bg-warmth))));
+	--bg-active: hsl(0, 0%, calc(20% + max(0%, var(--bg-warmth))));
+
+	--text: #f5f5f5;
+	--text-muted: #d4d4d4;
+	--text-dim: #b8b8b8;
+
+	--line: #555555; /* decorative hairline on black; never a boundary */
+	--line-strong: #959595; /* input/button/frame borders: 3.36:1 worst */
+	--line-deco: #1a1a1a;
+
+	--accent-hue: 0; /* greyscale: no hue unless a tone supplies one */
+	--accent-sat: 0%;
+	--accent-l: 82%;
+	--accent-hover-l: 72%;
+	--accent-strong-l: 96%; /* accent-as-text: near-white, 15.96:1 on a card */
+	--on-accent: #000000; /* 13.3:1 on the #d1d1d1 fill */
+
+	/* Semantic status colours stay coloured on a greyscale shell: a warning that
+	 * is grey is not a warning. All three clear AA on the black page. */
+	--danger-text: #ff8f8f;
+	--warn: #ffcf6b;
+	--ok: #7ee2b0;
+
+	/* Assistant identity is chrome, so it stays grey in the greyscale preset. */
+	--assistant-accent: #d4d4d4;
+	--assistant-accent-soft: rgba(212, 212, 212, 0.14);
+
+	--tone-1: hsl(var(--accent-hue), min(var(--accent-sat), 60%), 82%);
+	--tone-2: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 60%), 82%);
+	--tone-3: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 60%), 82%);
+	--tone-4: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 60%) * 0.55), 74%);
+	--tone-1-soft: hsl(var(--accent-hue), min(var(--accent-sat), 60%), 82%, 0.16);
+	--tone-2-soft: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 60%), 82%, 0.16);
+	--tone-3-soft: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 60%), 82%, 0.16);
+	--tone-4-soft: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 60%) * 0.55), 74%, 0.16);
+	--tone-1-line: hsl(var(--accent-hue), min(var(--accent-sat), 60%), 82%, 0.45);
+	--tone-2-line: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 60%), 82%, 0.45);
+	--tone-3-line: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 60%), 82%, 0.45);
+	--tone-4-line: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 60%) * 0.55), 74%, 0.45);
+}
+
+/* ── Preset: LIGHT (issue #12) ──────────────────────────────────────────────
+ * The strict preset (owner ruling D-A): a pale page has no dark floor to lean on,
+ * so --line ALSO holds 3:1 here instead of being a decorative hairline.
+ *
+ * The ladder is INVERTED, and deliberately so. On a 96% page the #21 step floors
+ * cost far more lightness than on a 7% one, and the audit only pins the STEPS,
+ * not which end the page sits on. Mirroring dark (page lightest, cards nine
+ * points darker) produced grey-lavender cards — a lamp-lit room, not daylight.
+ * So the light preset puts the CARDS on the page's own lightness and lets the
+ * CHROME sit deeper, which is the light-mode idiom anyway: a card is the page
+ * plus a 1px --line, a drawer is a deeper panel, a hover is a wash, a selected
+ * row is deeper still. Every floor is still met, at minimum cost:
+ *   bg→inset 1.16→1.16 · inset→panel 1.17 · panel→raised 1.35 (floor 1.20) ·
+ *   raised→hover 1.16 · raised→active 1.40 (floor 1.20)
+ * Warmth runs the OTHER way: a warm tone creams the page DOWN (96.1 -> 90.1 at
+ * +6%) and a cool tone holds, exactly mirrored from dark (where only the warming
+ * half moves the ladder, because black is the floor; here white is the ceiling).
+ * Ratios on the binding surfaces (neutral → warm): --text 11.7→9.7 on the panel ·
+ * --text-muted 6.4→5.3 · --text-dim 5.6→4.7 · --line 3.7→3.1 (strict) ·
+ * --line-strong 4.2 on a warm active wash, 4.0 at its worst. The thread's LIGHT
+ * table reproduces exactly: bg #f4f3f7, text #1a1726, accent hsl(262 72% 48%) =
+ * #6322d3 at 7.04 vs the page, on-accent 7.78.
+ */
+:root[data-theme='light'] {
+	color-scheme: light;
+
+	--bg: hsl(252, 20%, calc(96.1% - max(0%, var(--bg-warmth)))); /* page; #f4f3f7 at neutral */
+	--bg-inset: hsl(252, 20%, calc(90.6% - max(0%, var(--bg-warmth)))); /* inputs / code wells */
+	--bg-panel: hsl(252, 20%, calc(85.1% - max(0%, var(--bg-warmth)))); /* drawers / sidebars */
+	--bg-raised: hsl(252, 20%, calc(96.1% - max(0%, var(--bg-warmth)))); /* cards = the page + a line */
+	--bg-hover: hsl(252, 20%, calc(90.6% - max(0%, var(--bg-warmth)))); /* hover wash */
+	--bg-active: hsl(252, 20%, calc(84% - max(0%, var(--bg-warmth)))); /* selected / current row */
+
+	--text: #1a1726;
+	--text-muted: #47425c;
+	--text-dim: #4f4a63;
+
+	--line: #6b6389; /* strict: >= 3:1 against every settled surface */
+	--line-strong: #635c7f;
+	/* Paper textures (dots / grid / grain) painted ON a light surface: ~1.1:1.
+	 * Without this the dark --line-deco tints every texture primitive near-black. */
+	--line-deco: #e7e4ef;
+
+	--accent-l: 48%;
+	--accent-hover-l: 42%;
+	--accent-strong-l: 38%; /* accent-as-text: 4.7:1 on a warm light card */
+	--on-accent: #ffffff;
+
+	/* Light-only status re-solve: every dark status token is a near-invisible
+	 * pastel on a pale page (--warn 1.0:1, --ok 1.0:1). Fills keep their
+	 * white-on-red AA (5.0:1); the text roles go dark enough for AA on any rung. */
+	--danger: #b91c1c;
+	--danger-text: #7d1d13;
+	--danger-soft: rgba(185, 28, 28, 0.12);
+	--warn: #583c04;
+	--ok: #0b4a35;
+	--assistant-accent: #3b4510;
+	--assistant-accent-soft: rgba(59, 69, 16, 0.14);
+
+	/* Scrims + shadows stay in the page's own hue so a dialog edge reads as
+	 * depth, not as a dark frame pasted onto paper. */
+	--scrim: rgba(26, 23, 38, 0.32);
+	--shadow: rgba(26, 23, 38, 0.18);
+
+	--tone-1: hsl(var(--accent-hue), min(var(--accent-sat), 55%), 44%);
+	--tone-2: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 55%), 44%);
+	--tone-3: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 55%), 44%);
+	--tone-4: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 55%) * 0.60), 40%);
+	--tone-1-soft: hsl(var(--accent-hue), min(var(--accent-sat), 55%), 44%, 0.16);
+	--tone-2-soft: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 55%), 44%, 0.16);
+	--tone-3-soft: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 55%), 44%, 0.16);
+	--tone-4-soft: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 55%) * 0.60), 40%, 0.16);
+	--tone-1-line: hsl(var(--accent-hue), min(var(--accent-sat), 55%), 44%, 0.45);
+	--tone-2-line: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 55%), 44%, 0.45);
+	--tone-3-line: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 55%), 44%, 0.45);
+	--tone-4-line: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 55%) * 0.60), 40%, 0.45);
+}
+
+/* ── Preset: SAVILEN (issue #37) ────────────────────────────────────────────
+ * The reference palette, extracted from the issue's ENGRAM terminal image:
+ *   page #001012 · panel #0b1a1c · selection #002b2b · frame #163d3d
+ *   accent/border #1f8f86 · primary text #4fe6d8 · mint #5dcea5 · amber #ffcf6b
+ * The image separates its surfaces with 1px borders on a near-black page — a
+ * luminance ramp that fine cannot carry the #21 step floors — so the SURFACES
+ * are a teal ladder derived from the image's page hue while the PRIMARIES are
+ * the extracted colours themselves: --accent is #1f8f86 exactly
+ * (hsl 175.2 64.4% 34.1%), --text is #4fe6d8 exactly, --line-strong repeats that
+ * bright cyan, and the mint/amber land in --ok/--assistant-accent and --warn.
+ * The image's teal border (#1f8f86) is a decorative hairline here; --line is
+ * that hue lifted enough to hold the STRICT 3:1 (3.52:1 worst, a warm card).
+ * Measured at the binding warm rung: --text 5.83:1, --text-muted 5.31:1,
+ * --text-dim 4.67:1 (AA), --line-strong 4.57:1 on the warm active row.
+ */
+:root[data-theme='savilen'] {
+	color-scheme: dark;
+
+	--bg: hsl(187, 100%, calc(3.5% + var(--bg-warmth))); /* page; #001012 at neutral */
+	--bg-inset: hsl(185, 50%, calc(9% + max(0%, var(--bg-warmth))));
+	--bg-panel: hsl(187, 45%, calc(13% + max(0%, var(--bg-warmth))));
+	--bg-raised: hsl(183, 42%, calc(16.8% + max(0%, var(--bg-warmth))));
+	--bg-hover: hsl(181, 40%, calc(20.2% + max(0%, var(--bg-warmth))));
+	--bg-active: hsl(180, 38%, calc(21.5% + max(0%, var(--bg-warmth))));
+
+	--text: #4fe6d8; /* the image's primary text */
+	--text-muted: #47dcd0;
+	--text-dim: #3fcfc4;
+
+	--line: #30b4aa; /* strict 3:1: the image's border teal, lifted as little as it takes */
+	--line-strong: #4fe6d8;
+	--line-deco: #123a3a;
+
+	--accent-hue: 175.2;
+	--accent-sat: 64.4%;
+	--accent-l: 34.1%; /* hsl(175.2 64.4% 34.1%) = #1f8f86, the image's accent */
+	--accent-hover-l: 42%;
+	--accent-strong-l: 60.6%; /* #5adbd1 — the image's cyan family as text */
+	--on-accent: #001012; /* 4.86:1 on the accent fill (the page colour, not white) */
+
+	--danger: #b91c1c;
+	--danger-text: #ff9e8f; /* no red in the reference; salmon keeps AA on every rung */
+	--danger-soft: rgba(185, 28, 28, 0.18);
+	--warn: #ffcf6b; /* the image's amber speaker labels */
+	--ok: #4de0a4; /* the image's mint */
+	--assistant-accent: #5dcea5;
+	--assistant-accent-soft: rgba(93, 206, 165, 0.16);
+
+	--scrim: rgba(0, 0, 0, 0.55);
+	--shadow: rgba(0, 0, 0, 0.5);
+
+	--tone-1: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 60%);
+	--tone-2: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 60%);
+	--tone-3: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 60%);
+	--tone-4: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 58%);
+	--tone-1-soft: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 60%, 0.16);
+	--tone-2-soft: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 60%, 0.16);
+	--tone-3-soft: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 60%, 0.16);
+	--tone-4-soft: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 58%, 0.16);
+	--tone-1-line: hsl(var(--accent-hue), min(var(--accent-sat), 68%), 60%, 0.45);
+	--tone-2-line: hsl(calc(var(--accent-hue) + 30), min(var(--accent-sat), 68%), 60%, 0.45);
+	--tone-3-line: hsl(calc(var(--accent-hue) - 30), min(var(--accent-sat), 68%), 60%, 0.45);
+	--tone-4-line: hsl(calc(var(--accent-hue) + 180), calc(min(var(--accent-sat), 68%) * 0.55), 58%, 0.45);
+}
+
+/* ── The wallpaper layer (issue #13, owner ruling in the #13 thread) ────────
+ * Active ONLY while <html data-wallpaper> is set (lib/theme/apply.ts). With the
+ * attribute absent this block never matches, so a no-wallpaper install is
+ * byte-identical to the sheet before this feature existed — the #21/#12 pins in
+ * tests/test_theme_contrast_ladder.py keep reading `:root` and the preset blocks
+ * and are untouched by the re-solve below.
+ *
+ * The image is painted BEHIND the prose surfaces and veiled by two scrims
+ * (owner ruling: "at least 0.60 for --text and 0.80 for --text-muted"):
+ *
+ *   --wallpaper-scrim   the PROSE surface: one scrim over the image. Only
+ *                       --text lands here, so this is the rung the ruling
+ *                       prices at 0.60.
+ *   --scrim-muted       every surface carrying --text-muted / --text-dim
+ *                       (panel, raised, inset, composer, chrome). Those are
+ *                       painted OVER the page scrim, so a muted rung stacks to
+ *                       1 - (1 - 0.60)(1 - 0.80) = 0.92: an eighth of the
+ *                       image's brightest pixel survives, and both quiet text
+ *                       roles still clear AA there with room to spare.
+ *
+ * Why every rung is an RGBA COMPOSITE: the ladder no longer describes a
+ * luminance ramp (an arbitrary image owns the luminance now), it describes how
+ * much of the room the reader can see through each layer. Depth therefore comes
+ * from ALPHA (page 0.60 < muted 0.80 < washes 0.90/0.92) plus NESTING — a card
+ * inside a panel stacks again — and the colour underneath is the preset's own.
+ *
+ * What the ruling re-solves, and why:
+ *   * --bg-warmth is FORCED to 0%: a tone warm-shift is meaningless on a
+ *     literal RGBA rung, and the ladder below stops reading the token entirely
+ *     (the test asserts that) so a session tone can never move a composite off
+ *     its measured numbers.
+ *   * --text / --text-muted / --text-dim are lifted: over a white image pixel
+ *     the prose surface is mid-grey (#666), which is the worst case for light
+ *     text. Measured there (WCAG 2.x, recomputed by the test): body 5.53:1,
+ *     muted 5.08:1, dim 4.79:1 — all above AA 4.5, and the hierarchy
+ *     dim < muted < body survives.
+ *   * --line is re-solved to the STRICT 3:1 (the light preset's rule, now the
+ *     whole layer's): 3.40:1 on the prose composite, 3.96:1 for --line-strong.
+ *     A hairline can be decorative on a known surface; on a photo it is a
+ *     boundary between a text panel and whatever the reader put behind it.
+ *   * the --bg* ladder becomes composites (above).
+ *
+ * A bright pixel is the binding case for dark, oled and savilen (light text); the light
+ * preset's binding case is a BLACK pixel, so its scrim is its own page colour
+ * rather than black — rgba(244, 243, 247, 0.60) keeps #14111f readable at 5.99:1
+ * (body) / 4.77:1 (dim) / 3.21:1 (--line) where a black veil would leave ~2.9:1.
+ */
+:root[data-wallpaper] {
+	/* Forced: nothing below reads it again (see the block comment). */
+	--bg-warmth: 0%;
+
+	--wallpaper-scrim: rgba(0, 0, 0, 0.6);
+	--scrim-muted: rgba(16, 14, 21, 0.8);
+
+	/* Prose surface: the image at 40%, nothing else. */
+	--bg: var(--wallpaper-scrim);
+	/* Everything that carries muted/dim copy: the 0.80 scrim, stacked on the
+	 * page's 0.60 => 0.92 effective. The washes step one notch further so a
+	 * hover still reads as a change over an image. */
+	--bg-inset: var(--scrim-muted);
+	--bg-panel: var(--scrim-muted);
+	--bg-raised: var(--scrim-muted);
+	--bg-hover: rgba(16, 14, 21, 0.9);
+	--bg-active: rgba(16, 14, 21, 0.92);
+
+	/* Text, lifted to clear AA on the 0.60 prose composite at a white pixel. */
+	--text: #fbfaff;
+	--text-muted: #f2f0f8;
+	--text-dim: #ece9f4;
+
+	/* Boundaries: strict 3:1 on the prose composite (the ruling's re-solve). */
+	--line: #c9c5d7;
+	--line-strong: #d8d4e6;
+}
+
+/* Wallpaper + OLED: the same composite ladder on the true-black page. The
+ * muted veil is 0.85 (deeper than the 0.80 floor) so the image is a tint, not a
+ * picture, behind chrome that owns no colour of its own; measured at the
+ * white-pixel worst case: text 5.74 / muted 5.46 / dim 5.19, --line 3.63 /
+ * --line-strong 3.89. */
+:root[data-wallpaper][data-theme='oled'] {
+	--scrim-muted: rgba(0, 0, 0, 0.85);
+
+	--bg-hover: rgba(0, 0, 0, 0.9);
+	--bg-active: rgba(0, 0, 0, 0.92);
+
+	--text: #ffffff;
+	--text-muted: #f2f2f2;
+	--text-dim: #e6e6e6;
+
+	--line: #d4d4d4;
+	--line-strong: #e0e0e0;
+}
+
+/* Wallpaper + SAVILEN: the scrims keep the reference page's teal (#001012) so
+ * the image reads as a tint of the same room, and the text is lifted to the
+ * near-white the 0.60 prose scrim needs at a white pixel. Measured there:
+ * text 5.07 / muted 4.83 / dim 4.64, --line 4.15 / --line-strong 4.47. */
+:root[data-wallpaper][data-theme='savilen'] {
+	--wallpaper-scrim: rgba(0, 16, 18, 0.6);
+	--scrim-muted: rgba(0, 16, 18, 0.82);
+
+	--bg-hover: rgba(0, 16, 18, 0.9);
+	--bg-active: rgba(0, 16, 18, 0.92);
+
+	--text: #fcffff;
+	--text-muted: #f4fafa;
+	--text-dim: #eef6f5;
+
+	--line: #d0eee9;
+	--line-strong: #ddf5f1;
+}
+
+/* Wallpaper + LIGHT: a PAPER veil instead of a black one. The worst case here is
+ * a BLACK image pixel (dark text on a dark composite), and a black scrim leaves
+ * #14111f at 2.9:1 — unreadable. The page colour at the same 0.60 alpha keeps
+ * the image as a tint behind paper: text 5.99 / muted 5.27 / dim 4.77, --line
+ * 3.21 / --line-strong 3.78. */
+:root[data-wallpaper][data-theme='light'] {
+	--wallpaper-scrim: rgba(244, 243, 247, 0.6);
+	--scrim-muted: rgba(244, 243, 247, 0.8);
+
+	--bg-inset: var(--scrim-muted);
+	--bg-panel: var(--scrim-muted);
+	--bg-raised: var(--scrim-muted);
+	--bg-hover: rgba(238, 236, 244, 0.9);
+	--bg-active: rgba(234, 232, 240, 0.92);
+
+	--text: #14111f;
+	--text-muted: #221d2e;
+	--text-dim: #2a2537;
+
+	--line: #453f59;
+	--line-strong: #3a3450;
+}
+
+/* The image itself, with the page scrim stacked on it. `--wallpaper-image` is
+ * set INLINE on <html> by apply.ts (`url("…")`); this rule only says how it
+ * meets the viewport, so the fit stays in the stylesheet (where the token tests
+ * read it) and the URL in the DOM.
+ *
+ * The two background layers are ONE paint: the scrim gradient on top of the
+ * image, both in the same fixed, negative-z box — the image is behind every
+ * in-flow surface, and the page carries exactly ONE scrim (0.60), not two. That
+ * negative z-index is what makes the prose column the place the reader sees the
+ * image: the surfaces carrying muted copy repaint their own 0.80 over it, so
+ * chrome still reads opaque. [The scrim cannot ride html/body here: a second
+ * paint of --bg would stack to 0.84 and dim the image the feature exists for.]
+ *
+ * The body goes transparent for exactly that reason; html keeps the page colour
+ * (it is the canvas UNDER the opaque image, and keeps the no-image fallback
+ * looking like the page rather than like a hole). */
+:root[data-wallpaper] body {
+	background: transparent;
+}
+
+:root[data-wallpaper] body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-image: linear-gradient(var(--wallpaper-scrim), var(--wallpaper-scrim)),
+		var(--wallpaper-image);
+	background-size: cover, cover;
+	background-position: center center, center center;
+	background-repeat: no-repeat, no-repeat;
+}
+
+html,
+body {
+	background: var(--bg);
+	color: var(--text);
+}
+
+body {
+	margin: 0;
+	font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	font-size: var(--font-body);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* Shared shell affordances (UX shell pass 1). Scoped component styles can
+   rely on the scale vars; these classes are the common chrome primitives. */
+.section-label {
+	font-size: var(--font-small);
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.micro-label {
+	font-size: var(--font-micro);
+	letter-spacing: 0.04em;
+	color: var(--text-dim);
+}
+
+/* Header/nav buttons: icon + visible text, grouped right, shared focus ring. */
+.shell-btn {
+	font: inherit;
+	font-size: var(--font-ui);
+	line-height: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.4rem 0.7rem;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--bg-raised);
+	color: var(--text-muted);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.shell-btn:hover {
+	background: var(--bg-hover);
+	border-color: var(--accent-line);
+	color: var(--accent-strong);
+}
+.shell-btn:focus-visible {
+	outline: 2px solid var(--accent-strong);
+	outline-offset: 1px;
+}
+/* Wave 4b player-HUD panes (Recap / Memories / Cast): shared note + heading
+   chrome. Global so each pane keeps its own scoped layout styles. */
+.hud-note {
+	margin: 0;
+	font-size: var(--font-small);
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+.hud-note-error {
+	color: var(--danger-text);
+}
+.hud-note-pending {
+	color: var(--warn);
+}
+.hud-heading {
+	margin: 0;
+	font-size: var(--font-micro);
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	color: var(--text-dim);
+}
+
+.shell-btn .shell-glyph {
+	font-size: 1rem;
+	line-height: 1;
+}
