@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.2] - 2026-10-25
 
 ### Added
 
@@ -63,6 +63,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   than looked up as a file, a local `model`/`mmproj` path still must exist, and a section naming
   both is a boot error. The d1 and reranker sections disable llama.cpp's sibling-mmproj auto-pick
   so a first request cannot drag in a projector their routes never use.
+
+### Fixed
+
+- **The connections drawer reported a working sidecar slot as "unresolved".** A task-less TYPE row
+  (`embedding`) never looked downward at the item slot actually serving it (`embedder`), so the
+  drawer showed "unresolved" and `GET /health` listed the slot as unbound while embedding calls
+  worked — a false dead reading that sent the owner hand-binding slots that were already wired. The
+  type now falls down to its serving item slots (`embedder`, declaration order) with the new
+  `item:<slot>` provenance ("via embedder slot"), the type's own key still wins when authored, and
+  `configuration_report` stops reporting the slot unbound. Types WITH a task layer (`completion`)
+  deliberately get no downward leg, so the completion type can never read as served by `imagegen`.
+- **The engine could boot before its model sidecar, or give up pinning it forever.**
+  `docker compose up` started engine and sidecar together with no ordering, and the boot-time
+  auto-pin had exactly one deferred re-probe, so a first boot slower than ~28 s (Vulkan init, cold
+  image) pinned nothing until a manual restart. The sidecar now has a healthcheck (the router's
+  `/v1/models` — answered before any model loads, so it downloads nothing) and the engine starts on
+  `condition: service_healthy`; the re-probe is a bounded repeating schedule (`RETRY_DELAY_S` 25 s,
+  at most `RETRY_MAX_ATTEMPTS` 24 ≈ 10 min) that stops at the first probe which answers.
+  `docker-compose.app-only.yml` ships no sidecar and resets the inherited dependency.
+- **The decision route timed out on its first call after a sidecar restart.** `decision.py`'s
+  `DEFAULT_TIMEOUT` was 5 s, while the sidecar's healthcheck only proves the ROUTER listens — the
+  first `d1-3b` call still pays the on-disk load (measured: `ReadTimeout` at 5.0039 s, then 1.55 s
+  warm; 12.737 s on a cold sidecar). 30 s absorbs a cold load and still bounds a hung call.
+- **A reasoning round lost its own deliberation.** Issue #29's trim blanked each earlier tool
+  iteration's `reasoning_content` as the next was stamped, so a model four tool calls into a repair
+  no longer saw the thinking that opened the round. The echo boundary is now the ROUND, not the
+  iteration: every iteration of the running round keeps its reasoning verbatim (owner ruling — a
+  repair round must see its own deliberation), and the trim moved out to the round boundary, where a
+  PRIOR turn's stored reasoning is never re-sent as text (it is stored for diagnosis, and history
+  assembly re-attaches the field present-but-empty).
+- **A mixed history 400'd the next narrator turn.** Measured against DeepSeek `deepseek-flash`: on a
+  request carrying `tools`, no `reasoning_content` anywhere is 200, every assistant message carrying
+  it is 200, and a MIXED request is a 400 ("The `reasoning_content` in the thinking mode must be
+  passed back to the API"). Presence is therefore all-or-nothing per REQUEST, and history assembly
+  emits the field per turn, so any session that mixed turns with and without it — started on a
+  non-thinking connection and later switched, or an older session — died on its next turn.
+  `normalise_reasoning_presence` now fills the blanks once per request; a request with no field
+  anywhere is left byte-identical, and a present value is never rewritten.
 
 ## [0.2.0] - 2026-10-23
 
