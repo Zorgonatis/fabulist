@@ -223,8 +223,13 @@ def test_last_swipe_target_orders_siblings_by_creation(log):
 
     assert log.last_swipe_target("b2") == ["base", "b1", "b2"]
     assert log.last_swipe_target("b1") == ["base", "b1", "b2"]
-    # The original line has no siblings of its own.
-    assert log.last_swipe_target("base") == ["base"]
+    # The original line reads the group at its LATEST pivot (issue #59): the
+    # origin line now lists the reply regenerated from it (it used to list only
+    # itself, which is what made the swipe back one-way). The earlier cut
+    # ("b1"/"b2" at seq 1) is a different position and stays out of it -- but
+    # it is still the same group from either side of that pivot.
+    assert log.last_swipe_target("base") == ["base", "other"]
+    assert log.last_swipe_target("other") == ["base", "other"]
     assert log.last_swipe_target("missing") == []
 
 

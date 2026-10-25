@@ -580,31 +580,116 @@ class EventLog:
         }
 
     def last_swipe_target(self, session_id: str) -> list[str]:
-        """Ordered sibling sessions for the swipe UI, original line first.
+        """Ordered sibling sessions for the swipe UI, pivot-first (issue #59).
 
-        A sibling group is every session forked from the same parent at the
-        same cut (``base_seq``), plus the original parent line as sibling 0
-        (FORK-SEMANTICS §3). Ordered by creation (``created_ts``, id tiebreak).
-        A root session has no siblings and yields ``[session_id]``; an unknown
-        session yields ``[]``.
+        The group is every reply AT THE SAME POSITION: one pivot ``(anchor,
+        cut)`` in the shared chain, listed as the original ``anchor`` line
+        (position 0 -- it owns the prefix, so it comes first) plus every session
+        forked there, whichever chain it forked from (FORK-SEMANTICS §3). The
+        forks follow ordered by creation (``created_ts``, id tiebreak).
+
+        Symmetric by construction: the group a session reads is a function of
+        its pivot, so a fork always lists the line it forked from and that line
+        always lists the fork back. That is what used to be broken -- the group
+        was read from the asking session's own pointer only, so the ORIGINAL
+        line listed nothing after a regenerate (the reported bug: swiping back
+        to the original left no arrow to the freshly regenerated reply).
+
+        A session with no pivot at all (no fork of its own and no fork inside
+        its segment) is its own one-line group; an unknown session yields
+        ``[]``.
         """
-        info = self.get_session(session_id)
-        if info is None:
+        if self.get_session(session_id) is None:
             return []
-        parent = info["base_session"]
-        if parent is None:
+        sessions = self._session_map()
+        pivot = self._swipe_pivot(sessions, session_id)
+        if pivot is None:
             return [session_id]
-        rows = self._conn.execute(
-            "SELECT session_id, created_ts FROM sessions "
-            "WHERE base_session = ? AND base_seq = ?",
-            (parent, info["base_seq"]),
-        ).fetchall()
+        anchor = pivot[0]
         ordered = [
-            row["session_id"]
-            for row in sorted(rows, key=lambda r: (r["created_ts"], r["session_id"]))
+            sid
+            for sid in sorted(
+                sessions,
+                key=lambda s: (sessions[s]["created_ts"], s),
+            )
+            if sid != anchor and self._fork_pivot(sessions, sid) == pivot
         ]
-        # The parent predates its forks, so it is sibling 0.
-        return [parent, *ordered]
+        return [anchor, *ordered]
+
+    def _session_map(self) -> dict[str, dict]:
+        """Every ``sessions`` row keyed by id (one read for a group query)."""
+        rows = self._conn.execute(
+            "SELECT session_id, base_session, base_seq, created_ts FROM sessions"
+        ).fetchall()
+        return {
+            row["session_id"]: {
+                "base_session": row["base_session"],
+                "base_seq": row["base_seq"],
+                "created_ts": row["created_ts"],
+            }
+            for row in rows
+        }
+
+    @staticmethod
+    def _fork_pivot(
+        sessions: dict[str, dict], session_id: str
+    ) -> tuple[str, int] | None:
+        """Canonical ``(anchor, cut)`` position the session was forked at.
+
+        ``fork_session`` records ``(base_session, base_seq)``, but that pointer
+        can name a parent that is ITSELF cut at the same seq or below: a fork of
+        a fork at one cut is a fork of one POSITION (regenerate twice -- ``B``
+        forked from ``A`` at ``K`` while ``A`` was forked from ``R`` at ``K``).
+        Climbing while the cut is at or below the parent's own cut canonicalises
+        it onto the line that owns the prefix, so sessions forked at one
+        position compare equal whichever chain each came from.
+
+        Returns ``None`` for a root session (it has no fork pivot).
+        """
+        info = sessions.get(session_id)
+        if info is None or info["base_session"] is None:
+            return None
+        anchor = info["base_session"]
+        cut = info["base_seq"]
+        seen = {session_id}
+        while anchor not in seen:
+            seen.add(anchor)
+            row = sessions.get(anchor)
+            if row is None or row["base_session"] is None:
+                break
+            own = row["base_seq"]
+            if own is None or cut > own:
+                break
+            anchor = row["base_session"]
+        return (anchor, cut)
+
+    @classmethod
+    def _swipe_pivot(
+        cls, sessions: dict[str, dict], session_id: str
+    ) -> tuple[str, int] | None:
+        """The pivot the session's swipe group is read at, or ``None``.
+
+        The reader stands at the END of the session's chain, so the pivot it
+        offers is the LATEST one on its own line: the deepest cut among its
+        direct children that forks INSIDE this session's own segment (an earlier
+        pivot is a position further up the transcript, not the reply on screen).
+        A session with no such child -- a root with none, or one whose children
+        all fork at or below its own cut (the chained-regenerate case, where a
+        child canonicalises onto the same pivot) -- reads at the pivot it was
+        itself forked at.
+        """
+        if session_id not in sessions:
+            return None
+        cuts = []
+        for sid, info in sessions.items():
+            if info["base_session"] != session_id:
+                continue
+            pivot = cls._fork_pivot(sessions, sid)
+            if pivot is not None and pivot[0] == session_id:
+                cuts.append(pivot[1])
+        if cuts:
+            return (session_id, max(cuts))
+        return cls._fork_pivot(sessions, session_id)
 
     # -- kept turns --------------------------------------------------------
     def keep_turn(self, session_id: str, at_seq: int) -> Event:

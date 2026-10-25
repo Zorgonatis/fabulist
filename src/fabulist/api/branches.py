@@ -226,15 +226,21 @@ def _branch_view(log: "EventLog", child_id: str) -> dict:
 def _swipe_group(log: "EventLog", session_id: str) -> list[str]:
     """``last_swipe_target`` minus compaction continuations (W9.26 §2.6).
 
-    The parent line (position 0) is kept unconditionally: it is the group's base
-    reply, not a child of this cut. Every compaction child drops out. When the
+    The group is PIVOT-based and symmetric (issue #59): the anchor line
+    (position 0) is kept unconditionally -- it is the group's base reply, not a
+    child of this cut -- and the forks listed are the replies at that same
+    position, so the original line lists the regenerate branch exactly as the
+    branch lists the original. Every compaction child drops out. When the
     requested session is ITSELF a continuation it forms a one-line group of its
     own (one sibling => no arrows): a continuation has no alternates, and it
     must never be reachable by swiping out of the era it starts.
     """
     if _child_kind(log, session_id) == KIND_COMPACTION:
         return [session_id]
-    ids = list(log.last_swipe_target(session_id))
+    # ``or [session_id]`` keeps the group self-inclusive by construction: the
+    # payload's ``index`` locates SELF in this list, so an (impossible today)
+    # empty read must degrade to a one-line group, never an empty one.
+    ids = list(log.last_swipe_target(session_id)) or [session_id]
     return ids[:1] + [
         sid for sid in ids[1:] if _child_kind(log, sid) != KIND_COMPACTION
     ]
@@ -245,9 +251,12 @@ async def list_child_branches(session_id: str, request: Request) -> dict:
     """Full swipe context for the session (orchestrator contract, W2.2 UI).
 
     ``parent``: the session this one was forked from (null at a root).
-    ``siblings``: parent-first ordered swipe group INCLUDING self
-    (``is_self``); position 1 is the parent's own reply. ``branches``: direct
-    children, oldest first (branch-chip/fork-point list).
+    ``siblings``: pivot-first ordered swipe group INCLUDING self (``is_self``);
+    position 1 is the anchor line's own reply, and the group is the same set
+    from either side of the fork (issue #59). ``index``/``count`` are the
+    1-based position of ``session_id`` in ``siblings`` and the group size, so
+    the client's arrows are derivable without re-deriving them from the list.
+    ``branches``: direct children, oldest first (branch-chip/fork-point list).
 
     W9.26 §2.6: every ``branches`` entry carries ``kind`` (``"user"`` vs
     ``"compaction"``) and a ``label`` (empty for user alternates); compaction
@@ -268,38 +277,48 @@ async def list_child_branches(session_id: str, request: Request) -> dict:
         # Same rule as the branches list: a continuation is labelled, never blank.
         return COMPACTION_LABEL if _child_kind(log, sid) == KIND_COMPACTION else ""
 
-    if parent_id:
-        siblings = [
-            {
-                "session_id": sid,
-                "base_seq": None if sid == parent_id else (log.get_session(sid) or {}).get("base_seq"),
-                "created_at": (log.get_session(sid) or {}).get("created_ts"),
-                "snippet": _snippet(sid),
-                "is_self": sid == session_id,
-            }
-            for sid in _swipe_group(log, session_id)
-        ]
-        parent_view = {
+    # ONE group read for every session, roots included (issue #59): the origin
+    # line of a fork owns forks of its own, so "no parent pointer" no longer
+    # means "no siblings" -- a root lists the reply regenerated from it.
+    siblings = [
+        {
+            "session_id": sid,
+            "base_seq": (
+                None if sid == parent_id
+                else (log.get_session(sid) or {}).get("base_seq")
+            ),
+            "created_at": (log.get_session(sid) or {}).get("created_ts"),
+            "snippet": _snippet(sid),
+            "is_self": sid == session_id,
+        }
+        for sid in _swipe_group(log, session_id)
+    ]
+    parent_view = (
+        {
             "session_id": parent_id,
             "base_seq": (log.get_session(parent_id) or {}).get("base_seq"),
             "snippet": _snippet(parent_id),
         }
-    else:
-        siblings = [
-            {
-                "session_id": session_id,
-                "base_seq": info.get("base_seq"),
-                "created_at": info.get("created_ts"),
-                "snippet": _snippet(session_id),
-                "is_self": True,
-            }
-        ]
-        parent_view = None
+        if parent_id
+        else None
+    )
 
+    # ``index`` locates SELF in the very group that is being returned: the page
+    # out of ``len(siblings)`` is what the UI's prev/next arrows read.
+    index = next(
+        (
+            position
+            for position, entry in enumerate(siblings, start=1)
+            if entry["is_self"]
+        ),
+        1,
+    )
     return {
         "session_id": session_id,
         "parent": parent_view,
         "siblings": siblings,
+        "index": index,
+        "count": len(siblings),
         "branches": branches,
     }
 
