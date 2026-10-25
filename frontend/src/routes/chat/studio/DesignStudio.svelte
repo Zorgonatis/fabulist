@@ -88,8 +88,23 @@
 	const MIN_VISIBLE = 80;
 	const MIN_W = 320;
 	const MIN_H = 240;
-	const DEFAULT_WIDTH = 440;
-	const DEFAULT_HEIGHT = 480;
+
+	// --- the fresh-layout decision (issue #65) -------------------------------
+	// A new (or reset) studio POPS OUT rather than docking, and it is generous:
+	// the panes are editors, and a persona's Personality or a world's
+	// description is a long text input that a 440px rail column squeezed into a
+	// cramped scroll box. A floated panel also opens clear of the window edge
+	// instead of flush against it — the edge is where the page scrollbar lives,
+	// which is how a drag aimed at the resize edge landed on a scrollbar instead.
+	// Every one of these values lives HERE and nowhere else; saved layouts are
+	// never migrated (the restore pass applies what the owner left, field by
+	// field).
+	const DEFAULT_DOCK: Dock = 'float';
+	const DEFAULT_WIDTH = 640;
+	const DEFAULT_HEIGHT = 720;
+	/** Clear of the page's 248px session rail (`RAIL_WIDTH`), plus a 2rem gap. */
+	const DEFAULT_X = 280;
+	const DEFAULT_Y = 88;
 
 	// 16px is the browser default root size; read the live value so a host that
 	// resizes the root font still gets the right clamps.
@@ -100,11 +115,11 @@
 	}
 
 	// --- owned layout state ---
-	let dock = $state<Dock>('right');
+	let dock = $state<Dock>(DEFAULT_DOCK);
 	let width = $state(DEFAULT_WIDTH);
 	let height = $state(DEFAULT_HEIGHT);
-	let x = $state(120);
-	let y = $state(96);
+	let x = $state(DEFAULT_X);
+	let y = $state(DEFAULT_Y);
 	let collapsed = $state(false);
 	let kind = $state<StudioKind>(LANDING_KIND);
 	let dirty = $state(false);
@@ -122,7 +137,7 @@
 		try {
 			window.localStorage.setItem(
 				STORAGE_KEY,
-				JSON.stringify({ open, dock, width, x, y, collapsed, kind, focusId })
+				JSON.stringify({ open, dock, width, height, x, y, collapsed, kind, focusId })
 			);
 		} catch {
 			/* private mode / quota — persistence is best-effort */
@@ -135,6 +150,7 @@
 		void open;
 		void dock;
 		void width;
+		void height;
 		void x;
 		void y;
 		void collapsed;
@@ -143,11 +159,38 @@
 		persist();
 	});
 
+	/**
+	 * Fit the DEFAULT box into the current window. Only the defaults go through
+	 * this: a saved layout is restored exactly as it was saved, never re-clamped
+	 * under the owner's hands.
+	 */
+	function fitDefaultFloat(): void {
+		if (typeof window === 'undefined') return;
+		const edge = 16;
+		width = Math.min(DEFAULT_WIDTH, Math.max(MIN_W, window.innerWidth - edge * 2));
+		height = Math.min(DEFAULT_HEIGHT, Math.max(MIN_H, window.innerHeight - edge * 2));
+		// Keep the rail clear whenever there is room; on a window too small for that,
+		// the shared clamps below still leave the header reachable.
+		x = clampX(Math.min(DEFAULT_X, Math.max(0, window.innerWidth - width - edge)));
+		y = clampY(Math.min(DEFAULT_Y, Math.max(0, window.innerHeight - height - edge)));
+	}
+
+	/** Put the layout back to the fresh-open defaults (the shell's own reset). */
+	function resetLayout(): void {
+		dock = DEFAULT_DOCK;
+		collapsed = false;
+		fitDefaultFloat();
+	}
+
 	onMount(() => {
 		if (typeof window === 'undefined') {
 			hydrated = true;
 			return;
 		}
+		// A fresh layout starts from the defaults, fitted to THIS window; the
+		// saved fields below then win one by one, so an owner who docked stays
+		// docked and no saved value is silently rewritten.
+		fitDefaultFloat();
 		try {
 			const raw = window.localStorage.getItem(STORAGE_KEY);
 			if (raw) {
@@ -156,6 +199,7 @@
 					dock = saved.dock;
 				}
 				if (typeof saved.width === 'number') width = saved.width;
+				if (typeof saved.height === 'number') height = saved.height;
 				if (typeof saved.x === 'number') x = saved.x;
 				if (typeof saved.y === 'number') y = saved.y;
 				if (typeof saved.collapsed === 'boolean') collapsed = saved.collapsed;
@@ -164,6 +208,10 @@
 		} catch {
 			/* corrupt state — fall back to defaults */
 		}
+		// A partial saved layout (an older write, a hand-edited value) could leave a
+		// floated default width on a DOCKED panel; the dock band clamp the splitter
+		// already uses puts that right without touching a saved float size.
+		if (dock !== 'float') width = Math.min(Math.max(width, dockMinWidth), dockMaxWidth);
 		hydrated = true;
 	});
 
@@ -438,6 +486,13 @@
 					<button
 						type="button"
 						class="icon"
+						aria-label="Reset studio layout"
+						title="Reset layout"
+						onclick={resetLayout}>⟲</button
+					>
+					<button
+						type="button"
+						class="icon"
 						aria-label="Dock studio left"
 						title="Dock left"
 						onclick={() => setDock('left')}>◧</button
@@ -522,6 +577,13 @@
 					<header class="studio-head">
 						{@render kindTabs()}
 						<div class="head-actions">
+							<button
+								type="button"
+								class="icon"
+								aria-label="Reset studio layout"
+								title="Reset layout"
+								onclick={resetLayout}>⟲</button
+							>
 							<button
 								type="button"
 								class="icon"
