@@ -62,6 +62,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a new `disabled_stage_unprunable` violation instead of being stored, and validation
   judges the pruned wiring, so an off switch that would strand the narrator cannot be saved.
 
+- **Hints and labels read like a person wrote them.** A product-wide copy sweep rewrote the
+  UI register: decision ids (`D26`, `W9.17`, `ADR-…`), engine nouns the player never chose to
+  learn (`provenance contract`, `fan-out`, `topology`, `slot`, `context ledger`, `cache
+  contract`) and implementation-speak ("byte-faithful default pipeline") are gone from every
+  surface — settings and rule rows, the prompt drawer, the connections drawer, the turn flow
+  and graph editor, the inspector, state and cast panes, memory, proposals, studio panes and
+  the appearance hints. Copy says what the thing does for the player; the product's own nouns
+  (Narrator, NPC lanes, Image Prompter, persona, world, book, cast) stay. Served descriptions
+  (settings registry, agent-role labels, the flow manifest's node and region metadata) were
+  rewritten at the source and the committed artifacts regenerated. `docs/UI-COPY.md` is the
+  register and the rules for anything the UI renders. Note: an already-saved preset keeps the
+  old rule-row descriptions until that preset is reset — nothing in the prompt itself changed.
+
 ### Fixed
 
 - **The live preview showed the previous turn's NPCs (or none) mid-turn.** The engine wrote
