@@ -1,6 +1,8 @@
 # Fabulist
 
-This is an AI slop project, it will break.
+### This is an AI slop project, it will break.
+
+But I do care about it, and hope you will too. Please submit your issues and PRs if you'd like to contribute!
 
 ## What it is
 
