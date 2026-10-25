@@ -9,10 +9,10 @@
 #
 # The sidecar needs NO download step and NO models directory: `models.ini`
 # names the three weights as HuggingFace references (all ungated), and the
-# router fetches each one into the cache volume on that model's FIRST REQUEST
-# — ~2.7 GiB once, then served from the volume across recreates. The `./models`
-# mount below remains only as the offline/local-weights override. See README.md
-# > Docker > Models sidecar.
+# entrypoint warms all three at CONTAINER START, pulling each into the cache
+# volume then — ~2.7 GiB once, then served from the volume across recreates.
+# The `./models` mount below remains only as the offline/local-weights override.
+# See README.md > Docker > Models sidecar.
 #
 # The ENGINE still boots with an empty ./configs (the first-run hint tells you
 # to create a connection in the UI or over the API) and writes into the mounted
@@ -90,11 +90,14 @@ services:
 
   # The models sidecar: ONE llama.cpp server, Vulkan backend, router mode, one
   # port, three model ids (rerank + embeddings + the decision model). One
-  # process owns the device; the router loads a model on first request — pulling
-  # its HuggingFace weights into the cache volume at that moment — keeps at most
-  # three resident, and sleeps an idle model after 300 s. There is no CPU
-  # profile: this build falls back to CPU natively when no Vulkan device is
-  # found (the entrypoint says so loudly), so a GPU-less host needs no second
+  # process owns the device, keeps at most three resident, and sleeps an idle
+  # model after 300 s. At CONTAINER START the entrypoint warms all three (one
+  # load request per model id), so the ~2.7 GiB of HuggingFace weights land in
+  # the cache volume then — NOT in the middle of a new chat's first turn, where
+  # the wait looked like a failure (issue #64). The healthcheck below gates on
+  # that warmup, so the engine is never started against a cold sidecar. There is
+  # no CPU profile: this build falls back to CPU natively when no Vulkan device
+  # is found (the entrypoint says so loudly), so a GPU-less host needs no second
   # file.
   fabulist-models:
     # Pinned by TAG, not :latest — the d1 decision model is a new arch
@@ -107,9 +110,10 @@ services:
     # sha256:a644fb651975d9dea49140302577a3b945993fd5efd3400bf89c7d525d03c103
     image: ghcr.io/ggml-org/llama.cpp:server-vulkan-b11804
     # The image's own entrypoint is /app/llama-server. Ours validates the
-    # preset (HF ref form, cache writability), resolves the Vulkan device, then
-    # execs it (deploy/sidecar/entrypoint.sh). /bin/sh is explicit so a
-    # bind-mounted script does not need the executable bit.
+    # preset (HF ref form, cache writability), resolves the Vulkan device, warms
+    # every model, then supervises the server (deploy/sidecar/entrypoint.sh).
+    # /bin/sh is explicit so a bind-mounted script does not need the executable
+    # bit.
     entrypoint: ["/bin/sh", "/opt/fabulist/entrypoint.sh"]
     volumes:
       # llama.cpp's HuggingFace download cache. The shipped preset is HF refs,
@@ -141,6 +145,16 @@ services:
       # future gated repo needs no new flag — just export HF_TOKEN. Empty is
       # fine and sends no Authorization header.
       HF_TOKEN: ${HF_TOKEN:-}
+      # Issue #64: warm the models at container start instead of on the first
+      # request. `on` (default) loads every model id in the preset and reports
+      # healthy only when all of them are local — the weight download moves to
+      # container start, where the user is still wiring up connections. Set
+      # `off` on a host that PRE-SEEDS the cache (or to keep first-boot fast on a
+      # metered link): the sidecar then reports healthy as soon as the router
+      # answers, and a model's first request pays its own download again.
+      # The budget is seconds; keep healthcheck.start_period at or above it.
+      FABULIST_SIDECAR_WARMUP: ${FABULIST_SIDECAR_WARMUP:-on}
+      FABULIST_SIDECAR_WARMUP_TIMEOUT: ${FABULIST_SIDECAR_WARMUP_TIMEOUT:-1800}
       # Which Vulkan device to use. Vulkan enumerates in ITS OWN order (index 0
       # is not necessarily your first card — on the maintainer's two-GPU box
       # Vulkan0 is the NVIDIA card and Vulkan1 the AMD one), so the entrypoint
@@ -167,27 +181,33 @@ services:
       # existing host model server; override with FABULIST_SIDECAR_PORT.
       - "127.0.0.1:${FABULIST_SIDECAR_PORT:-8445}:8080"
     healthcheck:
-      # "Healthy" means THE ROUTER ANSWERS WITH ITS PRESET — not that a model is
-      # loaded. /v1/models is served by the router itself the moment it listens
-      # (llama.cpp lists the preset's three ids with status "unloaded"), so this
-      # probe never spawns a model child, never downloads a weight, and never
-      # waits for Vulkan to finish compiling a model load. Verified against the
-      # pinned image (b11804) on a fresh container: /health and /v1/models both
-      # answer 200 with every model "unloaded" and /cache empty. /v1/models is
-      # preferred over /health because it also proves the preset parsed — the
-      # same answer the engine's auto-pin consumes. The image's own default
-      # healthcheck hits /health; this overrides it.
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/models"]
+      # "Healthy" means THE MODELS ARE LOCAL AND THE ROUTER ANSWERS — the marker
+      # is written by the entrypoint only after every preset model reported
+      # `loaded` (issue #64), and /v1/models proves the router is up with its
+      # preset parsed (the same answer the engine's auto-pin consumes). A cold
+      # container is therefore UNHEALTHY while it downloads, which is exactly
+      # what keeps `depends_on: service_healthy` from starting the engine
+      # against a cold sidecar. A failed warmup leaves the marker absent: the
+      # container stays unhealthy (and logs which model failed), it does not
+      # crash-loop. With FABULIST_SIDECAR_WARMUP=off the marker is written at
+      # once, so health means what it always meant — the router answers.
+      # The image has curl; `test -f` is the shell builtin in /bin/sh.
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /tmp/fabulist-sidecar/warmup.ok && curl -fsS http://127.0.0.1:8080/v1/models >/dev/null",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
-      # GENEROUS on purpose: a first start on a cold host may spend a while in
-      # image start-up, --list-devices / Vulkan enumeration, and the device
-      # guard. Failures during the start period do not count against `retries`,
-      # and `depends_on: service_healthy` simply waits — the engine container is
-      # not started until this passes (there is no model load on this path, so
-      # the wait is seconds, not the 2.7 GiB weight pull).
-      start_period: 120s
+      # GENEROUS on purpose, and it must stay >= FABULIST_SIDECAR_WARMUP_TIMEOUT
+      # (a test pins that): a first start on a cold host spends image start-up,
+      # --list-devices / Vulkan enumeration, the device guard, and then the one
+      # ~2.7 GiB weight pull this sidecar exists to do. Failures during the
+      # start period do not count against `retries`, and `depends_on:
+      # service_healthy` simply waits — the engine is not started until the
+      # models are local. A warm cache makes this a few seconds.
+      start_period: 1800s
     devices:
       # AMD/Intel Vulkan: the render nodes are the access path, and this line
       # is all they need (some hosts also require the `render` group). On a
