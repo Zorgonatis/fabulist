@@ -27,6 +27,11 @@
 //        body {request?, imagegen_id, overrides?}
 
 import { API_BASE, StreamError, USE_MOCK, readErrorDetail, readJson, str } from './shared';
+import { COMFY_BASE_URL_KEY, mockSettingValue } from './settings';
+
+/** The endpoint the mock reports when no URL has been saved (mirrors the engine
+ * default in `fabulist.api.imagegen_api.DEFAULT_BASE_URL`). */
+export const MOCK_BASE_URL = 'http://127.0.0.1:8188';
 
 /** A pointer at one workflow node input (seed / positive / negative). */
 export interface ImageGenParamTarget {
@@ -374,7 +379,15 @@ export async function deleteImageGenDefinition(imagegenId: string): Promise<void
  * when this reports `enabled`.
  */
 export async function getImageGenConfig(): Promise<ImageGenConfig> {
-	if (USE_MOCK) return { enabled: false, base_url: 'mock', reachable: false };
+	if (USE_MOCK) {
+		// The mock shows the endpoint you saved in the connections drawer, so the
+		// URL field is demoable offline (nothing else in mock mode submits work).
+		return {
+			enabled: false,
+			base_url: mockSettingValue(COMFY_BASE_URL_KEY) ?? MOCK_BASE_URL,
+			reachable: false
+		};
+	}
 	const res = await fetch(IMAGEGEN_ENDPOINTS.config(), {
 		headers: { Accept: 'application/json' }
 	});

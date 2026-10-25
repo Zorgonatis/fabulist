@@ -51,6 +51,15 @@ or default here.
   left untouched and goes inert. Unknown names stay 404 — creating arbitrary
   per-item slots over the API is a non-goal.
 
+The taxonomy now also declares the two per-item ROLES that are D19 interactions
+(issue #55), so the drawer maps them like any other slot and this PATCH accepts
+them: ``planner`` (the steering plane — unauthored it keeps resolving through
+the narration task, i.e. the ``planner -> narrator`` default) and ``npc`` (the
+whole NPC lane GROUP — the fan-out resolves its agent through
+:func:`~fabulist.connections.taxonomy.resolve_interaction_agent` per call, so an
+authored key takes effect on the next turn). Both are ordinary declared
+spellings: one row, one ``write_slot``, no special PATCH address.
+
 Every write merges into the raw document (unknown keys preserved), validates the
 WHOLE result, writes atomically, and swaps the live :class:`RegistryStore`
 snapshot. Callers hold the store — not a frozen registry — so the NEXT request

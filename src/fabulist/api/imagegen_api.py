@@ -18,12 +18,16 @@ always wins.
 The feature flag rides the EXISTING settings fold: ``comfy.enabled`` as a
 ``settings_changed`` feature flag on the reserved ``__settings__`` anchor
 (default false), read through :func:`fabulist.api.settings.current_features`.
-The base URL
-is a plain string the boolean feature fold cannot carry, so it is read from an
-injectable seam (``request.app.state.imagegen_base_url``) with the documented
-default; the orchestrator may override it. Reachability (``/system_stats`` 2 s,
-cached 60 s) gates ``enabled`` — the Composer shows the button only when the flag
-is on AND ComfyUI answers.
+The endpoint is a ``settings_changed`` STRING setting, ``comfy.base_url``
+(issue #57), because the boolean feature fold cannot carry a URL: it resolves in
+:func:`_base_url` as **setting override > ``app.state.imagegen_base_url`` (the
+injection seam tests and alternate deployments use) > :data:`DEFAULT_BASE_URL`**.
+That order is what makes a URL typed into the drawer reach the ComfyUI client on
+the NEXT request with no restart; the injection seam stays available for tests
+and for a deployment that pins the endpoint in code, and the shipped default is
+still ``http://127.0.0.1:8188``. Reachability (``/system_stats`` 2 s, cached
+60 s) gates ``enabled`` — the Composer shows the button only when the flag is on
+AND ComfyUI answers.
 
 Generation (POST):
   1. the generator agent (the ``imagegen`` binding, default ``your-model-id``,
@@ -92,7 +96,9 @@ router = APIRouter(tags=["imagegen"])
 
 logger = logging.getLogger(__name__)
 
-#: Default ComfyUI endpoint (the tuned systemd unit).
+#: Default ComfyUI endpoint (the tuned systemd unit). The settings override is
+#: ``comfy.base_url`` (:data:`fabulist.api.settings.COMFY_BASE_URL_KEY`); this
+#: constant is only the fallback when nothing is authored or injected.
 DEFAULT_BASE_URL = "http://127.0.0.1:8188"
 
 #: The settings toggle id that turns the feature on (default false).
@@ -167,7 +173,31 @@ def feature_enabled(log: "EventLog") -> bool:
 
 
 def _base_url(request: Request) -> str:
-    """The ComfyUI base URL (injectable via ``app.state.imagegen_base_url``)."""
+    """The ComfyUI base URL: the settings override, then the injection seam.
+
+    Order (issue #57):
+
+    1. **``comfy.base_url``** — the persisted settings value the Connections
+       drawer writes (empty/unset = nothing authored);
+    2. ``app.state.imagegen_base_url`` — the injectable seam tests and an
+       alternate deployment use;
+    3. :data:`DEFAULT_BASE_URL` — ``http://127.0.0.1:8188``.
+
+    Read per call, so a URL saved in the drawer applies to the next request with
+    no restart. A log that is missing (a router mounted without an app factory)
+    degrades to step 2 instead of raising — an endpoint read must never be the
+    reason a submit fails.
+    """
+    log = getattr(request.app.state, "log", None)
+    if log is not None:
+        from fabulist.api.settings import COMFY_BASE_URL_KEY, setting_value
+
+        try:
+            configured = setting_value(log, COMFY_BASE_URL_KEY)
+        except Exception:  # noqa: BLE001 - a settings read never breaks a submit
+            configured = None
+        if configured:
+            return configured
     value = getattr(request.app.state, "imagegen_base_url", None)
     return str(value) if value else DEFAULT_BASE_URL
 

@@ -1116,6 +1116,10 @@ def test_get_connections_carries_the_slot_view(build_app):
         "summarizer",
         "captioner",
         "imagegen",
+        # issues #55b/#55c: the planner and the NPC lane group are declared
+        # per-item roles, so the pane maps them like the others.
+        "planner",
+        "npc",
         "embedding",
         "decision",
     ]

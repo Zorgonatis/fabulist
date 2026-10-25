@@ -24,11 +24,15 @@ Vocabulary
 * **legacy twins**: ``narrator`` == ``completion.narration`` and ``extractor``
   == ``completion.extraction``. The legacy key is an ALIAS: never removed,
   never rewritten, and inert once its typed twin is authored.
-* **item slots**: ``summarizer``, ``captioner``, ``imagegen``, ``embedder`` —
-  per-item bindings exactly as today, each with a declared type (+ affinity task
-  for display and fallback). ``embedder`` is DECLARED here (``embedding``/no
-  affinity) so the memory rebind path resolves through the taxonomy like every
-  other slot.
+* **item slots**: ``summarizer``, ``captioner``, ``imagegen``, ``planner``,
+  ``npc``, ``embedder`` — per-item bindings exactly as today, each with a
+  declared type (+ affinity task for display and fallback). ``embedder`` is
+  DECLARED here (``embedding``/no affinity) so the memory rebind path resolves
+  through the taxonomy like every other slot. ``planner`` and ``npc`` (issues
+  #55b/#55c) are the same shape: one key per ROLE, affinity ``completion`` /
+  ``narration``, so an authored key beats the narration task and an unauthored
+  one falls through to it — a legacy/typed narration binding keeps serving both
+  exactly as before.
 
 Resolution — ONE rule, both directions
 --------------------------------------
@@ -92,6 +96,7 @@ __all__ = [
     "INTERACTION_TASKS",
     "ITEM_SLOTS",
     "LEGACY_TWINS",
+    "SLOT_GROUPS",
     "SLOT_LABELS",
     "TASKS",
     "TYPED_SLOTS",
@@ -142,6 +147,21 @@ ITEM_SLOTS: dict[str, tuple[str, str | None]] = {
     "summarizer": ("completion", "extraction"),
     "captioner": ("completion", "extraction"),
     "imagegen": ("completion", None),
+    # Issue #55b: the planner (steering plane) is its own per-item ROLE, so the
+    # connections pane maps it like the others. Affinity ``narration`` is what
+    # keeps every existing config serving the planner unchanged: unauthored, the
+    # row resolves through the narration task (``narrator`` on a legacy document,
+    # ``completion.narration`` when typed) — exactly the D19 default
+    # ``planner -> narrator``. Authored, the planner key wins because the planner
+    # interaction is resolved per call (``PresetAgentCaller("planner", ...)`` ->
+    # :func:`resolve_interaction_agent`, see the interaction-name leg below).
+    "planner": ("completion", "narration"),
+    # Issue #55c: the NPC fan-out's LANE GROUP. One key binds the whole lane set
+    # (every active cast member's decision pass); the lanes are narrative-voice
+    # work, so the affinity is the narration task. Per-member granularity stays a
+    # preset-layer concern (``DEFAULT_BINDINGS['npc']['overrides']``) — this slot
+    # is the group knob, not a wildcard per member.
+    "npc": ("completion", "narration"),
     # Declared (R2 fold P2-7): the live embedder key resolves through the
     # taxonomy like every other slot, so the memory rebind path and the drawer
     # read one vocabulary.
@@ -165,6 +185,15 @@ INTERACTION_TASKS: dict[str, tuple[str, str]] = {
     "bts": ("completion", "state"),
 }
 
+#: Rows that render in a group of their OWN instead of their type's group.
+#: Slot -> group label. The NPC fan-out is the case this exists for (issue #55c):
+#: it is ONE binding that covers every active cast member, so the pane shows it as
+#: a lane GROUP ("Npc lanes") rather than as one more row among the completion
+#: extras. Grouping is presentation only — resolution is untouched.
+SLOT_GROUPS: dict[str, str] = {
+    "npc": "Npc lanes",
+}
+
 #: Display labels for declared slots (the drawer's row names). An undeclared
 #: custom key labels itself.
 SLOT_LABELS: dict[str, str] = {
@@ -176,7 +205,14 @@ SLOT_LABELS: dict[str, str] = {
     "decision": "Decision",
     "summarizer": "Summarizer",
     "captioner": "Captioner",
-    "imagegen": "Imagegen",
+    # Issue #55a: the AGENT role is an image PROMPTER (it renders diffusion
+    # prompts; ComfyUI does the diffusion). The slot KEY stays ``imagegen`` —
+    # renaming a key would break every authored config, so the rename is
+    # display-only (alias discipline).
+    "imagegen": "Image Prompter",
+    # Issue #55b/#55c: the two per-item roles that are also D19 interactions.
+    "planner": "Planner",
+    "npc": "Npc lanes",
     "embedder": "Embedder",
 }
 
@@ -392,6 +428,10 @@ def resolve_interaction_agent(
 
     1. the preset's explicit binding for ``interaction``, when it names a slot
        the ``agents`` map resolves (an explicit choice always wins);
+    1b. the interaction's OWN per-item slot, when the document authors it
+       (``planner``, ``npc`` — issues #55b/#55c). An authored key is an explicit
+       choice by the document's author, so it outranks the task leg below; an
+       unauthored one falls through and nothing changes;
     2. the interaction's per-item :data:`DEFAULT_BINDINGS` agent, when that
        agent IS a declared per-item slot (``summarizer``, ``captioner``,
        ``imagegen``, ``embedder``) — the author's per-item choice must not be
@@ -420,6 +460,18 @@ def resolve_interaction_agent(
                 resolved = _resolved_slot(agents, agent)
                 if resolved is not None:
                     return resolved[0]
+
+    # Issue #55b/#55c: an interaction that OWNS a per-item slot of its own name
+    # (``planner`` -> :data:`ITEM_SLOTS` ``planner``, ``npc`` -> ``npc``) is
+    # served by that key the moment the document authors it. This is what makes
+    # the connections drawer's rebind EFFECTIVE: the planner lane and the NPC
+    # fan-out resolve their agent per call through this function, so an authored
+    # key wins and an unauthored one changes nothing (the task leg below still
+    # resolves the narration binding, which is today's ``planner -> narrator``).
+    # Checked on the raw key, never through ``_resolved_slot``: that would match
+    # any authored narration key and turn the fallback into a hard choice.
+    if interaction in ITEM_SLOTS and interaction in agents:
+        return interaction
 
     default = DEFAULT_BINDINGS.get(interaction)
     default_agent = default.get("agent") if isinstance(default, Mapping) else None
@@ -470,6 +522,9 @@ def _slot_row(agents: Mapping[str, str], slot: str) -> dict[str, Any]:
         "type": type_name,
         "task": task,
         "label": SLOT_LABELS.get(slot, slot),
+        # The drawer's header for this row's section: its type, unless the role is
+        # declared as its own group (``npc`` -> "Npc lanes").
+        "group": SLOT_GROUPS.get(slot) or type_name,
         "canonical": canonical(slot),
         # Legacy twins + the item slots folded into a task-less type: the other
         # spellings of THIS role (never rows of their own).
@@ -496,8 +551,9 @@ def slot_view(agents: Mapping[str, str]) -> list[dict[str, Any]]:
     Rows are grouped by type in :data:`TYPES` order — the type row, then its
     task rows, then the per-item rows belonging to it — so the drawer renders
     Completion / Embedding / Decision headers without re-deriving the
-    hierarchy. Authored-but-undeclared custom keys follow as per-item rows
-    (``type``/``task`` ``None``): "per item as today" stays first-class and
+    hierarchy (a row declared in :data:`SLOT_GROUPS` — ``npc`` — names its own
+    group instead, so the lane group renders as its own section). Authored-but-
+    undeclared custom keys follow as per-item rows (``type``/``task`` ``None``): "per item as today" stays first-class and
     visible.
 
     Exactly one row per role: a legacy key never gets a row (it rides the typed
@@ -529,6 +585,7 @@ def slot_view(agents: Mapping[str, str]) -> list[dict[str, Any]]:
                 "type": None,
                 "task": None,
                 "label": SLOT_LABELS.get(name, name),
+                "group": None,
                 "canonical": name,
                 "aliases": [],
                 "connection": agents[name],

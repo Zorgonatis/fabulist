@@ -64,6 +64,12 @@ export interface ConnectionSlot {
 	/** Task under the type (narration/extraction/state); null otherwise. */
 	task: string | null;
 	label: string;
+	/**
+	 * The section this row renders under: its type (`completion`), or a declared
+	 * group of its own — `npc` renders as the `"Npc lanes"` group (issue #55c).
+	 * Vocabulary lives in `taxonomy.SLOT_GROUPS`; null for a custom key.
+	 */
+	group: string | null;
 	canonical: string;
 	/** Other spellings of THIS role (legacy twins, the item slot serving a type). */
 	aliases: string[];
@@ -248,6 +254,8 @@ function normalizeSlotRow(raw: unknown): ConnectionSlot | null {
 		type: str(obj.type) || null,
 		task: str(obj.task) || null,
 		label: str(obj.label) || slot,
+		// Absent on an older engine: the row's type IS its section (pre-#55c).
+		group: str(obj.group) || str(obj.type) || null,
 		canonical: str(obj.canonical) || slot,
 		aliases: Array.isArray(obj.aliases)
 			? (obj.aliases as unknown[]).filter((alias): alias is string => typeof alias === 'string')
@@ -549,6 +557,8 @@ interface MockSlotSeed {
 	type: string | null;
 	task: string | null;
 	label: string;
+	/** The section the row renders under; defaults to `type` (§ `SLOT_GROUPS`). */
+	group?: string;
 	/** Other spellings of THIS role (legacy twins, the item slot serving a type). */
 	aliases: string[];
 	/**
@@ -604,7 +614,30 @@ const MOCK_SLOT_SEEDS: MockSlotSeed[] = [
 		aliases: [],
 		candidates: ['captioner', 'completion.extraction', 'extractor', 'completion']
 	},
-	{ slot: 'imagegen', type: 'completion', task: null, label: 'Imagegen', aliases: [], candidates: ['imagegen', 'completion'] },
+	// Issue #55a: the AGENT role is an "Image Prompter" (the slot KEY stays
+	// `imagegen` — renaming a key would break authored configs).
+	{ slot: 'imagegen', type: 'completion', task: null, label: 'Image Prompter', aliases: [], candidates: ['imagegen', 'completion'] },
+	// Issues #55b/#55c: the planner and the NPC lane group are declared per-item
+	// roles with the narration affinity, so an authored key wins and an unauthored
+	// one falls through to the narration task — exactly like the engine's
+	// `taxonomy.resolve_interaction_agent`.
+	{
+		slot: 'planner',
+		type: 'completion',
+		task: null,
+		label: 'Planner',
+		aliases: [],
+		candidates: ['planner', 'completion.narration', 'narrator', 'completion']
+	},
+	{
+		slot: 'npc',
+		type: 'completion',
+		task: null,
+		label: 'Npc lanes',
+		group: 'Npc lanes',
+		aliases: [],
+		candidates: ['npc', 'completion.narration', 'narrator', 'completion']
+	},
 	// ONE row per role (issue #48): `embedder` is the item slot that SERVES the
 	// embedding type, so it is an alias of this row, never a row of its own. The
 	// call-path order (`embedder` before `embedding`) is the engine's own, and the
@@ -647,6 +680,7 @@ function mockSlotView(): ConnectionSlot[] {
 			type: seed.type,
 			task: seed.task,
 			label: seed.label,
+			group: seed.group ?? seed.type,
 			canonical: seed.slot,
 			aliases: seed.aliases,
 			connection: matched ? mockAgentMap[matched] : null,

@@ -83,8 +83,14 @@ def test_embedder_is_a_declared_item_slot():
         "summarizer",
         "captioner",
         "imagegen",
+        # Issue #55b/#55c: the planner and the NPC lane GROUP are per-item roles
+        # too — one key each, affinity narration.
+        "planner",
+        "npc",
         "embedder",
     }
+    assert taxonomy.ITEM_SLOTS["planner"] == ("completion", "narration")
+    assert taxonomy.ITEM_SLOTS["npc"] == ("completion", "narration")
 
 
 def test_declared_spellings_covers_typed_legacy_and_item_slots():
@@ -101,6 +107,8 @@ def test_declared_spellings_covers_typed_legacy_and_item_slots():
             "summarizer",
             "captioner",
             "imagegen",
+            "planner",
+            "npc",
             "embedder",
         }
     )
@@ -421,6 +429,8 @@ def test_slot_view_orders_types_tasks_then_items():
         "summarizer",
         "captioner",
         "imagegen",
+        "planner",
+        "npc",
         "embedding",
         "decision",
         "my-own-slot",
@@ -436,6 +446,7 @@ def test_slot_view_reports_resolution_and_provenance():
         "type": "completion",
         "task": "narration",
         "label": "Narration",
+        "group": "completion",
         "canonical": "completion.narration",
         "aliases": ["narrator"],
         "connection": "your-model-id",
@@ -456,6 +467,7 @@ def test_slot_view_reports_resolution_and_provenance():
         "type": "embedding",
         "task": None,
         "label": "Embedding",
+        "group": "embedding",
         "canonical": "embedding",
         "aliases": ["embedder"],
         "connection": "embedder",
@@ -485,6 +497,7 @@ def test_slot_view_renders_authored_custom_keys_as_per_item_rows():
             "type": None,
             "task": None,
             "label": "my-own-slot",
+            "group": None,
             "canonical": "my-own-slot",
             "aliases": [],
             "connection": "custom-conn",

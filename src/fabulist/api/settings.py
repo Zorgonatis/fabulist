@@ -10,14 +10,16 @@ working), but its ``toggles`` map is folded from the PRESET rows, not from a
 settings event; ``PATCH {toggles}`` writes those preset rows (the D26
 materialize-on-first-edit path), never an inert settings copy. A protected/core
 directive is refused with a 422. The remaining settings state is the engine
-FEATURE flags and the global default-persona pin. The event log owns the state
-(D9/D10): this router never mutates a side table — it *derives* the current
-flags by folding ``settings_changed`` system events and expresses every user
-intent as a new append.
+FEATURE flags, the engine STRING settings (issue #57: the ComfyUI endpoint the
+Image Prompter submits to) and the global default-persona pin. The event log
+owns the state (D9/D10): this router never mutates a side table — it *derives*
+the current flags by folding ``settings_changed`` system events and expresses
+every user intent as a new append.
 
-  GET   /api/settings            read the preset-backed toggles + features + pin
+  GET   /api/settings            read the preset-backed toggles + features + values + pin
   PATCH /api/settings {toggles}  write the preset's directive rows (one source)
   PATCH /api/settings {features} append one ``settings_changed`` system event
+  PATCH /api/settings {values}   same event, the STRING map (issue #57: comfy.base_url)
 
 Because the log is per-session, global settings anchor to a reserved session id
 (:data:`SETTINGS_SESSION_ID`). ``GET /api/settings`` folds that session's
@@ -51,6 +53,7 @@ stores it there), so no signature change is needed in ``app.py``.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -94,14 +97,19 @@ class SettingsPatch(BaseModel):
     ``toggles`` is a ``{directive_id: enabled}`` map written to the PRESET's
     directive rows (the single ``enabled`` source, W6.3) — an accepted toggle
     is never inert. ``features`` is a ``{feature_id: enabled}`` map (see
-    :data:`FEATURE_FLAGS`); ``default_persona_id`` pins the global default
-    persona (``null`` clears it). The pin field is only special when it appears
-    in the body (``model_fields_set``): an absent key leaves the pin untouched.
+    :data:`FEATURE_FLAGS`); ``values`` is a ``{setting_id: value}`` map for the
+    STRING settings a boolean flag cannot carry (see :data:`SETTING_VALUES`,
+    e.g. ``comfy.base_url``; an empty string CLEARS the override).
+    ``default_persona_id`` pins the global default persona (``null`` clears it).
+    The pin field is only special when it appears in the body
+    (``model_fields_set``): an absent key leaves the pin untouched.
     """
 
     toggles: dict[str, bool] = Field(default_factory=dict)
     #: Engine FEATURE flags (see :data:`FEATURE_FLAGS`) — same event, separate map.
     features: dict[str, bool] = Field(default_factory=dict)
+    #: STRING settings (see :data:`SETTING_VALUES`) — same event, separate map.
+    values: dict[str, str] = Field(default_factory=dict)
     default_persona_id: str | None = None
 
 
@@ -116,6 +124,84 @@ FEATURE_FLAGS: dict[str, str] = {
     # row, the flag gates its RENDERING (see ``wiring``'s prompt builder).
     ANTI_INJECTION_FLAG: "Anti Injection",
 }
+
+#: The settings id carrying the ComfyUI endpoint override (issue #57). Owned
+#: here so the label registry and the reader name ONE id.
+COMFY_BASE_URL_KEY = "comfy.base_url"
+
+#: Engine SETTINGS whose value is a STRING, not a boolean: the boolean ``features``
+#: fold cannot carry them. Same event/anchor/latest-wins discipline, separate map
+#: (``values``). A registry entry is required to write the id (unknown ids are a
+#: 404, exactly like feature flags) and supplies the settings surface's label.
+SETTING_VALUES: dict[str, str] = {
+    # Issue #57: the ComfyUI endpoint the Image Prompter submits to. Empty/unset
+    # = the shipped default (``imagegen_api.DEFAULT_BASE_URL``); this map holds
+    # the OVERRIDE only, so there is exactly one default in code.
+    COMFY_BASE_URL_KEY: "Image Prompter endpoint (ComfyUI URL)",
+}
+
+
+def settings_values(log: "EventLog") -> dict[str, str]:
+    """Fold the ``settings_changed`` ``values`` map: ``{setting_id: value}``.
+
+    Latest write wins per id, walking the ``__settings__`` anchor in seq order —
+    the same event and discipline as :func:`fabulist.state.settings.settings_map`,
+    which cannot carry these because it keeps booleans only. Non-string values
+    are ignored. An EMPTY string is a stored value here; readers treat it as
+    "cleared" (:func:`setting_value` returns ``None`` for it) so the shipped
+    default applies again without a second, deleteable state.
+    """
+    values: dict[str, str] = {}
+    for event in log.get_events(SETTINGS_SESSION_ID):
+        if event.type != "system":
+            continue
+        if event.payload.get("event") != SETTINGS_EVENT:
+            continue
+        written = event.payload.get("values")
+        if not isinstance(written, dict):
+            continue
+        for setting_id, value in written.items():
+            if isinstance(value, str):
+                values[setting_id] = value
+    return values
+
+
+def setting_value(log: "EventLog", setting_id: str) -> str | None:
+    """The current STRING setting, or ``None`` when unset/cleared.
+
+    Engine-side readers (the imagegen router is the first) call this per use, so
+    an accepted write applies on the NEXT request with no restart — the same
+    contract the feature flags keep.
+    """
+    return settings_values(log).get(setting_id) or None
+
+
+def _clean_setting_values(values: dict[str, str]) -> dict[str, str]:
+    """Validate/normalize a ``values`` write body (422 on anything unusable).
+
+    Unknown ids are the caller's 404 (checked by id, like feature flags). Every
+    value is stripped (a pasted URL carries whitespace); an empty string is a
+    CLEAR and passes through as ``""``. The one URL setting must then be a real
+    absolute ``http(s)`` URL with a host — a typo'd endpoint is refused at the
+    door rather than silently failing every later submit, and a trailing slash
+    is dropped so ``http://host:8188/`` and ``http://host:8188`` are one value.
+    """
+    cleaned: dict[str, str] = {}
+    for setting_id, raw in values.items():
+        value = raw.strip()
+        if value:
+            parts = urlsplit(value)
+            if parts.scheme not in ("http", "https") or not parts.netloc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "reason": f"{setting_id}: must be an absolute http:// or https:// URL",
+                        "id": setting_id,
+                    },
+                )
+            value = value.rstrip("/")
+        cleaned[setting_id] = value
+    return cleaned
 
 
 def current_features(log: "EventLog") -> dict[str, bool]:
@@ -243,6 +329,19 @@ def _settings_payload(log: "EventLog") -> dict[str, Any]:
         for flag_id, name in FEATURE_FLAGS.items()
     }
 
+    # STRING settings (issue #57): the OVERRIDE only — ``None`` means "nothing is
+    # authored, the shipped default applies", so the surface can show a
+    # placeholder instead of a fake value.
+    stored_values = settings_values(log)
+    values = {
+        setting_id: {
+            "id": setting_id,
+            "name": name,
+            "value": stored_values.get(setting_id) or None,
+        }
+        for setting_id, name in SETTING_VALUES.items()
+    }
+
     pinned = default_persona_id(log)
     return {
         "toggles": toggles,
@@ -250,6 +349,9 @@ def _settings_payload(log: "EventLog") -> dict[str, Any]:
         # Deprecated: dropped once the directive-toggles migration has applied.
         "legacy_toggles": dict(legacy_toggles),
         "features": features,
+        # STRING settings (issue #57): ``{id: {id, name, value}}`` — ``value`` is
+        # the authored override, or None when nothing is stored.
+        "values": values,
         # Global default persona pin (may be None): the read-time fallback and
         # the UI's "inherited" indicator both read these two fields.
         "default_persona_id": pinned,
@@ -322,12 +424,14 @@ async def update_settings(body: SettingsPatch, request: Request) -> dict:
     """Flip directive toggles / feature flags and/or pin the default persona (D9).
 
     ``toggles`` writes the active preset's directive rows (the one ``enabled``
-    source); ``features`` appends one ``settings_changed`` system event; when
+    source); ``features`` appends one ``settings_changed`` system event, and so
+    does ``values`` (the STRING settings map, issue #57); when
     ``default_persona_id`` appears in the body it appends one
     ``default_persona_changed`` event (``null`` clears the pin). Validation is
-    atomic: the whole body is checked (unknown toggle/feature id -> 404,
-    protected/core disable -> 422, unknown persona -> 404) before anything is
-    written, so a rejected request leaves the log untouched.
+    atomic: the whole body is checked (unknown toggle/feature/setting id -> 404,
+    protected/core disable -> 422, an unusable URL -> 422, unknown persona ->
+    404) before anything is written, so a rejected request leaves the log
+    untouched.
     """
     log = _log_for(request)
     catalog = {directive.id: directive for directive in default_directives()}
@@ -351,6 +455,18 @@ async def update_settings(body: SettingsPatch, request: Request) -> dict:
                 "ids": sorted(unknown_features),
             },
         )
+
+    unknown_values = [ident for ident in body.values if ident not in SETTING_VALUES]
+    if unknown_values:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": f"unknown setting id(s): {', '.join(sorted(unknown_values))}",
+                "ids": sorted(unknown_values),
+            },
+        )
+    # A bad VALUE is a 422 raised before anything is appended (atomic).
+    values_write = _clean_setting_values(dict(body.values)) if body.values else {}
 
     # Default-persona pin is atomic with the validation above: an unknown id is
     # rejected with a 404 before anything is appended. A key that is present
@@ -378,6 +494,13 @@ async def update_settings(body: SettingsPatch, request: Request) -> dict:
             "system",
             "user",
             {"event": SETTINGS_EVENT, "features": dict(body.features)},
+        )
+    if values_write:
+        log.append_event(
+            SETTINGS_SESSION_ID,
+            "system",
+            "user",
+            {"event": SETTINGS_EVENT, "values": values_write},
         )
     if pin_provided:
         log.append_event(

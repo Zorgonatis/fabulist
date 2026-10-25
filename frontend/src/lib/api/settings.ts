@@ -10,6 +10,16 @@ const mockToggles = new Map<string, boolean>();
 /** Mock-mode engine FEATURE flags (issue #39: Anti Injection, default OFF). */
 const mockFeatures = new Map<string, boolean>();
 
+/**
+ * Mock-mode STRING settings (issue #57): the same `settings_changed` `values`
+ * map the engine folds, latest write wins. `imagegen.ts` reads the ComfyUI
+ * endpoint back out of here so the mock demo shows the URL you just saved.
+ */
+const mockValues = new Map<string, string>();
+
+/** The setting id carrying the ComfyUI endpoint override (issue #57). */
+export const COMFY_BASE_URL_KEY = 'comfy.base_url';
+
 /** Mock feature catalog mirroring `fabulist.api.settings.FEATURE_FLAGS`. */
 const MOCK_FEATURES: Omit<FeatureDefinition, 'enabled'>[] = [
 	{ id: 'comfy.enabled', name: 'Image generation (ComfyUI)' },
@@ -110,6 +120,47 @@ export async function patchSettings(
 		);
 	}
 	return normalizeSettings(await readJson(res));
+}
+
+
+/**
+ * Persist STRING settings (`PATCH {values}` — issue #57's `comfy.base_url`).
+ *
+ * Same door as the feature flags: one `settings_changed` event on the engine's
+ * settings anchor, folded latest-wins per id. The engine validates every id and
+ * every value atomically, so a typo'd URL is a 422 whose reason the form shows.
+ * The value `""` CLEARS the override, which puts the shipped default back.
+ */
+export async function patchSettingValues(values: Record<string, string>): Promise<void> {
+	if (USE_MOCK) {
+		for (const [id, value] of Object.entries(values)) mockValues.set(id, value);
+		return;
+	}
+
+	const res = await fetch(ENDPOINTS.settings(), {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ values })
+	});
+	if (!res.ok) {
+		const detail = await readErrorDetail(res);
+		throw new StreamError(
+			detail.reason || `patchSettingValues failed: ${res.status} ${res.statusText}`,
+			{ ...detail, status: res.status }
+		);
+	}
+}
+
+
+/**
+ * The current STRING setting value, or null when nothing is authored.
+ *
+ * MOCK ONLY: the real reader is the engine's own endpoint (the ComfyUI URL is
+ * read back from `GET /api/imagegen/config`, which reports the EFFECTIVE value).
+ */
+export function mockSettingValue(id: string): string | null {
+	const value = mockValues.get(id);
+	return value ? value : null;
 }
 
 

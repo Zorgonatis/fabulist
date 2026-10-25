@@ -56,6 +56,11 @@
 	// One entry of the connections client module is imported directly because the
 	// `#lib/api` barrel is outside this lane (same pattern as `#lib/api/hud`).
 	import type { ConnectionSlot, SlotInertBinding } from '#lib/api/connections';
+	// Issue #57: the ComfyUI endpoint is a persisted STRING setting, so this
+	// section writes it through the settings door and reads the EFFECTIVE value
+	// back from the imagegen config endpoint (the barrel is outside this lane).
+	import { COMFY_BASE_URL_KEY, patchSettingValues } from '#lib/api/settings';
+	import { getImageGenConfig } from '#lib/api/imagegen';
 	import { register } from '#lib/uiLayers';
 	import ImageGenPane from './studio/ImageGenPane.svelte';
 
@@ -153,8 +158,20 @@
 	 * no copy once it has been stored (the engine answers with the env NAME).
 	 */
 	let keyDraft = $state('');
-	/** The optional Image Gen tab — collapsed (and unmounted) until the user opens it. */
+	/** The optional Image Prompter section — collapsed (and unmounted) until opened. */
 	let imageGenOpen = $state(false);
+
+	/**
+	 * The ComfyUI endpoint (issue #57). `comfyUrl` is the EFFECTIVE URL the engine
+	 * reports (the setting, else the shipped default); `comfyDraft` is the field
+	 * text. Saving writes the settings value (`comfy.base_url`); an empty field
+	 * CLEARS the override, putting the default back. The section then re-reads the
+	 * config, so what it shows is what the engine would submit to.
+	 */
+	let comfyUrl = $state('');
+	let comfyDraft = $state('');
+	let comfyBusy = $state(false);
+	let comfyNote = $state('');
 
 	/** Open form draft, or null when the list is showing. */
 	let draft = $state<Draft | null>(null);
@@ -315,15 +332,22 @@
 	function groupSlots(rows: ConnectionSlot[]): SlotGroup[] {
 		const groups: SlotGroup[] = [];
 		for (const row of rows) {
-			const key = row.type ?? 'items';
+			// `group` is the engine's own section name: a row's type, or a declared
+			// group of its own (`npc` -> "Npc lanes", issue #55c). A custom key (no
+			// type, no group) collects in the trailing "Per item" group.
+			const key = row.group ?? row.type ?? 'items';
 			let group = groups.find((candidate) => candidate.key === key);
 			if (!group) {
-				// A type group's first row IS its type row, so its label ("Completion")
-				// names the header.
-				group = { key, label: row.type ? row.label : 'Per item', rows: [] };
+				// A group's first row IS its heading: a type group reads the TYPE's
+				// label ("Completion"), a lane group its own section name ("Npc lanes").
+				group = {
+					key,
+					label: row.group && row.group !== row.type ? row.group : row.type ? row.label : 'Per item',
+					rows: []
+				};
 				groups.push(group);
 			}
-		group.rows.push(row);
+			group.rows.push(row);
 		}
 		// Display order (owner, 2026-10-23): specific before general. Task slots
 		// first, then per-item slots, and the type row LAST — it is the fallback
@@ -340,6 +364,46 @@
 	function rankSlotRow(row: ConnectionSlot): number {
 		if (row.type && row.slot === row.type) return 0;
 		return row.task ? 1 : 2;
+	}
+
+	/** Load the ComfyUI endpoint the engine would submit to (issue #57). */
+	async function loadComfyUrl(): Promise<void> {
+		try {
+			const config = await getImageGenConfig();
+			comfyUrl = config.base_url;
+			comfyDraft = config.base_url;
+		} catch (err) {
+			comfyNote = `Could not read the ComfyUI endpoint: ${message(err)}`;
+		}
+	}
+
+	/** Open/close the Image Prompter section, loading the endpoint on first open. */
+	function toggleImageGenSection(): void {
+		imageGenOpen = !imageGenOpen;
+		if (imageGenOpen && !comfyUrl) void loadComfyUrl();
+	}
+
+	/**
+	 * Save the endpoint into the settings fold (`comfy.base_url`).
+	 *
+	 * An empty field sends `""`, which the engine folds as "no override" — the
+	 * shipped default applies again. The engine validates the URL (a scheme typo
+	 * is a 422 carrying the reason), and the section re-reads the EFFECTIVE value
+	 * after the write, so the field can never show a URL the client is not using.
+	 */
+	async function saveComfyUrl(): Promise<void> {
+		if (comfyBusy) return;
+		comfyBusy = true;
+		comfyNote = '';
+		try {
+			await patchSettingValues({ [COMFY_BASE_URL_KEY]: comfyDraft.trim() });
+			await loadComfyUrl();
+			comfyNote = `Saved. The Image Prompter submits to ${comfyUrl}.`;
+		} catch (err) {
+			comfyNote = message(err);
+		} finally {
+			comfyBusy = false;
+		}
 	}
 
 	/** The row's label inside its group; a type row reads as the group default. */
@@ -1432,6 +1496,13 @@
 									</li>
 								{/each}
 							</ul>
+							{#if group.key === 'npc'}
+								<p class="hint">
+									All lanes ride this one binding (the fan-out runs a single caller), so
+									pointing it at a cheaper or stronger connection moves every member's pass
+									at once.
+								</p>
+							{/if}
 						</div>
 					{/each}
 					<p class="hint">
@@ -1445,20 +1516,56 @@
 				{/if}
 			</section>
 
-			<!-- Optional Image Gen tab: collapsed by default, so the pane is only
-			     mounted (and only fetches its definitions) once the user opens it. -->
+			<!-- Optional Image Prompter section (issue #55a): collapsed by default, so
+			     the pane is only mounted (and only fetches its definitions) once the
+			     user opens it. -->
 			<section class="imagegen">
 				<button
 					type="button"
 					class="imagegen-toggle"
 					aria-expanded={imageGenOpen}
-					onclick={() => (imageGenOpen = !imageGenOpen)}
+					onclick={toggleImageGenSection}
 				>
 					<span class="chevron" aria-hidden="true">{imageGenOpen ? '▾' : '▸'}</span>
-					Image Gen
+					Image Prompter
 				</button>
 				{#if imageGenOpen}
 					<div class="imagegen-body">
+						<!-- Issue #57: the ComfyUI endpoint is a persisted SETTING, editable
+						     here — not a constant in code. -->
+						<div class="field comfy-endpoint">
+							<label for="comfy-base-url">ComfyUI URL</label>
+							<div class="comfy-row">
+								<input
+									id="comfy-base-url"
+									type="text"
+									class="comfy-input"
+									spellcheck="false"
+									autocomplete="off"
+									placeholder="http://127.0.0.1:8188"
+									bind:value={comfyDraft}
+									disabled={comfyBusy}
+									onkeydown={(event) => {
+										if (event.key === 'Enter') void saveComfyUrl();
+									}}
+								/>
+								<button
+									type="button"
+									class="ghost comfy-save"
+									onclick={() => void saveComfyUrl()}
+									disabled={comfyBusy}
+								>
+									{comfyBusy ? 'Saving…' : 'Save'}
+								</button>
+							</div>
+							<small>
+								Where the Image Prompter submits its workflows. Empty = the built-in
+								default (<code>http://127.0.0.1:8188</code>). Saves immediately.
+							</small>
+							{#if comfyNote}
+								<small class="key-state" role="status">{comfyNote}</small>
+							{/if}
+						</div>
 						<ImageGenPane />
 					</div>
 				{/if}
@@ -1819,6 +1926,21 @@
 	}
 	.imagegen-body {
 		margin-top: 0.5rem;
+	}
+	.comfy-endpoint {
+		margin-bottom: 0.6rem;
+	}
+	.comfy-row {
+		display: flex;
+		gap: 0.4rem;
+		align-items: stretch;
+	}
+	.comfy-input {
+		flex: 1;
+		min-width: 0;
+	}
+	.comfy-save {
+		min-width: 3.6rem;
 	}
 	.form {
 		display: flex;

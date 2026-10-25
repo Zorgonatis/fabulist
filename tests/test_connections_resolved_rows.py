@@ -177,6 +177,7 @@ def test_unbound_role_renders_one_unbound_row():
 def test_one_row_per_role_for_a_live_legacy_config():
     rows = taxonomy.slot_view(LEGACY_CONFIG)
     slots = [row["slot"] for row in rows]
+    by_slot = _rows(LEGACY_CONFIG)
 
     # no duplicated role, and no alias spelling sneaking in as a row
     assert len(slots) == len(set(slots))
@@ -191,12 +192,16 @@ def test_one_row_per_role_for_a_live_legacy_config():
         "summarizer",
         "captioner",
         "imagegen",
+        # issues #55b/#55c: the planner and the NPC lane group are declared
+        # per-item roles, so each is exactly one row in the completion group.
+        "planner",
+        "npc",
         "embedding",
         "decision",
     ]
     # the embedding role carries the document's embedder binding
-    assert rows[7]["connection"] == "sidecar-embed"
-    assert rows[7]["via"] == "item:embedder"
+    assert by_slot["embedding"]["connection"] == "sidecar-embed"
+    assert by_slot["embedding"]["via"] == "item:embedder"
 
 
 # --- criterion: PATCH semantics unchanged ----------------------------------------
