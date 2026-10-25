@@ -29,6 +29,16 @@ asserts:
   4. turn 2 is clean: no notice in its article, none added anywhere;
   5. no page errors and no console errors.
 
+Issue #61 added the collapsed default, so this harness also pins it:
+
+  6. the notice renders as ONE line — the finding list is not visible — and the
+     line states how many findings there were;
+  7. a reload comes back COLLAPSED (the open state is this session's view, never
+     narrative state), while clicking the line expands the real list (message +
+     fix visible) and clicking again closes it;
+  8. toggling writes NOTHING to the event log: the ``events`` row count is the
+     same before and after the two clicks.
+
 Playwright only (real trusted input, actionability waits) — never synthetic
 ``.click()`` over raw CDP (AGENTS.md).
 
@@ -258,21 +268,58 @@ def _notice_state(page) -> dict:
     ``articles`` maps a notice to the transcript article it lives in (by the
     article's 0-based index and its ``id`` — ``history-{narrative_id}`` once the
     live entry carries its log id), plus the notice's text.
+
+    ``open`` / ``summary`` / ``listVisible`` are the #61 collapse readout: the
+    closed line's own words, whether the ``<details>`` is open, and whether the
+    finding list actually paints. The paint probe is ``checkVisibility``: a
+    closed ``<details>`` hides its content with ``content-visibility: hidden``,
+    which leaves the box laid out — ``getClientRects`` still answers with rects,
+    so geometry alone would report a collapsed list as "visible".
     """
     return page.evaluate(
         """() => {
             const articles = Array.from(document.querySelectorAll('.transcript article.turn'));
             return Array.from(document.querySelectorAll('.validation-notice')).map((el) => {
                 const article = el.closest('article.turn');
+                const details = el.querySelector('details.notice-details');
+                const summary = details ? details.querySelector('summary') : null;
+                const list = details ? details.querySelector('ul') : null;
                 return {
                     articleIndex: articles.indexOf(article),
                     articleId: article ? (article.id || null) : null,
                     text: (el.textContent || '').replace(/\\s+/g, ' ').trim(),
-                    inLastArticle: article === articles[articles.length - 1]
+                    inLastArticle: article === articles[articles.length - 1],
+                    open: details ? details.open : null,
+                    summary: summary
+                        ? (summary.textContent || '').replace(/\\s+/g, ' ').trim()
+                        : null,
+                    listVisible: list
+                        ? list.checkVisibility({
+                              contentVisibilityAuto: true,
+                              opacityProperty: true,
+                              visibilityProperty: true
+                          })
+                        : null
                 };
             });
         }"""
     )
+
+
+def _event_rows(log_path: Path) -> int:
+    """The ``events`` row count — read-only, from a second connection.
+
+    The #61 toggle is a VIEW state: nothing about it may reach the log. Counting
+    rows either side of the clicks is the direct proof (a leaked write would
+    bump it, and any write also bumps ``seq``).
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{log_path}?mode=ro", uri=True)
+    try:
+        return int(conn.execute("select count(*) from events").fetchone()[0])
+    finally:
+        conn.close()
 
 
 def main() -> int:
@@ -320,6 +367,9 @@ def main() -> int:
                 live = reloaded = after_clean = []
                 live_articles = reload_articles = []
                 clean_article_count = -1
+                expanded = recollapsed = []
+                rows_before_toggle = rows_after_toggle = -1
+                expanded_fix_visible = False
                 browser.close()
             else:
                 anchor = f"#history-{flagged['id']}"
@@ -355,6 +405,30 @@ def main() -> int:
                 )
                 page.screenshot(path=str(work / "reload-turn1.png"), full_page=True)
 
+                # -- issue #61: closed by default, and the line is the control --
+                # Rows are counted before/after the two clicks: the open state is a
+                # VIEW preference, so it must not add a single event-log row.
+                rows_before_toggle = _event_rows(log_path)
+                notice_row = page.locator(f"{anchor} {NOTICE}")
+                notice_summary = notice_row.locator("details.notice-details > summary")
+                notice_fix = page.locator(f"{anchor} {NOTICE} .notice-fix")
+                if notice_fix.count():
+                    if notice_fix.first.is_visible():
+                        failures.append(
+                            "the finding list is painted while the notice should be collapsed"
+                        )
+                notice_summary.click()
+                page.wait_for_timeout(250)
+                expanded = _notice_state(page)
+                expanded_fix_visible = bool(
+                    notice_fix.count() and notice_fix.first.is_visible()
+                )
+                page.screenshot(path=str(work / "expanded-turn1.png"), full_page=True)
+                notice_summary.click()
+                page.wait_for_timeout(250)
+                recollapsed = _notice_state(page)
+                rows_after_toggle = _event_rows(log_path)
+
                 # -- turn 2: a clean reply renders NO notice -----------------
                 page.fill(COMPOSER, "Good. Clear it.")
                 page.click(SEND_BUTTON)
@@ -377,6 +451,9 @@ def main() -> int:
         print(f"turn1 live notices  : {live}")
         print(f"turn1 reload notices: {reloaded}")
         print(f"after clean turn    : {after_clean}")
+        print(f"expanded notice     : {expanded}")
+        print(f"re-collapsed notice : {recollapsed}")
+        print(f"event rows          : {rows_before_toggle} -> {rows_after_toggle}")
 
         # 1. Exactly one notice, inside the flagged narrative's own article.
         if len(live) != 1:
@@ -423,6 +500,41 @@ def main() -> int:
             failures.append(
                 f"the clean turn's article holds {clean_article_count} notice(s)"
             )
+
+        # 5. Issue #61: closed by default — both live and after a reload — with the
+        #    count on the one line, and a real click opens the real list.
+        for label, state in (("live", live), ("reload", reloaded)):
+            if len(state) != 1:
+                continue
+            row = state[0]
+            if row["open"] is not False:
+                failures.append(f"the {label} notice is not collapsed by default: {row}")
+            if row["listVisible"] is not False:
+                failures.append(f"the {label} notice paints its finding list closed: {row}")
+            if not row["summary"]:
+                failures.append(f"the {label} notice has no one-line summary: {row}")
+            elif "1 note" not in row["summary"] or "already fixed" not in row["summary"]:
+                failures.append(
+                    f"the {label} summary does not state the count and the repair: "
+                    f"{row['summary']}"
+                )
+        if len(expanded) == 1:
+            if expanded[0]["open"] is not True:
+                failures.append(f"the notice did not open on a click: {expanded}")
+            if expanded[0]["listVisible"] is not True:
+                failures.append(f"the opened notice still hides its list: {expanded}")
+            if not expanded_fix_visible:
+                failures.append("the opened notice does not show the finding's fix")
+        else:
+            failures.append(f"expected 1 notice while expanded, got {len(expanded)}")
+        if len(recollapsed) == 1 and recollapsed[0]["open"] is not False:
+            failures.append(f"the second click did not close the notice: {recollapsed}")
+        # The toggle is view state: it must not have written to the log.
+        if rows_after_toggle != rows_before_toggle:
+            failures.append(
+                "opening the notice wrote to the event log: "
+                f"{rows_before_toggle} -> {rows_after_toggle} rows"
+            )
         if len(engine.calls) != 2:
             failures.append(f"unexpected engine calls: {engine.calls}")
         if page_errors:
@@ -445,10 +557,11 @@ def main() -> int:
         return 1
     print(
         "\nPASS — the validation notice renders after its narrative in the visible "
-        "chat, survives a reload, and a clean turn shows none"
+        "chat, survives a reload, a clean turn shows none, and the finding list is "
+        "collapsed by default until the reader opens it (no log write)"
     )
     print(f"screenshots: {work}/live-turn1.png {work}/reload-turn1.png "
-          f"{work}/after-clean-turn.png")
+          f"{work}/expanded-turn1.png {work}/after-clean-turn.png")
     return 0
 
 

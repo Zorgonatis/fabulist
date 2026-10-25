@@ -1573,17 +1573,33 @@
 				{#if entry.notice && entry.notice.flags.length > 0}
 					<!-- D-F: the committed turn's teaching notice, at the tail of the turn it
 					     refers to — the system turn's natural position in the transcript
-					     (after its narrative), never a toast or a trailing digest. -->
+					     (after its narrative), never a toast or a trailing digest.
+
+					     Issue #61: COLLAPSED by default. The engine caught and repaired these
+					     findings inside the same turn, so the list is reference, not news: one
+					     line says how many there were and the reader opens it if they care.
+					     The open state is plain DOM state on this `<details>` — a view
+					     preference for the current session only, never narrative state and
+					     never anything the event log records. -->
 					<div class="validation-notice" role="note" aria-label="validation notice">
-						<span class="notice-glyph" aria-hidden="true">⚑</span>
-						<ul>
-							{#each entry.notice.flags as flag, flagIndex (flagIndex)}
-								<li>
-									<span class="notice-text">{noticeText(flag)}</span>
-									{#if flag.fix}<span class="notice-fix">fix: {flag.fix}</span>{/if}
-								</li>
-							{/each}
-						</ul>
+						<details class="notice-details">
+							<summary title="The engine caught these and repaired them in the same turn">
+								<span class="notice-glyph" aria-hidden="true">⚑</span>
+								<span class="notice-summary-text">
+									{entry.notice.flags.length}
+									{entry.notice.flags.length === 1 ? 'note' : 'notes'} from this turn —
+									already fixed
+								</span>
+							</summary>
+							<ul>
+								{#each entry.notice.flags as flag, flagIndex (flagIndex)}
+									<li>
+										<span class="notice-text">{noticeText(flag)}</span>
+										{#if flag.fix}<span class="notice-fix">fix: {flag.fix}</span>{/if}
+									</li>
+								{/each}
+							</ul>
+						</details>
 					</div>
 				{/if}
 				{#if hasFlags(meta)}
@@ -2277,6 +2293,37 @@
 		font-size: 0.7rem;
 		line-height: 1.5;
 	}
+	/* Issue #61: the notice is a CLOSED one-liner until the reader opens it. The
+	   summary keeps the D-F glyph so the line still reads as "the engine's note
+	   about the reply above", and the native marker is replaced by a chevron so
+	   the whole line is the toggle at this type size. */
+	.notice-details {
+		min-width: 0;
+	}
+	.notice-details > summary {
+		display: flex;
+		align-items: baseline;
+		gap: 0.4rem;
+		cursor: pointer;
+		list-style: none;
+		color: var(--text-muted);
+	}
+	.notice-details > summary::-webkit-details-marker {
+		display: none;
+	}
+	.notice-details > summary:focus-visible {
+		outline: 2px solid var(--accent-line);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
+	.notice-details > summary::after {
+		content: '▸';
+		color: var(--warn);
+		font-size: 0.7rem;
+	}
+	.notice-details[open] > summary::after {
+		content: '▾';
+	}
 	.validation-notice ul {
 		margin: 0;
 		padding: 0;
@@ -2284,6 +2331,10 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
+	}
+	/* The opened list sits under the summary line, not against it. */
+	.validation-notice .notice-details > ul {
+		margin-top: 0.25rem;
 	}
 	.notice-text {
 		color: var(--text-muted);
