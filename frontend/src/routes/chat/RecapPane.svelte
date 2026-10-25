@@ -63,9 +63,9 @@
 	 * vocabulary the transcript's break row uses, so the two agree. */
 	function spanLabel(entry: RecapEntry): string {
 		const [low, high] = entry.covers_seqs;
-		if (low === null && high === null) return 'span unknown';
-		if (low === high || high === null) return `seq ${low}`;
-		return `seq ${low}–${high}`;
+		if (low === null && high === null) return 'range unknown';
+		if (low === high || high === null) return `turn ${low}`;
+		return `turns ${low}–${high}`;
 	}
 
 	/** The measured stats line (absent fields drop out rather than print empty). */
@@ -85,7 +85,7 @@
 
 <div class="recap-pane">
 	<p class="pane-lead">
-		Compacted history across every era, newest last. Click a recap to jump to the turns it covers.
+		The story so far, one recap per stretch of turns, newest last. Click one to jump to the turns it covers.
 	</p>
 
 	{#if error}
@@ -110,7 +110,7 @@
 							{#if statsLabel(entry)}<span class="recap-stats">{statsLabel(entry)}</span>{/if}
 							{#if entry.absorbs}
 								<span class="recap-absorbs" title="This summary folded in an earlier era's summary">
-									absorbed {entry.absorbs[0]} · seq {entry.absorbs[1]}
+									includes {entry.absorbs[0]} · turn {entry.absorbs[1]}
 								</span>
 							{/if}
 						</span>

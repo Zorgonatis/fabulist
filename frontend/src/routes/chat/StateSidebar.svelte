@@ -1208,7 +1208,7 @@
 											playerNode?.live.location ?? ''
 										)}
 									aria-label="edit Location"
-									title="Move the player (a registry move is a deterministic presence change)"
+									title="Move the player to the location you type"
 									>✎</button
 								>
 							</span>
@@ -1227,7 +1227,7 @@
 					type="button"
 					onclick={checkStateNow}
 					disabled={reconcileBusy || !sessionId}
-					title="Ask the tracker what it believes and flag every disagreement with the registry"
+					title="Ask the tracker what it believes and flag anything that disagrees with this panel"
 				>
 					{reconcileBusy ? 'Checking…' : 'Check state now'}
 				</button>

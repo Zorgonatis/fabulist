@@ -331,15 +331,15 @@
 	</header>
 
 	<p class="hint">
-		What the per-turn decision gate asks before the critic runs. A fired answer reaches the
-		critic as a precise issue, so add the checks you keep missing. Nothing here is protected
-		(D67) — every row can be disabled or removed.
+		The checks the engine runs on every turn before the critic reviews the prose. A check that
+		fires is handed to the critic as a specific issue, so add the ones you keep catching yourself.
+		Every row here can be turned off or removed.
 	</p>
 
 	{#if seeded}
 		<p class="notice">
-			Showing the built-in default set (18 anti-slop phrases plus the movement question).
-			It edits like any other asset — the first save stores it as yours.
+			Showing the built-in set (18 anti-slop phrases plus the movement question). It edits like
+			any other asset — the first save stores it as yours.
 		</p>
 	{/if}
 

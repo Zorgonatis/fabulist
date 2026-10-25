@@ -423,10 +423,10 @@
 
 	/** The covered SEQ span of one break — never turn indices (§2.5). */
 	function breakSpan(view: CompactionBreakView | undefined): string {
-		if (!view || (view.low === null && view.high === null)) return 'an unknown span';
-		if (view.low === null) return `seq ?–${view.high}`;
-		if (view.high === null || view.high === view.low) return `seq ${view.low}`;
-		return `seq ${view.low}–${view.high}`;
+		if (!view || (view.low === null && view.high === null)) return 'an unknown stretch of turns';
+		if (view.low === null) return `turns ?–${view.high}`;
+		if (view.high === null || view.high === view.low) return `turn ${view.low}`;
+		return `turns ${view.low}–${view.high}`;
 	}
 
 	/** Quiet gauge line on a context-low row (absent numbers render nothing). */
@@ -1348,15 +1348,15 @@
 					<div class="compaction-break" role="separator" aria-label="compaction break">
 						<span class="break-rule" aria-hidden="true"></span>
 						<span class="break-label">
-							Session compacted — {breakSpan(cut)} folded into a summary
+							Older turns condensed — {breakSpan(cut)} rolled up into a summary
 						</span>
 						<button
 							type="button"
 							class="break-toggle"
 							aria-expanded={!collapsedBreaks[entry.id]}
 							title={collapsedBreaks[entry.id]
-								? 'Show the turns this era folded away'
-								: 'Fold the turns above this break'}
+								? 'Show the turns hidden under this break'
+								: 'Hide the turns above this break'}
 							onclick={() => toggleBreak(entry.id, !!collapsedBreaks[entry.id])}
 						>
 							{collapsedBreaks[entry.id] ? '▸ collapse' : '▾ collapse'}
@@ -1386,7 +1386,7 @@
 									<dt>covered</dt>
 									<dd>
 										{#if recap?.covers_seqs[0] !== null && recap?.covers_seqs[1] !== null}
-											seq {recap?.covers_seqs[0]}–{recap?.covers_seqs[1]}
+											turns {recap?.covers_seqs[0]}–{recap?.covers_seqs[1]}
 										{:else}
 											{breakSpan(done)}
 										{/if}

@@ -567,11 +567,11 @@
 				<span>Include assistants</span>
 			</label>
 			{#if includeAssistants}
-				<p class="hint">The roster rides the envelope and replaces it on import.</p>
+				<p class="hint">Your assistants travel with the profile and replace the ones on the other side.</p>
 			{:else}
 				<p class="hint">
-					Off — the envelope omits the assistant key, so the recipient's roster is untouched
-					on import.
+					Off — assistants stay out of the file, so importing it leaves the other side's
+					assistants alone.
 				</p>
 			{/if}
 

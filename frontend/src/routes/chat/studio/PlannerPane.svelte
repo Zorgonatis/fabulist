@@ -461,9 +461,9 @@
 				<button type="button" class="ghost" onclick={addField}>+ Add field</button>
 			</header>
 			<p class="hint">
-				The plan's schema beyond its core values (strings, date/time, weather, forecast,
-				established). Each row is one slot a preset cares about — a GM setup adds currency and
-				reputation; the planner fills them and this pane edits them below.
+				Extra details the plan can carry beyond its core values (text, date/time, weather,
+				forecast, established). Each row is something your setup cares about — add currency and
+				reputation for a money-minded game; the planner fills them in and you edit them here.
 			</p>
 			{#if fieldDrafts.length === 0}
 				<p class="hint">No extra fields — the plan carries only its core values.</p>

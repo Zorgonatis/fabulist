@@ -348,7 +348,7 @@
 			<span class="group-label">Committed</span>
 			<span class="count">{rows.length}</span>
 		</header>
-		<p class="hint">applied to the asset catalog · undo re-appends what the accept replaced</p>
+		<p class="hint">accepted into your assets · undo puts back what the accept replaced</p>
 		<ul class="rows">
 			{#each rows as row (row.decision_id)}
 				<li class="row" aria-busy={busyDecisions.includes(row.decision_id)}>
@@ -385,7 +385,7 @@
 		{#if op.hasOld}
 			<code class="val val-old">{formatValue(op.old)}</code>
 		{:else}
-			<span class="val val-old val-missing" title="A legacy row the server did not hydrate — the prior value is not on the wire">
+			<span class="val val-old val-missing" title="An older proposal that did not record the previous value">
 				prior value not shown
 			</span>
 		{/if}
@@ -428,7 +428,7 @@
 				{#if row.proposal.supersedes.length > 0}
 					<span
 						class="chip"
-						title="Older proposals for the same asset collapsed into this one (the newest applies)"
+						title="Older proposals for the same asset are folded into this one (the newest wins)"
 					>
 						{row.proposal.supersedes.length} collapsed
 					</span>

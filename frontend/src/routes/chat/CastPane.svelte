@@ -736,9 +736,9 @@
 		{#if actorError}<p class="hud-note hud-note-error">{actorError}</p>{/if}
 		{#if dispatchError}<p class="hud-note hud-note-error">{dispatchError}</p>{/if}
 		<p class="hud-note">
-			Actors get lanes and colours; “in scene” is presence learned in play — tracked for the
-			scene, never laned. Colours are a registry write (user override, latest wins).
-			Cast members admitted from a proposal can be promoted to a studio actor persona card,
+			Actors get their own lanes and colours. “In scene” is worked out from where everyone is in
+			the story — a tracked member is never given a lane. Colours you pick here win over the
+			engine's. A cast member admitted from a proposal can be promoted to a studio persona card,
 			which outlives this chat.
 		</p>
 	{/if}

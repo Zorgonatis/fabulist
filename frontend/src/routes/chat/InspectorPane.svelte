@@ -590,10 +590,10 @@
 
 	{#if tab === 'notices'}
 		<h3>
-			Degraded steps <span class="muted">({badge.allDegradations.length})</span>
+			Things that went wrong <span class="muted">({badge.allDegradations.length})</span>
 		</h3>
 		{#if badge.allDegradations.length === 0}
-			<p class="empty">No degraded steps recorded for this chat.</p>
+			<p class="empty">Nothing went wrong in this chat.</p>
 		{:else}
 			<ul class="notices" aria-label="degradation notices">
 				{#each badge.allDegradations as notice (notice.seq)}
@@ -638,12 +638,12 @@
 	<!-- W9.26 §2.7: per-task context ledger — quiet, read-only, one row per
 		task surface. Undeclared windows say so instead of inventing a budget. -->
 	<h3>
-		Context <span class="muted">(per task · measured prompt tokens)</span>
+		Window use <span class="muted">(per task · prompt tokens measured by the model)</span>
 	</h3>
 	{#if ledgerError}
 		<p class="error" role="alert">{ledgerError}</p>
 	{:else if ledger.length === 0}
-		<p class="empty">No context ledger yet.</p>
+		<p class="empty">Nothing measured yet.</p>
 	{:else}
 		<!-- Issue #49: the ledger is a READOUT, not prose — every cell is one
 			logical line, so cells never wrap and the table scrolls sideways when
@@ -655,11 +655,11 @@
 					<tr>
 						<th>task</th>
 						<th>connection</th>
-						<th title="owner-declared Context Size">window</th>
-						<th title="effective response length (max_tokens)">resp</th>
-						<th title="usable prompt budget: window − resp − reserve">budget</th>
-						<th title="last measured prompt tokens (usage rows)">prompt</th>
-						<th title="prompt ÷ budget — warns at 80%, compacts at 90%">ratio</th>
+						<th title="the context size you declared">window</th>
+						<th title="response length in tokens">resp</th>
+						<th title="room left for the prompt: window − response − reserve">budget</th>
+						<th title="prompt tokens the model reported last turn">prompt</th>
+						<th title="how full the prompt was — warns at 80%, compacts at 90%">ratio</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -668,12 +668,12 @@
 							<td class="ctx-task" title={`interaction: ${row.interaction} · agent: ${row.agent}`}
 								>{row.task}</td
 							>
-							<td class="ctx-conn" title={row.model ?? 'no usage row yet'}
+							<td class="ctx-conn" title={row.model ?? 'no token report yet'}
 								>{#if row.connection}<span class="ctx-model">{row.model ?? '—'}</span> · {row.connection}{:else}<span class="muted">unbound</span>{/if}</td
 							>
 							<td class="num" title={row.note ?? ''}
 								>{#if row.window_declared}{fmtTokens(row.context_window)}{:else}<span class="muted"
-										>{row.note ?? 'window undeclared'}</span
+										>{row.note ?? 'context size not set'}</span
 									>{/if}</td
 							>
 							<td class="num">{fmtTokens(row.response_length)}</td>
@@ -752,8 +752,8 @@
 							<button
 								type="button"
 								class="copy"
-								title="copy turn provenance (JSON) for an external editor"
-								aria-label={`copy turn ${t.narrative_seq ?? t.user_seq} provenance`}
+								title="copy this turn's raw record (JSON)"
+								aria-label={`copy turn ${t.narrative_seq ?? t.user_seq} record`}
 								onclick={(e) => {
 									e.stopPropagation();
 									void copyTurn(t);
@@ -775,7 +775,7 @@
 										<pre class="text response">{t.narrative_text ?? '—'}</pre>
 										{#if t.narrative_dsl}
 											<details>
-												<summary>openui DSL ({t.narrative_dsl.length} chars)</summary>
+												<summary>panel markup ({t.narrative_dsl.length} chars)</summary>
 												<pre class="text dsl">{t.narrative_dsl}</pre>
 											</details>
 										{/if}
@@ -816,7 +816,7 @@
 												</tbody>
 											</table>
 										{:else}
-											<p class="muted">No usage events recorded for this turn.</p>
+											<p class="muted">No token report for this turn.</p>
 										{/if}
 									</section>
 
@@ -914,7 +914,7 @@
 									{#if captures.length > 0}
 										<section>
 											<h4>
-												Agent captures (D17)
+												What each agent saw and said
 												<span class="muted">({captures.length}{captureAgent ? ` · ${captureAgent}` : ''})</span>
 											</h4>
 											<table class="mini">

@@ -299,7 +299,7 @@
 				>
 					{#snippet rowActions(row: AssistantDefinition)}
 						{#if row.demo}
-							<span class="demo-badge" title="Built-in placeholder (not a preset port)">demo</span>
+							<span class="demo-badge" title="A built-in example, not one of your own assistants">demo</span>
 						{/if}
 					{/snippet}
 				</EntityList>
