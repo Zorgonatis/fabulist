@@ -87,6 +87,9 @@ export interface FlowNode {
 		source: string;
 		merge: string;
 		max_parallel: number;
+		/** Issue #56.3: the endpoint overlays the EFFECTIVE on/off state of the
+		 *  stage (the code artifact always authors it enabled). */
+		enabled?: boolean;
 		/** W9.17: the manifest node(s) the fan-out invokes (e.g. `npc_lane`).
 		 *  They are templates for N invocations, never stations — the read view
 		 *  draws the ACTUAL members instead (see `withLaneArms`). */

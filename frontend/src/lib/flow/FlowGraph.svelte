@@ -57,7 +57,9 @@
 		topology = null,
 		onchange,
 		lanes = [],
-		laneWidth = 4
+		laneWidth = 4,
+		lanesEnabled = true,
+		inFlight = false
 	}: {
 		/** The descriptive flow (read-only mode). Not needed while editing. */
 		manifest?: FlowManifest | null;
@@ -65,6 +67,11 @@
 		lanes?: FlowLane[];
 		/** Pool width from the fanout descriptor (label only). */
 		laneWidth?: number;
+		/** Issue #56.3: false when the topology switches the stage off — the
+		 *  narrator runs one forward pass and no lane arm will ever land. */
+		lanesEnabled?: boolean;
+		/** Issue #56.1: the turn's lanes are planned and still in flight. */
+		inFlight?: boolean;
 		/** Per-node trail, keyed by node id (derive with `activationFromSteps`). */
 		activation?: ActivationMap;
 		/** Session debug toggle — surfaces capture availability on nodes. */
@@ -432,19 +439,35 @@
 		const arms = lanes.map((lane, index) => {
 			const key = String(lane.member_id || lane.name || index);
 			const intent = (lane.intent ?? '').trim();
+			// Issue #56.1: a PLANNED member has no answer yet — say so, instead of
+			// drawing an empty intent as if the lane had come back silent. A plan
+			// left behind by a turn that ended early (abort) reads as abandoned
+			// rather than forever "running".
+			const detail = lane.pending
+				? inFlight
+					? 'in flight — no answer yet'
+					: 'planned — the turn ended before this lane answered'
+				: lane.ok
+					? intent
+					: `lane failed: ${intent || 'no output'}`;
 			return {
 				id: `lane_arm_${key}`,
 				title: lane.name ?? key,
 				kind: 'trigger' as const,
 				runs: { kind: 'model_pass' as const, interaction: 'npc', call_site: null,
-					description: lane.ok ? intent : `lane failed: ${intent || 'no output'}` },
+					description: detail },
 				agent: null,
 				prompt_surface: { door: 'none' as const, reason: 'NPC lane (per member)' },
 				inspector: { kind: 'model_pass' as const, agent_filter: 'npc', events: [] },
 				activation: [],
 				composition: null,
 				fanout: null,
-				meta: { description: `lane ${index + 1} of ${lanes.length} · pool ${laneWidth}`, notes: [] },
+				meta: {
+					description: `lane ${index + 1} of ${lanes.length} · pool ${laneWidth}${
+						lane.pending && inFlight ? ' · running' : ''
+					}`,
+					notes: []
+				},
 				arm: true
 			};
 		});
@@ -804,9 +827,13 @@
 							{onopenstep}
 							arm={Boolean((node as { arm?: boolean }).arm)}
 							laneNote={node.fanout && !(node as { arm?: boolean }).arm
-								? lanes.length > 0
-									? `${lanes.length} lane${lanes.length === 1 ? '' : 's'} · ${laneWidth} in flight`
-									: 'no lane data yet — the next turn fans out'
+								? !lanesEnabled
+									? 'lanes off — the narrator runs one forward pass'
+									: lanes.length > 0
+										? `${lanes.length} lane${lanes.length === 1 ? '' : 's'} · pool ${laneWidth}${
+												inFlight ? ' · in flight' : ''
+											}`
+										: 'no lane data yet — the next turn fans out'
 								: ''}
 						/>
 					</div>

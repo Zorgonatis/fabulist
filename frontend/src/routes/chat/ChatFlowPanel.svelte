@@ -16,12 +16,13 @@
 	// `#lib/flow/*` stays chat-free: every prop this file passes is plain data.
 	import { API_BASE } from '#lib/api';
 	import { getAgentCalls } from '#lib/api/bts';
-	import { getFlowManifest, getLanes } from '#lib/api/flow';
+	import { getFlowManifest, getLanes, getTopology, putTopology, violationsFromError } from '#lib/api/flow';
 	import type { FlowLanes } from '#lib/api/flow';
 	import { activationFromSteps } from '#lib/flow/activation';
+	import { cloneTopology } from '#lib/flow/editor';
 	import FlowGraph from '#lib/flow/FlowGraph.svelte';
 	import NodeInspector from '#lib/flow/NodeInspector.svelte';
-	import type { FlowManifest, FlowNode, InspectorCall } from '#lib/flow/types';
+	import type { FlowManifest, FlowNode, InspectorCall, Topology, TopologyNode } from '#lib/flow/types';
 	import { processingStage, sessionId, turnSteps, type TurnStep } from '#lib/stores';
 
 	let {
@@ -43,6 +44,86 @@
 	let callsLoading = $state(false);
 	let panel = $state<HTMLElement | null>(null);
 
+	// --- the lane config (issues #56.2/#56.3) ---------------------------------
+	//
+	// The fan-out's width and its on/off switch are TOPOLOGY data (the running
+	// graph is compiled from it, ADR-009), so they are edited by writing the
+	// stored topology through the validated door — `PUT /api/prompts/topology`
+	// refuses an edit the builder could not compile, with the violation named.
+	// The control is deliberately small: one width select and one switch, on the
+	// node the manifest declares as the fan-out.
+	/** The stored topology the config writes back (null until read). */
+	let topologyDraft = $state<Topology | null>(null);
+	let laneBusy = $state(false);
+	let laneNote = $state('');
+
+	const laneNodeId = $derived(
+		manifest?.graphs.flatMap((graph) => graph.nodes).find((node) => node.fanout)?.id ?? null
+	);
+	/** The fan-out's topology row: the manifest's id, else the canonical one. */
+	const laneNode = $derived(findFanNode(topologyDraft, laneNodeId));
+	const laneEnabled = $derived(laneData("enabled") !== false);
+	const laneWidth = $derived(Number(laneData("max_lanes")) || 4);
+
+	function findFanNode(topo: Topology | null, hint: string | null): TopologyNode | null {
+		if (!topo) return null;
+		const byHint = hint ? topo.nodes.find((node) => node.id === hint) : undefined;
+		return byHint ?? topo.nodes.find((node) => node.id === 'npc_lanes') ?? null;
+	}
+
+	function laneData(key: string): unknown {
+		const data = laneNode?.data as Record<string, unknown> | undefined;
+		return data ? data[key] : undefined;
+	}
+
+	async function loadTopology(): Promise<void> {
+		try {
+			const body = await getTopology();
+			topologyDraft = body.topology;
+		} catch {
+			// The surface is optional: a failed read just hides the config row.
+			topologyDraft = null;
+		}
+	}
+
+	/**
+	 * Write ONE lane setting back to the default preset's topology.
+	 *
+	 * The whole topology goes back (the door takes the wiring, not a patch), so a
+	 * rejected edit can never leave a half-written node behind: a 400 means the
+	 * log still carries the previous, compilable topology.
+	 */
+	async function saveLaneSetting(patch: { max_lanes?: number; enabled?: boolean }): Promise<void> {
+		if (!topologyDraft || !laneNode) return;
+		laneBusy = true;
+		laneNote = '';
+		const next = cloneTopology(topologyDraft);
+		const target = next.nodes.find((node) => node.id === laneNode.id);
+		if (!target) {
+			laneBusy = false;
+			return;
+		}
+		target.data = { ...(target.data ?? {}), ...patch };
+		try {
+			const body = await putTopology(next);
+			topologyDraft = body.topology;
+			laneNote = 'saved — applies to the next turn';
+			// The manifest's fan-out descriptor is the endpoint's overlay of this
+			// very setting, so re-read it: the board's note follows the save.
+			await loadManifest();
+			await readLanes();
+		} catch (err) {
+			const violations = violationsFromError(err);
+			laneNote = violations.length
+				? `${violations[0].code}: ${violations[0].message}`
+				: err instanceof Error
+					? err.message
+					: 'topology refused';
+		} finally {
+			laneBusy = false;
+		}
+	}
+
 	async function loadManifest(): Promise<void> {
 		manifestLoading = true;
 		manifestError = '';
@@ -61,20 +142,39 @@
 		void loadManifest();
 	});
 
+	$effect(() => {
+		void loadTopology();
+	});
+
 	// --- the lane set (W9.8) --------------------------------------------------
 	//
-	// The lane set is NOT session-constant: it is a fact of the LAST turn, folded
-	// from the log (`npc_lane` rows + their `npc_lanes` summary). It is therefore
-	// re-read whenever the turn trace moves — a stage frame is exactly the moment
-	// the fan-in join can have written the rows. Reading it once at mount (as this
-	// panel used to) pinned the empty set of a panel opened before or during the
-	// turn, so the arms never appeared for the turn that produced them.
+	// The lane set is NOT session-constant: it is a fact of the CURRENT turn,
+	// folded from the log (the turn's ``npc_lanes_plan`` row, then the
+	// ``npc_lane`` rows and the ``npc_lanes`` summary the fan-in join writes).
+	// It is therefore re-read whenever the turn trace moves — and, issue #56.1,
+	// also on a short interval WHILE the lanes are in flight: the plan is
+	// recorded at dispatch, which emits no stage frame of its own, so a
+	// frame-driven read alone would not notice the members arriving until the
+	// join (the panel used to show the PREVIOUS turn's set for the whole turn).
 	//
 	// Svelte 5: read the `$store` values directly — `get(store)` inside an effect
 	// does not track. `$turnSteps` advances per stage frame and `$processingStage`
 	// moves with it; either change re-reads the set. The seq guard drops a slow
 	// response that a newer frame (or a session switch) has already superseded.
 	let lanesSeq = 0;
+
+	async function readLanes(): Promise<void> {
+		const sid = $sessionId;
+		if (!sid) {
+			lanes = null;
+			return;
+		}
+		const seq = (lanesSeq += 1);
+		const next = await getLanes(sid);
+		if (seq !== lanesSeq) return; // superseded by a newer frame or session
+		lanes = next;
+	}
+
 	$effect(() => {
 		const sid = $sessionId;
 		void $turnSteps.length;
@@ -83,12 +183,20 @@
 			lanes = null;
 			return;
 		}
-		const seq = (lanesSeq += 1);
-		void (async () => {
-			const next = await getLanes(sid);
-			if (seq !== lanesSeq) return; // superseded by a newer frame or session
-			lanes = next;
-		})();
+		void readLanes();
+	});
+
+	/** How often an in-flight turn's lane set is re-read (issue #56.1). */
+	const LANE_POLL_MS = 1000;
+	const lanesInFlight = $derived(lanes?.in_flight === true);
+	$effect(() => {
+		// Poll while a TURN is running (the plan row is written at dispatch, which
+		// emits no stage frame of its own) and stop the moment it is not: an
+		// aborted turn leaves its plan behind, and a poll keyed on `in_flight`
+		// alone would then run forever against an idle session.
+		if (!running) return;
+		const timer = setInterval(() => void readLanes(), LANE_POLL_MS);
+		return () => clearInterval(timer);
 	});
 
 	// --- live activation ------------------------------------------------------
@@ -253,6 +361,41 @@
 	{:else if manifestError}
 		<p class="panel-note error" role="alert">Flow manifest unavailable: {manifestError}</p>
 	{:else if manifest}
+		{#if laneNode}
+			<div class="lane-config" data-lane-config="true">
+				<span class="lane-title">NPC lanes</span>
+				<label class="lane-switch" title="Switch the lane stage off: the narrator runs one forward pass">
+					<input
+						type="checkbox"
+						checked={laneEnabled}
+						disabled={laneBusy}
+						data-lane-enabled={laneEnabled ? 'on' : 'off'}
+						onchange={(event) =>
+							void saveLaneSetting({ enabled: event.currentTarget.checked })}
+					/>
+					<span class="lane-state">{laneEnabled ? 'on' : 'off'}</span>
+				</label>
+				<label class="lane-width" title="How many lanes may run at once (the lane SET is never capped)">
+					<span>max in flight</span>
+					<select
+						value={String(laneWidth)}
+						disabled={laneBusy || !laneEnabled}
+						data-lane-width={laneWidth}
+						onchange={(event) =>
+							void saveLaneSetting({ max_lanes: Number(event.currentTarget.value) })}
+					>
+						{#each [1, 2, 3, 4, 5, 6, 7, 8] as width (width)}
+							<option value={String(width)}>{width}</option>
+						{/each}
+					</select>
+				</label>
+				{#if laneNote}
+					<span class="lane-note" class:error={laneNote.includes(':')} role="status">
+						{laneNote}
+					</span>
+				{/if}
+			</div>
+		{/if}
 		<NodeInspector node={selectedNode} {calls} {debug} />
 		{#if callsLoading}
 			<p class="panel-note">Reading captures for this turn…</p>
@@ -263,7 +406,9 @@
 			{debug}
 			{selectedId}
 			lanes={lanes?.lanes ?? []}
-			laneWidth={lanes?.max_parallel ?? 4}
+			laneWidth={lanes?.max_parallel ?? laneWidth}
+			lanesEnabled={lanes?.enabled ?? laneEnabled}
+			inFlight={lanes?.in_flight === true}
 			onselect={selectNode}
 			{onopenstep}
 		/>
@@ -327,6 +472,50 @@
 		color: var(--text-dim);
 	}
 	.panel-note.error {
+		color: var(--danger-text);
+	}
+	/* --- the lane config (issues #56.2/#56.3) ------------------------------ */
+	.lane-config {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		padding: 0.3rem 0.5rem;
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		font-size: var(--font-micro);
+		color: var(--text-muted);
+	}
+	.lane-title {
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--text-dim);
+	}
+	.lane-switch,
+	.lane-width {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.lane-switch input {
+		margin: 0;
+		accent-color: var(--accent-strong);
+	}
+	.lane-state {
+		min-width: 1.6rem;
+	}
+	.lane-width select {
+		padding: 0 0.2rem;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		background: transparent;
+		color: var(--text);
+		font: inherit;
+	}
+	.lane-note {
+		color: var(--text-dim);
+	}
+	.lane-note.error {
 		color: var(--danger-text);
 	}
 </style>

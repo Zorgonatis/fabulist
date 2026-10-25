@@ -185,6 +185,8 @@ def test_the_violation_code_list_is_stable():
         "unreachable_node",
         "orphan_edge",
         "cap_violation",
+        # Issue #56.3: a stage switched OFF that the compile cannot prune.
+        "disabled_stage_unprunable",
     }
     for violation in validate_topology({"nodes": [{"id": "ghost"}], "edges": []}):
         assert set(violation) >= {"code", "message"}

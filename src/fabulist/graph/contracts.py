@@ -53,6 +53,8 @@ __all__ = [
     "NodeContract",
     "NodeKlass",
     "implements_of",
+    "prune_disabled_fanout",
+    "stage_disabled",
     "validate_topology",
 ]
 
@@ -154,6 +156,10 @@ NODE_CONTRACTS: dict[str, NodeContract] = {
 #: * ``orphan_edge`` — an edge naming a node the topology does not declare.
 #: * ``cap_violation`` — an edge carries a ``cap`` below 1 (a branch that can
 #:   never run).
+#: * ``disabled_stage_unprunable`` — a node row switches its stage OFF
+#:   (``data.enabled = false``) but is not wired in the one shape the compile
+#:   can remove (see :func:`prune_disabled_fanout`), so the engine could not
+#:   honour the switch without guessing at the owner's wiring.
 VIOLATION_CODES: tuple[str, ...] = (
     "unknown_node",
     "duplicate_node",
@@ -165,7 +171,140 @@ VIOLATION_CODES: tuple[str, ...] = (
     "unreachable_node",
     "orphan_edge",
     "cap_violation",
+    "disabled_stage_unprunable",
 )
+
+
+#: The ``data.enabled`` values that read as OFF (issue #56.3). A JSON round trip
+#: can hand back ``false``, ``"false"`` or ``0``, and an owner hand-editing a
+#: preset will reach for any of them; anything else (including an absent key) is
+#: ON, so a topology that never opted in is untouched.
+_DISABLED_WORDS: frozenset[str] = frozenset({"false", "0", "off", "no", "disabled"})
+
+
+def stage_disabled(data: Any) -> bool:
+    """Does this node row's ``data`` switch the stage OFF?
+
+    The OFF SWITCH is topology data on the node row (issue #56.3), read here so
+    the write door (:func:`validate_topology`) and the builder
+    (:func:`fabulist.graph.graph.build_graph`) cannot disagree about what
+    "disabled" means. Only the row's own ``data`` is read: a node template's
+    ``config`` seeds ``max_lanes`` at the fan-out's construction seam, but the
+    switch decides the SHAPE of the compiled graph, which is a topology fact.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    value = data.get("enabled", True)
+    if isinstance(value, str):
+        return value.strip().casefold() in _DISABLED_WORDS
+    return not bool(value)
+
+
+def prune_disabled_fanout(
+    node_ids: list[str], edges: list[dict], node_id: str
+) -> tuple[list[str], list[dict]]:
+    """Remove a DISABLED fan-out stage from a topology (issue #56.3).
+
+    Switching a fan-out stage off must not merely make it dispatch zero lanes —
+    the STAGE leaves the graph, so the turn runs the narrator's single forward
+    pass and no lane node executes (the documented zero-lane path). This is the
+    ONE implementation of that rewrite: :func:`validate_topology` calls it, so
+    the write door refuses a shape it cannot honour, and
+    :func:`fabulist.graph.graph.build_graph` calls it, so the compiled graph is
+    the pruned one. One rule, two callers, no drift.
+
+    ``node_id`` is the DISPATCHER node. Its fan-out edge names the lane node
+    ``L``; its ONE plain edge out is the zero-lane route ``T`` — the node the
+    turn reaches when no lane runs (``narrate`` in the canonical topology).
+    The rewrite:
+
+    * the dispatcher and ``L`` leave ``node_ids``;
+    * every edge INTO the dispatcher is re-pointed at ``T``, so the plan
+      junction's ``skip`` arm and the planner's plain edge both land on the
+      narrator (this is the shape enabled lanes give them, minus the fan-out);
+    * every edge touching either node is dropped — the fan-out edge, the
+      dispatcher's zero-lane route and ``L``'s own exit (which is ``T``).
+
+    Anything else RAISES :class:`ValueError`, and the message names what is
+    wrong: no fan-out edge (a stage that does not fan out cannot be switched off
+    this way), more than one plain edge out of the dispatcher (the fan-out owns
+    its routing, so there is no single zero-lane route to inherit), ``L``
+    exiting anywhere but ``T``, or a conditioned edge out of ``L``. A disabled
+    stage wired in a shape this rewrite did not author is refused rather than
+    guessed at: the write door reports ``disabled_stage_unprunable`` and the
+    builder's compile falls back to the canonical topology.
+    """
+    fanout = [
+        edge
+        for edge in edges
+        if edge.get("fanout") and edge.get("from") == node_id
+    ]
+    if len(fanout) != 1:
+        raise ValueError(
+            f"node {node_id!r} switches its stage off but has {len(fanout)} "
+            "fan-out edges; only a fan-out stage (one Send edge to its lane node) "
+            "can be switched off — the compile cannot remove any other stage "
+            "without guessing at the wiring"
+        )
+    lane = fanout[0].get("to")
+    if not isinstance(lane, str) or lane not in node_ids or lane == node_id:
+        raise ValueError(
+            f"node {node_id!r} switches its stage off but its fan-out edge names "
+            f"{lane!r}, which is not a declared node"
+        )
+    plain_out = [
+        edge
+        for edge in edges
+        if edge.get("from") == node_id
+        and not edge.get("fanout")
+        and not edge.get("condition")
+    ]
+    if len(plain_out) != 1:
+        raise ValueError(
+            f"node {node_id!r} switches its stage off but has {len(plain_out)} "
+            "plain outgoing edges; the off switch needs exactly one zero-lane "
+            "route (the edge the turn takes when no lane runs)"
+        )
+    target = plain_out[0].get("to")
+    if not isinstance(target, str) or target not in node_ids:
+        raise ValueError(
+            f"node {node_id!r} switches its stage off but its zero-lane route "
+            f"names {target!r}, which is not a declared node"
+        )
+    lane_out = [edge for edge in edges if edge.get("from") == lane]
+    if [edge.get("to") for edge in lane_out] != [target] or any(
+        edge.get("condition") or edge.get("fanout") for edge in lane_out
+    ):
+        raise ValueError(
+            f"node {node_id!r} switches its stage off but its lane node {lane!r} "
+            f"does not fan back in on the zero-lane route {target!r} (its exits: "
+            f"{[edge.get('to') for edge in lane_out]!r}); the compile cannot "
+            "re-enter the turn it cannot see"
+        )
+    kept: list[dict] = []
+    kept_keys: set[tuple] = set()
+    touched = {node_id, lane}
+    for edge in edges:
+        if edge.get("from") in touched or edge.get("to") in touched:
+            continue
+        kept.append(edge)
+        kept_keys.add((edge.get("from"), edge.get("to"), edge.get("condition")))
+    for edge in edges:
+        if edge.get("to") != node_id or edge.get("from") in touched:
+            continue
+        # The predecessor's arm lands on the zero-lane route instead. A duplicate
+        # (the predecessor already had that exact arm) is dropped rather than
+        # added twice: the compiled graph allows one target per branch value.
+        rewritten = {**edge, "to": target}
+        key = (rewritten.get("from"), target, rewritten.get("condition"))
+        if key in kept_keys:
+            continue
+        kept_keys.add(key)
+        kept.append(rewritten)
+    return (
+        [declared for declared in node_ids if declared not in touched],
+        kept,
+    )
 
 
 def implements_of(template: Any) -> str | None:
@@ -220,6 +359,61 @@ def _parts(topology: Any) -> tuple[list[Any], list[Any]]:
     )
 
 
+def _prune_disabled_stages(
+    nodes: list[Any], edges: list[Any]
+) -> tuple[list[Any] | None, list[Any] | None, list[dict[str, Any]]]:
+    """The topology with every switched-OFF stage pruned, or the refusal.
+
+    Returns ``(None, None, [])`` when nothing is switched off (the topology is
+    untouched), ``(nodes, edges, [])`` with the pruned rows, or
+    ``(None, None, violations)`` when a disabled stage is wired in a shape
+    :func:`prune_disabled_fanout` will not touch.
+
+    Malformed rows are left to the checks that own them (a row without an id, a
+    non-object edge): this helper only ever REMOVES what the switch names, so a
+    topology the other checks reject is still judged by them.
+    """
+    declared = [
+        node.get("id")
+        for node in nodes
+        if isinstance(node, Mapping) and isinstance(node.get("id"), str)
+    ]
+    off = [
+        node.get("id")
+        for node in nodes
+        if isinstance(node, Mapping)
+        and isinstance(node.get("id"), str)
+        and stage_disabled(node.get("data"))
+    ]
+    if not off:
+        return None, None, []
+    if any(not isinstance(edge, Mapping) for edge in edges):
+        # Let ``orphan_edge`` name the malformed row; rewriting around it would
+        # be guessing at a topology that is already refused.
+        return None, None, []
+    node_ids = list(declared)
+    rows = [dict(edge) for edge in edges]
+    current = off[0]
+    try:
+        for node_id in off:
+            current = node_id
+            node_ids, rows = prune_disabled_fanout(node_ids, rows, node_id)
+    except ValueError as exc:
+        return (
+            None,
+            None,
+            [_violation("disabled_stage_unprunable", str(exc), node=current)],
+        )
+    # The prune removes the dispatcher AND its lane node, so the rows to drop are
+    # whatever left ``node_ids`` — never just the ids the switch named.
+    keep = set(node_ids)
+    return [
+        node
+        for node in nodes
+        if not (isinstance(node, Mapping) and node.get("id") not in keep)
+    ], rows, []
+
+
 def _ancestors(
     node_id: str, predecessors: Mapping[str, list[str]]
 ) -> set[str]:
@@ -268,6 +462,21 @@ def validate_topology(
     nodes, edges = _parts(topology)
     library: Mapping[str, Any] = templates or {}
     violations: list[dict[str, Any]] = []
+
+    # 0. The OFF SWITCH (issue #56.3): a node row whose ``data.enabled`` is off
+    #    leaves the graph at compile (:func:`prune_disabled_fanout`). Judge the
+    #    TOPOLOGY THE ENGINE WOULD COMPILE, not the declaration: pruning can only
+    #    remove an arm, so the invariants below are re-checked on the pruned
+    #    shape — an off switch that would strand the narrator is refused here
+    #    instead of building a graph with no way into it. The prune is narrow, so
+    #    a disabled stage in any other shape is refused with its own code.
+    pruned_nodes, pruned_edges, prune_violations = _prune_disabled_stages(nodes, edges)
+    if prune_violations:
+        return prune_violations
+    if pruned_nodes is not None:
+        return validate_topology(
+            {"nodes": pruned_nodes, "edges": pruned_edges}, templates
+        )
 
     # 1. Node identity: only a declared, unique, contracted behaviour is
     #    executable — either a canonical id, or a template's ``implements``.

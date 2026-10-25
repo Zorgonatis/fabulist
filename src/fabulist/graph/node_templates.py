@@ -353,6 +353,12 @@ def lane_config(
     under any node id. A template's ``config`` overrides the row's ``data``
     (a template says "this behaviour, configured like this"), and the template is
     authoritative when the two disagree.
+
+    ``enabled`` is deliberately NOT part of this read's contract beyond riding
+    along in the merged mapping: the off switch (issue #56.3) decides the SHAPE
+    of the compiled graph, so the builder reads it from the topology row alone
+    (:func:`fabulist.graph.contracts.stage_disabled`) — see
+    :func:`fabulist.graph.graph._strip_disabled_stages`.
     """
     library = templates or {}
     for node in (topology or {}).get("nodes") or []:

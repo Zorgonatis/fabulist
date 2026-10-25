@@ -53,13 +53,24 @@ export interface FlowLane {
 	name: string | null;
 	intent: string | null;
 	ok: boolean;
+	/**
+	 * Issue #56.1: the member is PLANNED and its lane is still in flight — the
+	 * dispatcher recorded the set, the fan-in join has not answered yet. The
+	 * drawer draws these arms as running (no intent to show).
+	 */
+	pending?: boolean;
 }
 
 export interface FlowLanes {
 	session_id: string;
 	lanes: FlowLane[];
 	source: string | null;
+	/** Effective fan-out width of the STORED topology (issue #56.2). */
 	max_parallel: number;
+	/** False when the stage is switched off (`data.enabled = false`, #56.3). */
+	enabled: boolean;
+	/** True while the turn's lanes are planned but not yet answered. */
+	in_flight: boolean;
 	turn_seq: number | null;
 }
 
@@ -68,6 +79,8 @@ const EMPTY_LANES: FlowLanes = {
 	lanes: [],
 	source: null,
 	max_parallel: 4,
+	enabled: true,
+	in_flight: false,
 	turn_seq: null
 };
 
@@ -98,7 +111,8 @@ export async function getLanes(sessionId: string | null): Promise<FlowLanes> {
 					member_id: str(row.member_id) || null,
 					name: str(row.name) || null,
 					intent: str(row.intent) || null,
-					ok: row.ok !== false
+					ok: row.ok !== false,
+					pending: row.pending === true
 				}))
 			: [];
 		return {
@@ -106,6 +120,8 @@ export async function getLanes(sessionId: string | null): Promise<FlowLanes> {
 			lanes,
 			source: str(raw.source) || null,
 			max_parallel: Number(raw.max_parallel) || 4,
+			enabled: raw.enabled !== false,
+			in_flight: raw.in_flight === true,
 			turn_seq: typeof raw.turn_seq === 'number' ? raw.turn_seq : null
 		};
 	} catch {
@@ -222,6 +238,9 @@ function normalizeFanout(raw: unknown): FlowNode['fanout'] {
 		source: str(o.source, 'cast_presence'),
 		merge,
 		max_parallel: Number(o.max_parallel) || 4,
+		// Issue #56.3: the endpoint overlays the stored topology's on/off state;
+		// an absent key reads as enabled (the artifact's own shape).
+		enabled: o.enabled !== false,
 		// W9.17: the manifest node(s) the fan-out invokes. They are templates
 		// for N invocations — the read view draws the ACTUAL members instead.
 		...(nodes && nodes.length > 0 ? { nodes } : {})

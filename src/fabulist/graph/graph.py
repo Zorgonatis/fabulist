@@ -77,7 +77,7 @@ from .nodes import (
     make_pre_turn_node,
     make_validate_node,
 )
-from .contracts import implements_of
+from .contracts import implements_of, prune_disabled_fanout, stage_disabled
 from .types import ExtractorFn, LogPort, ModelCaller, TurnState
 
 __all__ = [
@@ -614,6 +614,31 @@ def _upgrade_legacy_critic_gate(edges: list[dict]) -> list[dict]:
     return out
 
 
+def _behaviour_node_ids(
+    node_ids: list[str],
+    rows: Mapping[str, dict],
+    templates: Mapping[str, Any] | None,
+    behaviour: str,
+) -> list[str]:
+    """The node ids whose BEHAVIOUR is ``behaviour``.
+
+    A canonical row executes its own id; a template node (W9.10) executes what
+    its template ``implements``, under whatever id the owner chose — so a node
+    is found by BEHAVIOUR, never by its id alone (``lane_config`` finds the
+    fan-out the same way).
+    """
+    library: Mapping[str, Any] = templates or {}
+    found: list[str] = []
+    for node_id in node_ids:
+        template_id = (rows.get(node_id) or {}).get("template")
+        if isinstance(template_id, str) and template_id:
+            if implements_of(library.get(template_id)) == behaviour:
+                found.append(node_id)
+        elif node_id == behaviour:
+            found.append(node_id)
+    return found
+
+
 def _planner_behaviour_ids(
     node_ids: list[str],
     rows: Mapping[str, dict],
@@ -625,16 +650,7 @@ def _planner_behaviour_ids(
     whose template ``implements`` it (W9.10) — the upgrade must see that case to
     REFUSE it rather than boot a per-turn post-commit planner.
     """
-    library: Mapping[str, Any] = templates or {}
-    found: list[str] = []
-    for node_id in node_ids:
-        template_id = (rows.get(node_id) or {}).get("template")
-        if isinstance(template_id, str) and template_id:
-            if implements_of(library.get(template_id)) == "planner":
-                found.append(node_id)
-        elif node_id == "planner":
-            found.append(node_id)
-    return found
+    return _behaviour_node_ids(node_ids, rows, templates, "planner")
 
 
 def _upgrade_legacy_planner(
@@ -799,6 +815,42 @@ def _upgrade_legacy_fanout(node_ids: list[str], edges: list[dict]) -> tuple[list
     return upgraded_nodes, upgraded_edges
 
 
+def _strip_disabled_stages(
+    node_ids: list[str],
+    edges: list[dict],
+    rows: Mapping[str, dict],
+    templates: Mapping[str, Any] | None,
+) -> tuple[list[str], list[dict]]:
+    """PRUNE every stage the topology switches OFF (issue #56.3).
+
+    The OFF SWITCH is topology data — ``{"id": "npc_lanes", "data": {"enabled":
+    false}}`` — and it means the stage LEAVES the graph: no dispatcher run, no
+    ``Send`` fan-out, no lane node, and the narrator's single forward pass is
+    what the turn executes (the zero-lane path the manifest documents). Nothing
+    is written to the log except the narrator's own rows — a disabled stage is
+    not a stage that runs and finds nothing.
+
+    The rewrite itself is :func:`fabulist.graph.contracts.prune_disabled_fanout`
+    — the same function the write door validates with, so a stored switch the
+    door accepted is always one the compile can honour. A REFUSAL (a disabled
+    stage wired in a shape the prune will not guess at) raises, and the engine's
+    compile falls back to the canonical topology, exactly like any other
+    topology the builder refuses.
+
+    Runs AFTER the legacy upgrades: a pre-W9.17 save has no fan-out edge yet, and
+    the prune needs the Send shape to know which node it is removing.
+    """
+    pruned_ids = list(node_ids)
+    pruned_edges = list(edges)
+    for node_id in node_ids:
+        if not stage_disabled((rows.get(node_id) or {}).get("data")):
+            continue
+        pruned_ids, pruned_edges = prune_disabled_fanout(
+            pruned_ids, pruned_edges, node_id
+        )
+    return pruned_ids, pruned_edges
+
+
 def _topology_parts(topology: dict) -> tuple[list[str], list[dict], dict[str, dict]]:
     """Read ``(node_ids, edges, node rows by id)`` from a topology, rejecting malformed data."""
     nodes = topology.get("nodes")
@@ -932,6 +984,12 @@ def build_graph(
 
     ``checkpointer`` is any LangGraph checkpointer (e.g. the saver yielded by
     :func:`open_sqlite_checkpointer`); pass ``None`` for a cache-free run.
+
+    A node row may switch its stage OFF with ``data.enabled = false`` (issue
+    #56.3): the stage is PRUNED from the compiled graph
+    (:func:`_strip_disabled_stages`), so the turn runs without it rather than
+    running it and finding nothing to do. For the NPC lanes that is the owner's
+    "single narrator forward pass" mode.
     """
     node_ids, edges, rows = _topology_parts(
         topology if topology is not None else CANONICAL_TOPOLOGY
@@ -950,6 +1008,10 @@ def build_graph(
     # W9.20 §10: a pre-W9.20 planner sits post-commit — MOVE it onto the plan
     # junction (after the two upgrades above, whose output it recognises).
     edges = _upgrade_legacy_planner(node_ids, edges, rows, templates)
+    # Issue #56.3: a stage the topology switches OFF leaves the graph entirely
+    # (LAST, so the prune sees the fan-out shape the upgrades just produced and
+    # the plan junction still had its ``npc_lanes`` target to recognise).
+    node_ids, edges = _strip_disabled_stages(node_ids, edges, rows, templates)
     factories = _node_factories(
         model=model,
         extractor=extractor,

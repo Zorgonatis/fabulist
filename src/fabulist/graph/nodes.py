@@ -4520,14 +4520,30 @@ class NpcLaneFanout:
         Awaiting keeps the build on the loop thread (and the build happens once
         per dispatch: the prompt rides the Send payload, a task input, so it
         never enters the checkpoint).
+
+        Issue #56.1: the PLANNED set is recorded here, before any lane runs, so
+        the live preview can draw the turn's real members while they are still
+        in flight. The lane rows themselves cannot be written early — they are
+        appended at the join in DISPATCHER order, never completion order — so
+        without this row the drawer had nothing to read until the fan-in, and
+        showed the PREVIOUS turn's members for the whole of the current one.
+        The record happens AFTER the shared prefix is built, so the narrator's
+        prompt can never see it (the same rule the join's rows follow).
         """
         from langgraph.types import Send
 
         rows = [row for row in state.get("lane_plan") or [] if isinstance(row, Mapping)]
-        if not rows or self.caller is None:
+        if self.caller is None:
+            # Nothing can run: the stage is declared but unwired (direct node
+            # calls / tests). Recording a plan nothing will ever settle would
+            # leave the preview permanently "in flight".
+            return []
+        if not rows:
+            self._record_plan(state, [])
             return []
         shared = self.build_messages(state)
         profile = self.request_profile_fn() if self.request_profile_fn else None
+        self._record_plan(state, rows)
         return [
             Send(
                 "npc_lane",
@@ -4546,6 +4562,58 @@ class NpcLaneFanout:
         ]
 
     # -- the per-member node ------------------------------------------------
+    def _record_plan(self, state: TurnState, rows: list[Mapping]) -> None:
+        """Append the turn's PLANNED lane set (issue #56.1, the live preview).
+
+        One ``npc_lanes_plan`` system row, in dispatcher order, carrying each
+        member's id and display name — the facts the drawer draws an arm from.
+        It is a DIFFERENT event name from the join's ``npc_lanes`` summary so no
+        existing fold (``lane_history``, the presence walk, the cast readers)
+        can mistake a plan for a completed set: this row says "these are the
+        members this turn is about to lane", and the summary says "this is what
+        they answered".
+
+        A turn the POLICY emptied (candidates but zero dispatched) records an
+        EMPTY plan: a zero-lane turn is a legal answer, and the preview must be
+        able to tell it from a stale previous set. A turn whose ladder found no
+        candidate at all records nothing — exactly like the join, which writes no
+        summary then either.
+
+        Best-effort: a log hiccup here must never fail a turn.
+        """
+        meta = state.get("lane_meta") or {}
+        session_id = state.get("session_id")
+        if not session_id or meta.get("emitted"):
+            return
+        if not rows and "dispatched" not in meta:
+            return
+        members = [
+            {
+                "member_id": str(row.get("member_id") or ""),
+                "name": str(row.get("name") or ""),
+            }
+            for row in rows
+            if str(row.get("member_id") or "")
+        ]
+        try:
+            self.log.append_event(
+                session_id,
+                "system",
+                "npc",
+                {
+                    "event": "npc_lanes_plan",
+                    "source": str(meta.get("source") or "none"),
+                    "strategy": str(meta.get("strategy") or ""),
+                    "lanes": [member["member_id"] for member in members],
+                    "members": members,
+                    "candidates": int(meta.get("candidates") or 0),
+                    "dispatched": int(meta.get("dispatched") or 0),
+                    "max_lanes": int(meta.get("max_lanes") or self.pool_size),
+                },
+            )
+        except Exception:  # noqa: BLE001 - the preview never fails a turn
+            pass
+
     async def lane(self, payload: dict) -> dict:
         """Run ONE member's lane; return its partial channels (never raises).
 
