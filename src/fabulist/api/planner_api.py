@@ -616,6 +616,7 @@ def _opening_messages(log: "EventLog", session_id: str, plan: Any) -> list[dict]
     Anti Injection setting per call (default OFF = no ``## Engine context``
     clause) exactly like the turn builder.
     """
+    from fabulist.prompts.variables import display_variables
     from fabulist.prompts.wrapper import wrap_preset
     from fabulist.state.settings import anti_injection_enabled
     from fabulist.wiring import narrator_system_prompt
@@ -624,7 +625,13 @@ def _opening_messages(log: "EventLog", session_id: str, plan: Any) -> list[dict]
     try:
         from fabulist.context.roster import extract_cards, persona_block
 
-        block = persona_block(extract_cards(log.get_chain_events(session_id)))
+        # Issue #63: the opening is the chat's FIRST message, so the card text it
+        # is written from renders the same known macros a transcript bubble does —
+        # the model must never read ``{{user}}`` literally and echo it back.
+        block = persona_block(
+            extract_cards(log.get_chain_events(session_id)),
+            variables=display_variables(log, session_id),
+        )
         if block:
             parts.append(block)
     except Exception:  # noqa: BLE001 - the card block is advisory

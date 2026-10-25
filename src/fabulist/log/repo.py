@@ -341,6 +341,13 @@ class EventLog:
         Ephemeral events and events whose ``schema_version`` exceeds
         ``max_schema_version`` are skipped.
 
+        ``user_messages`` rows carry BOTH ``payload["text"]`` (the RAW stored
+        text — what the player typed and what a revision re-opens) and
+        ``payload["text_rendered"]`` (the same text with the known macros
+        ``{{user}}`` / ``{{char}}`` / ``{{world}}`` resolved for display, issue
+        #63). The event itself is never rewritten (ADR-001): the rendered string
+        is computed on this read and exists only in the returned view.
+
         ``notices`` (D-F) are the validate stage's teaching notices, each
         ``{seq, flags, score?}`` where ``seq`` is the FLAGGED NARRATIVE's seq —
         the anchor a transcript needs to render the notice directly after the
@@ -461,6 +468,10 @@ class EventLog:
 
         context_lows.sort(key=lambda item: item["seq"])
         compactions.sort(key=lambda item: item["seq"])
+
+        # Issue #63: user rows carry the DISPLAY text (known macros resolved)
+        # beside the raw one; the stored event is untouched (ADR-001).
+        self._render_user_texts(session_id, user_messages)
 
         return {
             "narratives": narratives,
@@ -956,6 +967,48 @@ class EventLog:
         item = event.to_dict()
         item["payload"] = payload
         return item
+
+    def _render_user_texts(
+        self, session_id: str, user_messages: list[dict]
+    ) -> None:
+        """Attach ``payload["text_rendered"]`` to every user row (issue #63).
+
+        ADR-001: the log keeps the RAW text — ``text`` is what the player typed
+        and what a revision edit re-opens; ``text_rendered`` is the DISPLAY
+        string with the known macro vocabulary resolved
+        (:func:`fabulist.prompts.variables.render_display_text`, the one display
+        step). Keeping both means the transcript never shows ``{{user}}`` while
+        every text-matching reader (``{{last_user_turn}}``, the regenerate/
+        fork content, revision edits) still compares the bytes that were stored.
+
+        A message carrying no macro is copied verbatim, so the field is always
+        present on a user row and a client may read it unconditionally.
+        In-memory only: nothing is written back to the event.
+        """
+        if not user_messages:
+            return
+        # Lazy import: fabulist.prompts.variables imports fabulist.context.facts,
+        # which imports THIS module — a top-level import would cycle.
+        from fabulist.prompts.variables import render_display_text
+
+        variables: dict[str, str] | None = None
+        for item in user_messages:
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            text = payload.get("text")
+            if not isinstance(text, str):
+                continue
+            if variables is None and "{{" in text:
+                from fabulist.prompts.variables import display_variables
+
+                variables = display_variables(self, session_id)
+            item["payload"] = {
+                **payload,
+                "text_rendered": render_display_text(
+                    self, session_id, text, variables=variables
+                ),
+            }
 
     @staticmethod
     def _validation_notice(payload: dict) -> dict | None:

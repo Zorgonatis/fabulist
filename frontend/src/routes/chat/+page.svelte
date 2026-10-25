@@ -1429,7 +1429,17 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 				typeof lastUser.payload?.text === 'string' ? lastUser.payload.text : '';
 			lastUserKind = lastUser.payload?.kind === 'ooc' ? 'ooc' : 'in_character';
 			seqByEntry.set(userEntryId, lastUser.seq ?? -1);
-			updateEntry(userEntryId, { logId: lastUser.id });
+			// Issue #63: the optimistic bubble holds what was TYPED. Settle it to the
+			// engine's display render (known `{{user}}` / `{{char}}` / `{{world}}`
+			// macros resolved) once the turn commits. `lastUserContent` above stays
+			// RAW: a regenerate/fork re-sends the stored bytes, never the render.
+			updateEntry(userEntryId, {
+				logId: lastUser.id,
+				prose:
+					typeof lastUser.payload?.text_rendered === 'string'
+						? lastUser.payload.text_rendered
+						: lastUserContent
+			});
 		}
 		const narrative = selection?.item ?? null;
 		if (narrative) {
@@ -1644,7 +1654,12 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 			seqByEntry.set(`history-${item.id}`, item.seq ?? -1);
 			if (item.seq !== undefined && item.seq !== null) seqToLogId.set(item.seq, item.id);
 			if (item.type === 'user') {
-				const text = typeof payload.text === 'string' ? payload.text : '';
+				const rawText = typeof payload.text === 'string' ? payload.text : '';
+				// Issue #63: the engine renders the known macros for DISPLAY
+				// (`text_rendered`); `text` stays the raw stored bytes, which the
+				// revision door re-opens and a regenerate re-sends.
+				const text =
+					typeof payload.text_rendered === 'string' ? payload.text_rendered : rawText;
 				const userSeq = item.seq ?? -1;
 				// A LEGACY generated image is a `user` row carrying kind=="image" +
 				// `image_asset_id` (the pre-narrative imagegen shape). Render it in the

@@ -942,7 +942,22 @@ def history_from_log(
         if item["type"] == "user":
             if item["seq"] == current_user_seq:
                 continue
-            history.append({"role": "user", "content": payload.get("text", "")})
+            # Issue #63: the model reads the SAME text the transcript shows.
+            # The projection resolves the known macros per row
+            # (``text_rendered``); the stored event keeps the raw bytes
+            # (ADR-001), so nothing is rewritten and ``{{last_user_turn}}``
+            # still matches what was typed.
+            rendered = payload.get("text_rendered")
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        rendered
+                        if isinstance(rendered, str)
+                        else payload.get("text", "")
+                    ),
+                }
+            )
             message_seqs.append(item["seq"])
         else:
             do_strip = strip and (keep_from_seq is None or item["seq"] < keep_from_seq)
@@ -1403,7 +1418,16 @@ def make_narrator_message_builder(
             splice_session_modules,
         )
         from fabulist.prompts.preset_store import active_preset, preset_directives
-        from fabulist.prompts.variables import resolve_variables
+        from fabulist.prompts.variables import render_display_text, resolve_variables
+
+        # Issue #63: the player's text reaches the model through the SAME display
+        # step the transcript uses, so ``{{user}}`` / ``{{char}}`` / ``{{world}}``
+        # name the same things in both places. Unknown tokens stay literal; the
+        # stored row keeps the raw bytes (ADR-001) and history rows read the
+        # projection's already-rendered copy.
+        rendered_user = render_display_text(
+            log, sid, str(state.get("user_content") or "")
+        )
 
         preset = None
         surfaces: dict = {}
@@ -1568,7 +1592,7 @@ def make_narrator_message_builder(
                     {},
                     facts=None,
                     history=[],
-                    user_content=state["user_content"],
+                    user_content=rendered_user,
                     plan=None,
                     library_doc=None,
                     surfaces=surfaces,
@@ -1600,7 +1624,7 @@ def make_narrator_message_builder(
                         # whole per-turn tail is the one engine envelope.
                         "facts": "",
                         "user_content": str(
-                            suffix[-1].get("content", "") if suffix else state["user_content"]
+                            suffix[-1].get("content", "") if suffix else rendered_user
                         ),
                         "engine_tail": engine_tail or "",
                         "variables": variables,
@@ -1632,7 +1656,7 @@ def make_narrator_message_builder(
                 dict(toggles or {}),
                 facts=state_facts or None,
                 history=history_block,
-                user_content=state["user_content"],
+                user_content=rendered_user,
                 plan=plan_text or state.get("plan") or None,
                 library_doc=lib_effective,
                 recalled=recalled,
@@ -1825,7 +1849,7 @@ def make_ooc_message_builder(log: EventLog) -> Callable[[str, str], list[dict]]:
     def build(session_id: str, content: str) -> list[dict]:
         from fabulist.prompts.narrator import OOC_FLAG, render_state_block
         from fabulist.prompts.preset_store import active_preset, compile_preset_flow
-        from fabulist.prompts.variables import resolve_variables
+        from fabulist.prompts.variables import render_display_text, resolve_variables
 
         try:
             preset = active_preset(log)
@@ -1843,7 +1867,11 @@ def make_ooc_message_builder(log: EventLog) -> Callable[[str, str], list[dict]]:
                 log, session_id, limit=8, drop_current_user=True
             ),
             "facts": "",
-            "user_content": f"{OOC_FLAG} {content}",
+            # Issue #63: the same display step the transcript uses, so the OOC
+            # turn's ``{{user}}`` resolves exactly like the bubble that sent it.
+            "user_content": (
+                f"{OOC_FLAG} {render_display_text(log, session_id, str(content))}"
+            ),
             "variables": resolve_variables(log, session_id, content),
         }
         try:

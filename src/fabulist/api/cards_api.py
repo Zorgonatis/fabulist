@@ -87,6 +87,7 @@ from fabulist.personas.registry import (
     set_persona_image,
     upsert_persona_from_card,
 )
+from fabulist.prompts.variables import display_variables, render_display_text
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fabulist.api.app import _Session
@@ -608,6 +609,12 @@ async def opening_route(session_id: str, request: Request) -> dict:
     later) — the chat's own actor persona ``image_asset``, so the retained card
     art still renders. A session whose actor personas carry no art yields
     ``null`` (the block renders text only).
+
+    Issue #63: ``greetings`` are RENDERED for display — the same one step a
+    transcript bubble uses (:func:`fabulist.prompts.variables.render_display_text`),
+    so a card greeting written ``{{user}}`` shows the persona name instead of
+    the raw token. ``card`` stays the raw definition dict (the Details view shows
+    authored text).
     """
 
     log = _log_for(request)
@@ -620,6 +627,15 @@ async def opening_route(session_id: str, request: Request) -> dict:
     index = selected_greeting(events)
     if index >= len(greetings):
         index = 0
+    # Issue #63: the Opening block is the chat's FIRST message, so it renders
+    # the known macros exactly like a user bubble does (one display step, same
+    # map). The index/count is resolved on the RAW cycle above, so the swipe
+    # stays aligned; only the DISPLAY strings are rendered.
+    variables = display_variables(log, session_id)
+    greetings = [
+        render_display_text(log, session_id, greeting, variables=variables)
+        for greeting in greetings
+    ]
     return {
         "greetings": greetings,
         "index": index,

@@ -70,6 +70,20 @@ Seams this builds on (cited):
 ``render_template`` is plain string substitution — no code execution, ever.
 Unknown ``{{...}}`` tokens are left **literal** so a prompt engineer sees an
 unresolved variable rather than a silent drop.
+
+The display seam (issue #63)
+----------------------------
+
+``{{user}}`` typed by the player, or written into a card greeting, is TEXT the
+reader sees — not a prompt template. :func:`render_display_text` is the ONE
+step that resolves the display-relevant subset (:data:`DISPLAY_MACRO_NAMES`:
+the persona name, the cast, the world) in a string about to be shown or sent:
+the projection's user rows, the Opening block's greetings, the player's message
+on its way to the model. It delegates to :func:`render_template` (never a second
+substitution engine) and is READ-ONLY: unlike :func:`resolve_variables` it never
+memoises the ``cast_snapshot`` row, because a display read must not write
+(ADR-001: the dispatcher appends). Unknown tokens stay literal, exactly like the
+prompt vocabulary's rule — an unknown macro is visible, never blanked.
 """
 
 from __future__ import annotations
@@ -94,9 +108,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from fabulist.log import EventLog
 
 __all__ = [
+    "DISPLAY_MACRO_NAMES",
     "PERSONAS_ANCHOR",
     "VARIABLE_SPECS",
     "VariableSpec",
+    "display_variables",
+    "render_display_text",
     "render_template",
     "resolve_variables",
 ]
@@ -167,6 +184,15 @@ VARIABLE_SPECS: tuple[VariableSpec, ...] = (
 )
 
 
+#: The macros a DISPLAY render resolves (issue #63, owner ruling): the player's
+#: persona name, the session cast, the world name. Everything else the prompt
+#: vocabulary knows (state scalars, counts, recall, the world-info block) is
+#: prompt-side data with no meaning in a transcript bubble, so a display render
+#: leaves those tokens literal — the same rule an unknown token follows, which
+#: keeps a typo visible instead of blanking it.
+DISPLAY_MACRO_NAMES: tuple[str, ...] = ("user", "persona", "char", "world")
+
+
 def _last_user_before(projection: dict, user_text: str) -> str:
     """The previous user message text, excluding the *current* ``user_text``.
 
@@ -218,6 +244,92 @@ def _world_name(log: "EventLog", session_id: str) -> str:
     return name
 
 
+def _cast_value(log: "EventLog", session_id: str) -> str:
+    """The session's ``{{char}}`` value, read WITHOUT the memoising append (D43).
+
+    :func:`fabulist.prompts.cast.ensure_cast_snapshot` (the PROMPT path) freezes
+    this value by appending a ``cast_snapshot`` row on first consumption. A
+    DISPLAY read (the projection, the Opening block) must never write to the log
+    — ADR-001: the dispatcher appends, a read does not — so this reads the
+    stored snapshot when one exists and otherwise evaluates the SAME expression
+    the freeze would store (:func:`~fabulist.prompts.cast.render_cast` over the
+    chain's cards) without appending. The two can differ only before the first
+    prompt build, by exactly a cast edit made in between.
+    """
+    from fabulist.context.roster import extract_cards
+    from fabulist.prompts.cast import CAST_SNAPSHOT_EVENT, render_cast
+
+    events = log.get_chain_events(session_id)
+    stored: str | None = None
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if (
+            getattr(event, "type", None) == "system"
+            and isinstance(payload, dict)
+            and payload.get("event") == CAST_SNAPSHOT_EVENT
+            and isinstance(payload.get("cast"), str)
+        ):
+            stored = payload["cast"]
+    if stored is not None:
+        return stored
+    return render_cast(extract_cards(events))
+
+
+def display_variables(log: "EventLog", session_id: str) -> dict[str, str]:
+    """The ``{name: value}`` map a DISPLAY render resolves (issue #63).
+
+    Same folds as :func:`resolve_variables` for exactly
+    :data:`DISPLAY_MACRO_NAMES`, so a rendered bubble and the rendered prompt
+    can never name different people: ``user`` / ``persona`` come from
+    :func:`_persona_name` (the ``chat_persona`` -> ``__personas__`` fold, with
+    the documented ``user`` literal when none is in effect), ``char`` from
+    :func:`_cast_value`, ``world`` from :func:`_world_name`.
+
+    READ-ONLY (see :func:`_cast_value`): no ``cast_snapshot`` append, so this is
+    safe on a GET.
+    """
+    persona = _persona_name(log, session_id)
+    return {
+        # PART 2: no persona in effect -> the literal word ``user`` (never an
+        # empty substitution and never the raw ``{{user}}`` token).
+        "user": persona or "user",
+        "persona": persona,
+        "char": _cast_value(log, session_id),
+        "world": _world_name(log, session_id),
+    }
+
+
+def render_display_text(
+    log: "EventLog",
+    session_id: str,
+    text: str,
+    variables: dict[str, str] | None = None,
+) -> str:
+    """Resolve known macros in ONE display string (issue #63).
+
+    The single display step: the projection's user rows
+    (:meth:`fabulist.log.EventLog.get_projection`), the Opening block's greetings
+    (``GET /api/sessions/{id}/opening``) and the player's text on its way to the
+    model (history rows and the final user message) all call THIS, so the
+    transcript and the prompt agree by construction.
+
+    Substitution is :func:`render_template` — the same plain-string engine the
+    prompt vocabulary uses; this is not a second implementation. Only the
+    :data:`DISPLAY_MACRO_NAMES` names resolve; every other ``{{...}}`` token is
+    left literal (verbatim), so an unknown macro stays visible rather than being
+    blanked. Text with no ``{{`` is returned unchanged without a log read.
+
+    ``variables`` lets a caller that already resolved the map for the session
+    (a projection with several rows, a greeting cycle) pass it in instead of
+    paying the fold per row.
+    """
+    if "{{" not in text:
+        return text
+    if variables is None:
+        variables = display_variables(log, session_id)
+    return render_template(text, variables)
+
+
 def resolve_variables(
     log: "EventLog",
     session_id: str,
@@ -253,6 +365,16 @@ def resolve_variables(
     # D43: the cast value is frozen at first consumption (memoised write).
     char = ensure_cast_snapshot(log, session_id)
     persona = _persona_name(log, session_id)
+    world = _world_name(log, session_id)
+    # The DISPLAY map for this turn, built from the values just resolved (so no
+    # second fold): ``{{message}}`` is the player's text with known macros
+    # already resolved, exactly as the transcript renders it (issue #63).
+    display = {
+        "user": persona or "user",
+        "persona": persona,
+        "char": char,
+        "world": world,
+    }
 
     # A generated image is appended as a ``narrative`` row too (imagegen), but it
     # is a canon image carrying no prose, not a turn. Every prose/turn reader
@@ -284,12 +406,17 @@ def resolve_variables(
 
     resolved: dict[str, str] = {
         "char": char,
-        "world": _world_name(log, session_id),
+        "world": world,
         "persona": persona,
         # PART 2: no persona in effect -> the literal word ``user`` (never an
         # empty substitution or the raw ``{{user}}`` token).
         "user": persona or "user",
-        "message": str(user_text),
+        # Issue #63: the prompt sees the SAME text the transcript shows —
+        # known macros resolved through the one display step, unknown tokens
+        # left literal.
+        "message": render_display_text(
+            log, session_id, str(user_text), variables=display
+        ),
         "last_user_turn": _last_user_before(projection, user_text),
         "last_narrative": last_narrative,
         "state": state_line,
