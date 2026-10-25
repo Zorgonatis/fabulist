@@ -26,6 +26,12 @@ export interface CardImportResult {
 	/** Present on the definition-only path (`persona: true`, D51 L1.c): the
 	 * upserted persona wire — byte-identical to `GET /api/personas` rows. */
 	persona?: Record<string, unknown>;
+	/** Present on the definition-only world path (`world: true`, issue #60): the
+	 * created world wire — byte-identical to `GET /api/worlds` rows. */
+	world?: Record<string, unknown>;
+	/** The lore book materialized from the card's `character_book`, if any
+	 * (world destination only — a lorebook is a bonus, never a requirement). */
+	book_id?: string;
 	/** Precise parser message when `ok` is false. */
 	error?: string;
 }
@@ -67,8 +73,14 @@ async function cardImportBody(
 /** In mock mode there is no backend parser: accept inline JSON, reject PNGs. */
 async function mockImportCard(
 	source: File | Blob | string | Record<string, unknown>,
-	seed: boolean
+	seed: boolean,
+	target: 'persona' | 'world'
 ): Promise<CardImportResult> {
+	if (target === 'world') {
+		// Mock mode has no card parser *and* no world writer for cards: refuse with
+		// the same precise style the persona door uses rather than pretend.
+		return { ok: false, error: 'importing a card as a world needs the backend (mock mode)' };
+	}
 	let raw: unknown = source;
 	if (typeof File !== 'undefined' && source instanceof File) {
 		if (source.name.toLowerCase().endsWith('.json')) {
@@ -126,24 +138,25 @@ async function mockImportCard(
  * when `seed` is true the backend also creates a new chat titled after the card
  * and returns its `session_id` for the caller to open.
  *
+ * One entry point for both definition destinations (issue #60): `persona`
+ * captures the card as a persona, `world` materializes it as a world — the
+ * backend answers at most one of `seed` / `persona` / `world` per request and
+ * refuses an ambiguous pair, so no caller has to pick a precedence.
+ *
  * Failures resolve (never throw) with `{ ok: false, error }` so a component can
  * render the precise parser message inline.
  */
 export async function importCard(
 	source: File | Blob | string | Record<string, unknown>,
-	options: { seed?: boolean; persona?: boolean } = {}
+	options: { seed?: boolean; persona?: boolean; world?: boolean } = {}
 ): Promise<CardImportResult> {
 	const seed = options.seed === true;
 	const persona = options.persona === true;
-	if (seed && persona) {
-		// The backend 422s the pair; fail client-side with the same message so
-		// the pane renders it without a round trip.
-		return { ok: false, error: 'choose one mode: ?persona=1 or ?seed=1' };
-	}
+	const world = options.world === true;
 	if (persona && USE_MOCK) {
 		return { ok: false, error: 'persona card import needs the backend (mock mode)' };
 	}
-	if (USE_MOCK) return mockImportCard(source, seed);
+	if (USE_MOCK) return mockImportCard(source, seed, world ? 'world' : 'persona');
 
 	let body: BodyInit;
 	let contentType: string;
@@ -153,7 +166,7 @@ export async function importCard(
 		return { ok: false, error: err instanceof Error ? err.message : String(err) };
 	}
 
-	const query = seed ? '?seed=1' : persona ? '?persona=1' : '';
+	const query = seed ? '?seed=1' : persona ? '?persona=1' : world ? '?world=1' : '';
 	const url = `${CARD_IMPORT_ENDPOINT()}${query}`;
 	try {
 		const res = await fetch(url, {
@@ -174,6 +187,11 @@ export async function importCard(
 				parsed.persona && typeof parsed.persona === 'object'
 					? (parsed.persona as Record<string, unknown>)
 					: undefined,
+			world:
+				parsed.world && typeof parsed.world === 'object'
+					? (parsed.world as Record<string, unknown>)
+					: undefined,
+			book_id: typeof parsed.book_id === 'string' && parsed.book_id ? parsed.book_id : undefined,
 			error: typeof parsed.error === 'string' ? parsed.error : undefined
 		};
 	} catch (err) {

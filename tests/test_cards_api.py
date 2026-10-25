@@ -493,3 +493,122 @@ def test_persona_and_seed_flags_conflict_422(build_app):
     assert body.json()["ok"] is False
     # Neither mode ran: no session, no persona.
     assert sessions == []
+
+
+# --- definition-only (#60 ?world=1: the one door's world destination) ----------------
+
+
+def test_world_query_flag_creates_world_without_session(build_app):
+    """The same card endpoint imports a WORLD through the shared write path.
+
+    Issue #60: the UI's single import door posts every card here with a target
+    flag, so both card destinations (persona, world) are one entry point. The
+    write itself is the one `POST /api/worlds/import` uses.
+    """
+    build, log_path = build_app
+    from fabulist.api.worlds_api import worlds_router
+
+    app = build()
+    app.include_router(worlds_router)
+
+    async def scenario():
+        async with client_for(app) as client:
+            resp = await client.post("/api/cards/import?world=1", json=CARD_JSON)
+            worlds = (await client.get("/api/worlds")).json()["worlds"]
+            personas = (await client.get("/api/personas")).json()["personas"]
+            sessions = (await client.get("/api/sessions")).json()["sessions"]
+            return resp, worlds, personas, sessions
+
+    resp, worlds, personas, sessions = run(scenario())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["card"]["name"] == "Lyra Voss"
+    # The returned world is the wire `GET /api/worlds` serves.
+    assert body["world"] == worlds[0]
+    assert worlds[0]["name"] == "Lyra Voss"
+    assert worlds[0]["scenario"] == "A rain-soaked night market."
+    # Definition-only: no session, and no persona (the persona door owns that).
+    assert "session_id" not in body
+    assert sessions == []
+    assert personas == []
+
+
+def test_world_json_body_flag_is_equivalent(build_app):
+    build, _ = build_app
+    from fabulist.api.worlds_api import worlds_router
+
+    app = build()
+    app.include_router(worlds_router)
+
+    async def scenario():
+        async with client_for(app) as client:
+            resp = await client.post(
+                "/api/cards/import", json={**CARD_JSON, "world": True}
+            )
+            worlds = (await client.get("/api/worlds")).json()["worlds"]
+            return resp, worlds
+
+    resp, worlds = run(scenario())
+    assert resp.status_code == 200
+    assert resp.json()["world"]["world_id"] == worlds[0]["world_id"]
+
+
+def test_world_png_card_imports_with_its_image(build_app):
+    build, _ = build_app
+    from fabulist.api.worlds_api import worlds_router
+
+    app = build()
+    app.include_router(worlds_router)
+    png = _png({"name": "Sigil", "description": "A ringed city."})
+
+    async def scenario():
+        async with client_for(app) as client:
+            resp = await client.post(
+                "/api/cards/import?world=1",
+                content=png,
+                headers={"Content-Type": "image/png"},
+            )
+            image = await client.get(f"/api/worlds/{resp.json()['world']['world_id']}/image")
+            return resp, image
+
+    resp, image = run(scenario())
+    assert resp.status_code == 200
+    assert resp.json()["world"]["name"] == "Sigil"
+    assert resp.json()["world"]["image_asset"]
+    assert image.status_code == 200
+    assert image.content == png
+
+
+def test_world_and_persona_flags_conflict_422(build_app):
+    build, _ = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            return await client.post(
+                "/api/cards/import?persona=1&world=1", json=CARD_JSON
+            )
+
+    resp = run(scenario())
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    assert "one mode" in resp.json()["error"]
+
+
+def test_the_legacy_worlds_import_endpoint_still_works(build_app):
+    """The older door stays a supported endpoint (issue #60 keeps it working)."""
+    build, _ = build_app
+    from fabulist.api.worlds_api import worlds_router
+
+    app = build()
+    app.include_router(worlds_router)
+
+    async def scenario():
+        async with client_for(app) as client:
+            return await client.post("/api/worlds/import", json=CARD_JSON)
+
+    resp = run(scenario())
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert resp.json()["world"]["name"] == "Lyra Voss"

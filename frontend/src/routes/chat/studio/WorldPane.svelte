@@ -21,7 +21,6 @@
 	import {
 		createWorld,
 		deleteWorld,
-		importWorldCard,
 		listBooks,
 		listPersonas,
 		listWorlds,
@@ -83,11 +82,6 @@
 	let uploading = $state(false);
 	let imageError = $state('');
 	let imageInput = $state<HTMLInputElement | null>(null);
-	/** Card-door state (issue #40): inline status/error, no dialogs. */
-	let importingCard = $state(false);
-	let cardStatus = $state('');
-	let cardError = $state('');
-	let cardInput = $state<HTMLInputElement | null>(null);
 
 	const catalogs = $derived({
 		personas: personas.map((persona) => ({ id: persona.persona_id, label: persona.name })),
@@ -329,57 +323,14 @@
 		}
 	}
 
-	/** A world imported through the header controls: refresh + focus it. */
+	/** A world imported through the header's one door: refresh + focus it. */
 	async function onImported(worldId: string): Promise<void> {
-		if (!confirmDiscard()) return;
+		// The write already landed, so the catalog always refreshes; the discard
+		// confirm only guards opening the editor over unsaved edits.
 		await load();
 		const found = worlds.find((world) => world.world_id === worldId);
-		if (found) startEdit(found);
+		if (found && confirmDiscard()) startEdit(found);
 		onChanged?.();
-	}
-
-	/** Open the card file picker (PNG with an embedded STv2 payload, or JSON). */
-	function pickCard(): void {
-		cardInput?.click();
-	}
-
-	function onCardFile(event: Event): void {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0] ?? null;
-		input.value = '';
-		if (!file) return;
-		void importCardFile(file);
-	}
-
-	/**
-	 * The typed card door (issue #40, owner ruling D3): any valid card becomes a
-	 * WORLD — its prose is the world definition, a `character_book` is a bonus
-	 * (materialized + signature-deduped server-side). `importWorldCard` never
-	 * throws; failures resolve `{ok:false, error}` and render the backend's
-	 * precise parser message verbatim inline. Success refreshes the catalog,
-	 * focuses the imported world for editing and tells the shell.
-	 */
-	async function importCardFile(file: File): Promise<void> {
-		if (importingCard) return;
-		importingCard = true;
-		cardError = '';
-		cardStatus = '';
-		try {
-			const result = await importWorldCard(file);
-			if (!result.ok || !result.world) {
-				cardError = result.error || 'could not import that card';
-				return;
-			}
-			const label = result.world.name || '';
-			cardStatus = label
-				? `Imported world “${label}”${result.book_id ? ' with its lorebook' : ''}`
-				: 'Imported card as a world';
-			await onImported(result.world.world_id);
-		} catch (err) {
-			cardError = message(err);
-		} finally {
-			importingCard = false;
-		}
 	}
 
 	// `focusId` / `startNew` are applied once the list has loaded, and again when
@@ -429,29 +380,10 @@
 		<h3>Worlds</h3>
 		<span class="spacer"></span>
 		<DefinitionControls kind="world" id={editingId} onImported={(id) => void onImported(id)} />
-		<button
-			type="button"
-			class="ghost"
-			disabled={busy || importingCard}
-			title="Import a character card PNG or JSON as a new world"
-			onclick={pickCard}
-		>
-			{importingCard ? 'Importing…' : 'Import card (PNG/JSON)'}
-		</button>
-		<input
-			bind:this={cardInput}
-			class="file-input"
-			type="file"
-			accept=".png,.json,image/png,application/json"
-			aria-label="Import character card PNG or JSON as a world"
-			onchange={onCardFile}
-		/>
 	</header>
 
-	{#if cardError}
-		<p class="error" role="alert">{cardError}</p>
-	{:else if cardStatus}
-		<p class="status" role="status">{cardStatus}</p>
+	{#if error}
+		<p class="error" role="alert">{error}</p>
 	{/if}
 
 	<div class="pane-body">
@@ -651,11 +583,6 @@
 		border-radius: 6px;
 		background: var(--danger-soft);
 		color: var(--danger-text);
-	}
-	.status {
-		margin: 0;
-		font-size: var(--font-small);
-		color: var(--accent-strong);
 	}
 	.form-actions {
 		display: flex;

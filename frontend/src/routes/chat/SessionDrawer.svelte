@@ -883,8 +883,10 @@
 		     per book, capped book list): it is a hint, not a browser.
 		     It stays interactive — attach/clear is the affordance the dissolved rail
 		     "Add lore" item left behind (D40 gap) and "open in editor" is the book
-		     door into the studio. Neither imports anything: the STUDIOS own typed
-		     imports (issue #40), so nothing here may regrow into a card drop target. -->
+		     door into the studio. Neither imports anything: importing happens in ONE
+		     place per kind — the studio pane's single `Import` door
+		     (`DefinitionControls`, issue #60) — so nothing here may regrow into a
+		     card drop target, and this rail carries no label or format choice. -->
 		{#if currentId}
 			{#if sessionWorld && sessionWorldId === currentId}
 				<div class="session-world">

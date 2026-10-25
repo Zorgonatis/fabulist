@@ -1,6 +1,7 @@
 // Fabulist API client - worlds + books (D31/D32).
 
 import { createSession } from './sessions';
+import { importCard } from './cards';
 import { API_BASE, StreamError, USE_MOCK, readErrorDetail, readJson, str } from './shared';
 
 /** One SillyTavern world-info entry, canonicalized (unknown keys preserved, D4).
@@ -542,110 +543,34 @@ export async function deleteWorld(worldId: string): Promise<void> {
 }
 
 
-// -- card imports (issue #40) ------------------------------------------------
+// -- card imports (issue #40, issue #60) --------------------------------------
 //
-// A character card (PNG with an embedded STv2 payload, or card JSON) can be
-// imported as a WORLD: the card's own prose becomes the world definition and
-// its `character_book` is materialized into a reusable Book (signature-deduped
+// A character card (PNG with an embedded STv2 payload, or card JSON) imported
+// as a WORLD: the card's own prose becomes the world definition and its
+// `character_book` is materialized into a reusable Book (signature-deduped
 // server-side). Owner ruling D3 (2026-10-24): ANY valid card imports — the
 // lorebook is a bonus, not a requirement; only non-card bodies are rejected.
 //
-//   POST {API_BASE}/api/worlds/import   (raw card bytes)
-//        -> {"ok": true, "world": wire, "book_id": str|null}
-//        422 {"detail": {...}} for a non-card body (rendered inline)
-//
-// Body resolution (byte vs text + Content-Type) mirrors the sibling
-// `cards.ts:cardImportBody`: PNG -> ArrayBuffer/`image/png`, JSON ->
-// text/`application/json`, anything else -> ArrayBuffer/`application/octet-stream`
-// and let the backend sniff (PNG signature or JSON). Absolute `${API_BASE}` per
-// the AGENTS.md gotcha (a relative `/api/...` 404s behind vite).
-
-/** Resolve the POST body + Content-Type for a card import source. */
-async function worldCardImportBody(
-	source: File | Blob
-): Promise<{ body: BodyInit; contentType: string }> {
-	if (typeof File !== 'undefined' && source instanceof File) {
-		const name = source.name.toLowerCase();
-		const type = (source.type || '').toLowerCase();
-		if (type === 'image/png' || name.endsWith('.png')) {
-			return { body: await source.arrayBuffer(), contentType: 'image/png' };
-		}
-		if (type === 'application/json' || name.endsWith('.json')) {
-			return { body: await source.text(), contentType: 'application/json' };
-		}
-		// Unknown file type: let the backend sniff (PNG signature or JSON).
-		return { body: await source.arrayBuffer(), contentType: 'application/octet-stream' };
-	}
-	const type = (source.type || '').toLowerCase();
-	if (type === 'image/png') return { body: await source.arrayBuffer(), contentType: 'image/png' };
-	if (type === 'application/json') return { body: await source.text(), contentType: 'application/json' };
-	return { body: await source.arrayBuffer(), contentType: 'application/octet-stream' };
-}
-
-/** Extract the precise rejection message from any error-body shape (422). */
-function worldCardErrorFromBody(body: Record<string, unknown>): string {
-	if (typeof body.error === 'string' && body.error) return body.error;
-	const detail = body.detail;
-	if (typeof detail === 'string' && detail) return detail;
-	if (Array.isArray(detail) && detail.length > 0) {
-		const first = detail[0] as Record<string, unknown> | null;
-		if (first && typeof first.msg === 'string' && first.msg) return first.msg;
-		return 'world card import rejected';
-	}
-	if (detail && typeof detail === 'object') {
-		const d = detail as Record<string, unknown>;
-		// The route's frozen shape nests the parser message; accept the sibling
-		// key spellings so a wording change never blanks the inline error.
-		for (const key of ['reason', 'message', 'error', 'detail']) {
-			const value = d[key];
-			if (typeof value === 'string' && value) return value;
-		}
-	}
-	return 'world card import failed';
-}
-
+// The ONE card entry point is `cards.ts:importCard(source, { world: true })`
+// (issue #60): one handler detects the file and the backend imports both card
+// destinations through one route. `importWorldCard` stays as the typed wrapper
+// for callers that want a normalized `World` back; it never fires its own
+// second door.
 
 /**
  * Import a character card (PNG / card JSON) as a NEW world (issue #40).
  *
- * The backend parses the card, materializes its `character_book` when present
- * and retains the PNG as the world's definition image; `cast` stays empty (the
- * Persona studio owns persona capture — no cross-channel write). Mock mode has
- * no card parser, so it degrades to the sibling card import's precise refusal
- * style rather than pretending to import (owner ruling D2).
- *
- * Never throws: every failure resolves `{ok: false, error}`.
+ * Thin wrapper over the one card import entry point; the backend parses the
+ * card, materializes its `character_book` when present and retains the PNG as
+ * the world's definition image. Never throws: every failure resolves
+ * `{ok: false, error}`.
  */
 export async function importWorldCard(source: File | Blob): Promise<WorldCardImportResult> {
-	if (USE_MOCK) return { ok: false, error: 'world card import needs the backend (mock mode)' };
-
-	let body: BodyInit;
-	let contentType: string;
-	try {
-		({ body, contentType } = await worldCardImportBody(source));
-	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : String(err) };
-	}
-
-	try {
-		const res = await fetch(WORLD_BOOK_ENDPOINTS.worldImport(), {
-			method: 'POST',
-			headers: { 'Content-Type': contentType, Accept: 'application/json' },
-			body
-		});
-		const parsed = await readJson(res);
-		if (!res.ok) return { ok: false, error: worldCardErrorFromBody(parsed) };
-		const world = normalizeWorld(parsed.world);
-		// `ok: true` without a usable world would crash a caller's next line; treat
-		// it as the failure it is rather than a silent empty success.
-		if (parsed.ok === false || !world) {
-			return { ok: false, error: worldCardErrorFromBody(parsed) };
-		}
-		const bookId = str(parsed.book_id);
-		return { ok: true, world, book_id: bookId || undefined };
-	} catch (err) {
-		return { ok: false, error: err instanceof Error ? err.message : String(err) };
-	}
+	const result = await importCard(source, { world: true });
+	if (!result.ok) return { ok: false, error: result.error || 'world card import failed' };
+	const world = normalizeWorld(result.world);
+	if (!world) return { ok: false, error: result.error || 'world card import failed' };
+	return { ok: true, world, book_id: result.book_id };
 }
 
 /**

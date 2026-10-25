@@ -24,7 +24,7 @@
 	// bespoke and rendered below the slots.
 	import { onMount } from 'svelte';
 	import type { Book, BookEntry } from '#lib/api';
-	import { createBook, deleteBook, listBooks, normalizeBookEntry, putBook } from '#lib/api';
+	import { createBook, deleteBook, listBooks, putBook } from '#lib/api';
 	import type { SlotSpec } from '#lib/entitySlots';
 	import DefinitionControls from '#lib/components/DefinitionControls.svelte';
 	import EntityList from '#lib/components/EntityList.svelte';
@@ -90,9 +90,6 @@
 	let busy = $state(false);
 	let error = $state('');
 	let status = $state('');
-	/** File input + in-flight flag for the ST lore import door. */
-	let importInput = $state<HTMLInputElement | null>(null);
-	let importing = $state(false);
 	let slotForm = $state<ReturnType<typeof SlotForm>>();
 
 	/** The book the editor is editing (null while creating / nothing selected). */
@@ -374,65 +371,6 @@
 	$effect(() => {
 		onDirty?.(dirty);
 	});
-
-	// --- ST lore-file import (ported from WIEditor) ----------------------------
-
-	/** Pull the raw entry list out of any accepted world-info / book shape. */
-	function extractEntries(raw: unknown): Record<string, unknown>[] {
-		const isRecord = (value: unknown): value is Record<string, unknown> =>
-			typeof value === 'object' && value !== null && !Array.isArray(value);
-		// Only objects that actually look like ST entries qualify, so a card or an
-		// arbitrary JSON blob resolves to "no entries" instead of a junk book.
-		const isEntry = (value: unknown): value is Record<string, unknown> =>
-			isRecord(value) && ('content' in value || 'keys' in value || 'key' in value);
-		let source: unknown = raw;
-		if (isRecord(raw) && 'entries' in raw) source = raw.entries;
-		if (Array.isArray(source)) return source.filter(isEntry);
-		// A raw ST file is a numeric-id -> entry mapping; a character_book's
-		// `entries` may itself be that mapping.
-		if (isRecord(source)) return Object.values(source).filter(isEntry);
-		return [];
-	}
-
-	/** Book name from the JSON, else the file stem. */
-	function importName(raw: unknown, filename: string): string {
-		if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-			const name = (raw as Record<string, unknown>).name;
-			if (typeof name === 'string' && name.trim()) return name.trim();
-		}
-		return filename.replace(/\.json$/i, '').trim() || 'Imported lore';
-	}
-
-	/** Import a world-info JSON as a NEW book in the catalog (`POST /api/books`). */
-	async function onImportFile(event: Event): Promise<void> {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		input.value = '';
-		if (!file || importing) return;
-		importing = true;
-		try {
-			const parsed: unknown = JSON.parse(await file.text());
-			const rawEntries = extractEntries(parsed);
-			if (rawEntries.length === 0) {
-				throw new Error('no world-info entries found in that file');
-			}
-			const saved = await createBook({
-				name: importName(parsed, file.name),
-				entries: rawEntries.map((entry) => normalizeBookEntry(entry))
-			});
-			upsert(saved);
-			select(saved);
-			status = `Imported “${saved.name}” (${saved.entries.length} ${
-				saved.entries.length === 1 ? 'entry' : 'entries'
-			}) as a new catalog book.`;
-			error = '';
-			onChanged?.();
-		} catch (err) {
-			error = message(err);
-		} finally {
-			importing = false;
-		}
-	}
 </script>
 
 <div class="pane">
@@ -441,24 +379,6 @@
 		{#if dirty}<span class="dirty" aria-live="polite">● unsaved</span>{/if}
 		<span class="spacer"></span>
 		<DefinitionControls kind="book" id={selectedId} onImported={(id) => void afterImport(id)} />
-		<button
-			type="button"
-			class="ghost"
-			disabled={importing}
-			title="Import a SillyTavern world-info JSON as a new book in this catalog"
-			aria-label="Import a world-info JSON as a new book in the lore catalog"
-			onclick={() => importInput?.click()}
-		>
-			{importing ? 'Importing…' : 'Import lore (JSON)'}
-		</button>
-		<input
-			bind:this={importInput}
-			class="file-input"
-			type="file"
-			accept=".json,application/json"
-			aria-label="Import a world-info JSON file"
-			onchange={(event) => void onImportFile(event)}
-		/>
 	</header>
 
 	{#if error}
@@ -482,7 +402,7 @@
 						`${book.entries.length} ${book.entries.length === 1 ? 'entry' : 'entries'}`}
 					onSelect={(book: Book) => select(book)}
 					onNew={startCreate}
-					empty="No lore books yet — use + New, or import a world-info JSON above."
+					empty="No lore books yet — use + New, or Import above."
 				/>
 			</section>
 
@@ -596,9 +516,6 @@
 	}
 	.spacer {
 		flex: 1;
-	}
-	.file-input {
-		display: none;
 	}
 	/* List column + editor; wraps to a single column when the pane is narrow. */
 	.cols {

@@ -14,12 +14,12 @@
 	//
 	// Every write goes through `#lib/api` (never a relative path — the studio's
 	// docked panel shares the page with the composer). Delete is a tombstone
-	// event with the drawer's confirm copy. The extra door the drawer lacked is
-	// a definition-only card import (`importCard(file, { persona: true })`,
-	// D51/L1.c): it creates NO session, only the persona definition.
+	// event with the drawer's confirm copy. Importing is the header's one door
+	// (`DefinitionControls`, issue #60): it takes a card in either format or an
+	// exported persona and creates NO session — only the definition.
 	import { onDestroy, onMount } from 'svelte';
 	import type { Book, Persona, PersonaWrite } from '#lib/api';
-	import { createPersona, deletePersona, importCard, listBooks, listPersonas, updatePersona } from '#lib/api';
+	import { createPersona, deletePersona, listBooks, listPersonas, updatePersona } from '#lib/api';
 	import {
 		attachDefinitionImage,
 		definitionInitials,
@@ -70,14 +70,10 @@
 	/** True once the first catalog load resolved (gates the focus/startNew effects). */
 	let loaded = $state(false);
 	let busy = $state(false);
-	let importingCard = $state(false);
 	let error = $state('');
-	let cardStatus = $state('');
-	let cardError = $state('');
 	let dirty = $state(false);
 
 	let form = $state<{ validate: () => string | null } | null>(null);
-	let cardInput = $state<HTMLInputElement | null>(null);
 
 	/** Circular avatars keyed by persona id (`null` = fetched, no image). */
 	let avatars = $state<Record<string, string | null>>({});
@@ -358,55 +354,13 @@
 		}
 	}
 
-	/** DefinitionControls imported a persona JSON: refresh and highlight it. */
-	async function afterDefinitionImport(id: string): Promise<void> {
+	/** The header's one import door landed a persona: refresh and highlight it. */
+	async function afterImport(id: string): Promise<void> {
 		await reloadList();
 		onChanged?.();
 		const imported = personas.find((persona) => persona.persona_id === id);
 		if (imported) selectPersona(imported);
 		else selectedId = id;
-	}
-
-	async function onCardFile(event: Event): Promise<void> {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0] ?? null;
-		input.value = '';
-		if (!file) return;
-		await importCardFile(file);
-	}
-
-	/**
-	 * The definition-only card door (D51): parse PNG/JSON and capture the card as
-	 * a persona. Creates no session — the backend's `?persona=1` path
-	 * (`importCard(..., { persona: true })`). Failure (`{ok:false,error}`) renders
-	 * inline; success refreshes the catalog and selects the upserted persona.
-	 */
-	async function importCardFile(file: File): Promise<void> {
-		if (importingCard) return;
-		importingCard = true;
-		cardError = '';
-		cardStatus = '';
-		try {
-			const result = await importCard(file, { persona: true });
-			if (!result.ok) {
-				cardError = result.error || 'could not import that card';
-				return;
-			}
-			const wire = result.persona ?? {};
-			const id = typeof wire.persona_id === 'string' ? wire.persona_id : '';
-			await reloadList();
-			onChanged?.();
-			const imported = id
-				? (personas.find((persona) => persona.persona_id === id) ?? null)
-				: null;
-			const label = imported?.name || (typeof wire.name === 'string' ? wire.name : '');
-			cardStatus = label ? `Imported persona “${label}”` : 'Imported card';
-			if (imported) selectPersona(imported);
-		} catch (err) {
-			cardError = message(err);
-		} finally {
-			importingCard = false;
-		}
 	}
 
 	// --- host requests (`focusId` selects, `startNew` opens the create form) ---
@@ -455,34 +409,8 @@
 	{/snippet}
 
 	<header class="pane-head">
-		<DefinitionControls
-			kind="persona"
-			id={selectedId}
-			onImported={(id) => void afterDefinitionImport(id)}
-		/>
-		<button
-			type="button"
-			class="ghost"
-			disabled={busy || importingCard}
-			onclick={() => cardInput?.click()}
-		>
-			{importingCard ? 'Importing…' : 'Import card'}
-		</button>
-		<input
-			bind:this={cardInput}
-			class="file-input"
-			type="file"
-			accept=".png,.json,image/png,application/json"
-			aria-label="Import character card PNG or JSON"
-			onchange={onCardFile}
-		/>
+		<DefinitionControls kind="persona" id={selectedId} onImported={(id) => void afterImport(id)} />
 	</header>
-
-	{#if cardError}
-		<p class="error" role="alert">{cardError}</p>
-	{:else if cardStatus}
-		<p class="status" role="status">{cardStatus}</p>
-	{/if}
 
 	{#if error}
 		<p class="error" role="alert">{error}</p>
@@ -502,7 +430,7 @@
 					onSelect={(persona: Persona) => selectPersona(persona)}
 					onNew={requestCreate}
 					rowActions={rowAvatar}
-					empty="No personas yet — use + New, or import a persona JSON or card above."
+					empty="No personas yet — use + New, or Import above."
 				/>
 			</div>
 
@@ -699,11 +627,6 @@
 		background: var(--danger-soft);
 		color: var(--danger-text);
 	}
-	.status {
-		margin: 0;
-		font-size: var(--font-micro);
-		color: var(--text-dim);
-	}
 	.editor {
 		display: flex;
 		flex-direction: column;
@@ -728,13 +651,6 @@
 	}
 	.file-input {
 		display: none;
-	}
-	.pane-head button {
-		font: inherit;
-		font-size: var(--font-small);
-		border-radius: 6px;
-		cursor: pointer;
-		padding: 0.35rem 0.7rem;
 	}
 	.form-actions button {
 		font: inherit;

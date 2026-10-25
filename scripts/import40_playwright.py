@@ -14,15 +14,18 @@ Assertions (each reported PASS/FAIL in the run's table):
      list), and a chat with no lore shows the quiet one-line empty state;
   2. the lore hint's affordances still work — attach a book to a real chat and
      clear it again, through the UI;
-  3. World studio: "Import card (PNG/JSON)" imports a PNG card WITH a
-     ``character_book`` — the world opens in the editor, name/description/
-     scenario come from the card, the book is in the Books studio catalog and
-     the world's image IS the imported PNG bytes;
+  3. World studio: its ONE "Import" door (issue #60) imports a PNG card WITH a
+     ``character_book`` through the single entry point
+     (``POST /api/cards/import?world=1``) — the world opens in the editor,
+     name/description/scenario come from the card, the book is in the Books
+     studio catalog and the world's image IS the imported PNG bytes;
   4. a PNG card WITHOUT a lorebook still imports (book absent), inline status
      names it, no error;
-  5. a non-card file renamed ``.json`` → precise inline 422, no world created;
-  6. the World JSON door (DefinitionControls "Import world") still works;
-  7. the Persona studio's pre-existing card door still imports a persona PNG;
+  5. a non-card file renamed ``.json`` → a precise inline message, no world
+     created (the door's own JSON parse refuses before any write);
+  6. the same door also takes an exported/hand-written world JSON (no separate
+     "Import world" control exists any more);
+  7. the Persona studio's door is the same control and imports a persona PNG;
   8. chat ↔ studio ↔ chat re-mounts (the interactive mount path where Svelte's
      ``each_key_duplicate`` would fire) raise ZERO page errors and no
      unexpected console error across the whole run;
@@ -600,36 +603,42 @@ def assert_rail_retired(page, shots: Path) -> None:
 
 
 def assert_world_card_import(page, shots: Path, fixtures: dict[str, Path], api: str) -> None:
-    section(3, "World studio: card door imports a PNG WITH lorebook")
+    section(3, "World studio: the ONE 'Import' door takes a PNG card WITH lorebook")
     open_studio(page)
     studio_tab(page, "Worlds")
 
     pane = studio(page).locator("div.world-pane")
     pane.wait_for(state="visible", timeout=30_000)
-    door = pane.get_by_role("button", name="Import card (PNG/JSON)")
-    REPORT.check(3, door.count() == 1, "the 'Import card (PNG/JSON)' door exists in the world pane")
+    door = pane.get_by_role("button", name="Import", exact=True)
+    REPORT.check(3, door.count() == 1, "the world pane has exactly ONE import control")
+    REPORT.check(
+        3,
+        pane.get_by_role("button", name=re.compile(r"import .*(card|json|png)", re.I)).count() == 0,
+        "no import control names a file type any more",
+    )
 
     with page.expect_response(
-        lambda r: r.url.endswith("/api/worlds/import") and r.request.method == "POST",
+        lambda r: "/api/cards/import" in r.url and r.request.method == "POST",
         timeout=60_000,
     ) as response_info:
         choose_file(page, door, fixtures["card_with_book"])
     response = response_info.value
     body = response.json()
-    EVIDENCE["api"]["worlds_import_with_book"] = {
+    EVIDENCE["api"]["card_import_as_world_with_book"] = {
         "status": response.status,
+        "url": response.url,
         "body": body,
     }
-    REPORT.check(3, response.status == 200 and body.get("ok") is True, f"POST /api/worlds/import -> {response.status}")
+    REPORT.check(3, response.status == 200 and body.get("ok") is True, f"POST /api/cards/import?world=1 -> {response.status}")
+    REPORT.check(3, "world=1" in response.url, f"the door posts the world target ({response.url})")
     REPORT.check(3, bool(body.get("book_id")), f"the card's lorebook materialized ({body.get('book_id')})")
     world_id = (body.get("world") or {}).get("world_id")
 
     # Inline status names what landed; no inline error.
-    status = pane.locator(":scope > p.status")
-    text = wait_text(status, "Imported world")
+    status = pane.locator("p.status")
+    text = wait_text(status, "Imported")
     REPORT.check(3, "Lyra Voss" in text, f"the status names the imported world ({text!r})")
-    REPORT.check(3, "lorebook" in text, f"the status names the lorebook ({text!r})")
-    REPORT.check(3, pane.locator(":scope > p.error").count() == 0, "no inline error is shown")
+    REPORT.check(3, pane.locator("p.error").count() == 0, "no inline error is shown")
 
     # The world opens in the editor, carrying the card's prose.
     editor = pane.locator("div.editor-col")
@@ -724,20 +733,20 @@ def assert_world_card_no_lorebook(page, shots: Path, fixtures: dict[str, Path], 
     worlds_before = len(get_json(f"{api}/api/worlds")["worlds"])
 
     with page.expect_response(
-        lambda r: r.url.endswith("/api/worlds/import") and r.request.method == "POST",
+        lambda r: "/api/cards/import" in r.url and r.request.method == "POST",
         timeout=60_000,
     ) as response_info:
-        choose_file(page, pane.get_by_role("button", name="Import card (PNG/JSON)"), fixtures["card_no_book"])
+        choose_file(page, pane.get_by_role("button", name="Import", exact=True), fixtures["card_no_book"])
     response = response_info.value
     body = response.json()
-    EVIDENCE["api"]["worlds_import_no_book"] = {"status": response.status, "body": body}
+    EVIDENCE["api"]["card_import_as_world_no_book"] = {"status": response.status, "body": body}
     REPORT.check(4, response.status == 200 and body.get("ok") is True, f"import -> {response.status}")
     REPORT.check(4, body.get("book_id") is None, f"no book was created ({body.get('book_id')})")
 
-    text = wait_text(pane.locator(":scope > p.status"), "Imported world")
+    text = wait_text(pane.locator("p.status"), "Imported")
     REPORT.check(4, "Rook" in text, f"the inline status names the new world ({text!r})")
     REPORT.check(4, "lorebook" not in text, "the status does not claim a lorebook")
-    REPORT.check(4, pane.locator(":scope > p.error").count() == 0, "NO inline error is shown")
+    REPORT.check(4, pane.locator("p.error").count() == 0, "NO inline error is shown")
 
     form = pane.locator("div.editor-col form.world-form")
     REPORT.check(
@@ -764,24 +773,15 @@ def assert_world_card_no_lorebook(page, shots: Path, fixtures: dict[str, Path], 
 
 
 def assert_world_card_rejection(page, shots: Path, fixtures: dict[str, Path], api: str) -> None:
-    section(5, "World studio: a non-card .json is a precise inline 422 (no world)")
+    section(5, "World studio: a non-card .json is refused inline (no world)")
     pane = studio(page).locator("div.world-pane")
     pane.wait_for(state="visible", timeout=30_000)
     worlds_before = get_json(f"{api}/api/worlds")["worlds"]
     listed_before = [t.strip() for t in pane.locator(".list-col .row-label").all_inner_texts()]
 
-    with page.expect_response(
-        lambda r: r.url.endswith("/api/worlds/import") and r.request.method == "POST",
-        timeout=60_000,
-    ) as response_info:
-        choose_file(page, pane.get_by_role("button", name="Import card (PNG/JSON)"), fixtures["bad_json"])
-    response = response_info.value
-    body = response.json()
-    EVIDENCE["api"]["worlds_import_rejected"] = {"status": response.status, "body": body}
-    REPORT.check(5, response.status == 422, f"the door answers 422 ({response.status})")
-    REPORT.check(5, body.get("ok") is False, "the body is a refusal (ok:false)")
+    choose_file(page, pane.get_by_role("button", name="Import", exact=True), fixtures["bad_json"])
 
-    error = pane.locator(":scope > p.error[role='alert']")
+    error = pane.locator("p.error[role='alert']")
     error.wait_for(state="visible", timeout=30_000)
     text = error.inner_text().strip()
     EVIDENCE["api"]["rejection_inline_text"] = text
@@ -789,9 +789,9 @@ def assert_world_card_rejection(page, shots: Path, fixtures: dict[str, Path], ap
     REPORT.check(
         5,
         "not valid JSON" in text or "neither a PNG" in text,
-        f"the inline error is the parser's PRECISE message ({text!r})",
+        f"the inline error is the PRECISE parser message ({text!r})",
     )
-    REPORT.check(5, pane.locator(":scope > p.status").count() == 0, "no success status is shown")
+    REPORT.check(5, pane.locator("p.status").count() == 0, "no success status is shown")
 
     worlds_after = get_json(f"{api}/api/worlds")["worlds"]
     REPORT.check(5, len(worlds_after) == len(worlds_before), f"no world was created ({len(worlds_after)})")
@@ -806,14 +806,13 @@ def assert_world_card_rejection(page, shots: Path, fixtures: dict[str, Path], ap
 
 
 def assert_world_json_door(page, shots: Path, fixtures: dict[str, Path], api: str) -> None:
-    section(6, "World studio: the JSON door (DefinitionControls) still works")
+    section(6, "World studio: the same door also takes a world JSON")
     pane = studio(page).locator("div.world-pane")
     pane.wait_for(state="visible", timeout=30_000)
-    door = pane.locator(".definition-controls").get_by_role("button", name="Import world")
-    REPORT.check(6, door.count() == 1, "the 'Import world' JSON door exists")
+    door = pane.get_by_role("button", name="Import", exact=True)
+    REPORT.check(6, door.count() == 1, "one door serves both file shapes")
     choose_file(page, door, fixtures["world_json"])
-    # DefinitionControls renders its status INSIDE the pane head; the card door's
-    # status is a direct child of .world-pane — read the right one.
+    # The door renders its status inside the pane head (one line, plain copy).
     status = pane.locator("header.pane-head p.status")
     text = wait_text(status, "Imported")
     REPORT.check(6, "Imported" in text, f"the JSON door reports the import ({text!r})")
@@ -837,12 +836,12 @@ def assert_world_json_door(page, shots: Path, fixtures: dict[str, Path], api: st
 
 
 def assert_persona_card_door(page, shots: Path, fixtures: dict[str, Path], api: str) -> None:
-    section(7, "Persona studio: the existing card door imports a persona PNG")
+    section(7, "Persona studio: the same ONE door imports a persona PNG")
     studio_tab(page, "Personas")
     pane = studio(page).locator("div.pane")
     pane.wait_for(state="visible", timeout=30_000)
-    door = pane.get_by_role("button", name="Import card", exact=True)
-    REPORT.check(7, door.count() == 1, "the persona 'Import card' door exists")
+    door = pane.get_by_role("button", name="Import", exact=True)
+    REPORT.check(7, door.count() == 1, "the persona pane has exactly ONE import control")
 
     with page.expect_response(
         lambda r: "/api/cards/import" in r.url and r.request.method == "POST",
@@ -854,7 +853,7 @@ def assert_persona_card_door(page, shots: Path, fixtures: dict[str, Path], api: 
     EVIDENCE["api"]["persona_card_import"] = {"status": response.status, "body": body}
     REPORT.check(7, response.status == 200 and body.get("ok") is True, f"import -> {response.status}")
 
-    text = wait_text(pane.locator("p.status"), "Imported persona")
+    text = wait_text(pane.locator("p.status"), "Imported")
     REPORT.check(7, "Mira Quill" in text, f"the status names the persona ({text!r})")
     wait_text(pane.locator(".list-col"), "Mira Quill")
     labels = [t.strip() for t in pane.locator(".list-col .row-label").all_inner_texts()]
@@ -1163,10 +1162,10 @@ def main() -> int:
         if any(benign in text or benign in url for benign in BENIGN_CONSOLE):
             filtered.append({"label": label, "text": text, "url": url, "reason": "browser/vite noise"})
             return
-        # Deliberate probe 1: the non-card rejection (assertion 5) — the 422 is
-        # the POINT of that step; the UI renders it inline (asserted).
-        if "422" in text and url.endswith("/api/worlds/import"):
-            filtered.append({"label": label, "text": text, "url": url, "reason": "deliberate 422 probe"})
+        # Deliberate probe 1: the non-card rejection (assertion 5) — the refusal
+        # is the POINT of that step; the UI renders it inline (asserted).
+        if "422" in text and url.endswith("/api/cards/import"):
+            filtered.append({"label": label, "text": text, "url": url, "reason": "deliberate refusal probe"})
             return
         # Deliberate probe 2: a definition with no image answers 404, which
         # `fetchDefinitionImage` documents as the ordinary "no image" answer.

@@ -24,9 +24,19 @@ The parser lives in :mod:`fabulist.cards` (PNG ``chara`` tEXt or raw JSON ->
       anchor, the same one ``POST /api/personas`` uses.
       -> ``{"ok": true, "card": {...}, "persona": {...}}``
 
-      ``?persona=1`` and ``?seed=1`` are mutually exclusive; asking for both
-      is a precise ``422`` ("choose one mode") rather than an implicit
-      precedence. ``persona`` takes precedence in neither direction.
+  POST /api/cards/import?world=1   (or ``"world": true`` in a JSON body)
+      Definition-only, as a WORLD (issue #60): parses the card and materializes
+      it through the ONE world write path shared with ``POST /api/worlds/import``
+      (:func:`fabulist.api.worlds_api._import_card_as_world`) — prose becomes the
+      world, a ``character_book`` a bonus, a PNG its definition image. Creates NO
+      session. That older endpoint stays supported; this flag is the entry point
+      the UI's single import door uses for both card destinations.
+      -> ``{"ok": true, "card": {...}, "world": {...}, "book_id": str|null}``
+
+      At most ONE mode may be asked for: ``?seed=1``, ``?persona=1`` and
+      ``?world=1`` are mutually exclusive, and asking for two or more is a
+      precise ``422`` ("choose one mode") rather than an implicit precedence.
+      No mode takes precedence in any direction.
 
 The log owns everything (D9): seeding only appends rows. The frontend opens the
 returned ``session_id`` through the URL param the session controller already
@@ -103,6 +113,9 @@ _SEED_KEYS = ("seed", "create_session")
 
 #: Query/body flag requesting the definition-only (persona capture) action.
 _PERSONA_KEYS = ("persona",)
+
+#: Query/body flag requesting the definition-only (world capture) action.
+_WORLD_KEYS = ("world", "as_world")
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 #: multipart field names probed, in order, for the card payload.
@@ -165,19 +178,50 @@ def _persona_from_json(obj: dict) -> bool:
     return False
 
 
-def _decode_source(data: bytes) -> tuple[Any, bool, bool]:
+def _world_requested(request: Request) -> bool:
+    """Read the ``?world=`` query flag (mirrors :func:`_persona_requested`)."""
+    for key in _WORLD_KEYS:
+        value = request.query_params.get(key)
+        if value is not None and value.strip().lower() in _TRUTHY:
+            return True
+    return False
+
+
+def _world_from_json(obj: dict) -> bool:
+    """Read the ``"world": true`` JSON-body flag (mirrors :func:`_persona_from_json`)."""
+    for key in _WORLD_KEYS:
+        value = obj.get(key)
+        if isinstance(value, bool) and value:
+            return True
+    return False
+
+
+def _world_from_card(log: "EventLog", card: "CardV2", card_png: bytes | None):
+    """Materialize ``card`` as a world through the ONE shared write path.
+
+    The write itself lives in :mod:`fabulist.api.worlds_api` (issue #40's typed
+    door, which stays a supported endpoint), so this route adds an ENTRY POINT,
+    never a second write. The import is lazy: the world module is loaded on
+    first use rather than at router-import time.
+    """
+    from fabulist.api.worlds_api import _import_card_as_world
+
+    return _import_card_as_world(log, card, card_png)
+
+
+def _decode_source(data: bytes) -> tuple[Any, bool, bool, bool]:
     """Turn raw request bytes into a parser source plus the body flags.
 
-    Returns ``(png_bytes_or_dict, seed, persona)``. Raises :class:`CardError`
-    with a precise message for anything that is neither a PNG nor a JSON card
-    object.
+    Returns ``(png_bytes_or_dict, seed, persona, world)``. Raises
+    :class:`CardError` with a precise message for anything that is neither a PNG
+    nor a JSON card object.
     """
     if not data or not data.strip():
         raise CardError("no card data in request body")
     # Sniff the PNG signature rather than trusting Content-Type: a card PNG is
     # unambiguous, and browsers occasionally send a generic type.
     if data.startswith(PNG_SIGNATURE):
-        return bytes(data), False, False
+        return bytes(data), False, False, False
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -192,12 +236,13 @@ def _decode_source(data: bytes) -> tuple[Any, bool, bool]:
         raise CardError("JSON body must be a card object")
     seed = _seed_from_json(obj)
     persona = _persona_from_json(obj)
+    world = _world_from_json(obj)
     nested = obj.get("card")
     if isinstance(nested, dict):
-        return nested, seed, persona
+        return nested, seed, persona, world
     # A V2 envelope has `spec`/`data`; a V1/flat card has `name`. Anything else
     # is handed to the parser, whose validation yields the precise error.
-    return obj, seed, persona
+    return obj, seed, persona, world
 
 
 def _source_from_multipart(form: Any) -> tuple[bytes | None, bool, Any]:
@@ -260,19 +305,21 @@ async def _read_request_bytes(request: Request) -> tuple[bytes | None, bool, Any
 
 @router.post("/api/cards/import")
 async def import_card(request: Request):
-    """Parse a card and optionally act on it (D9/D39/D51).
+    """Parse a card and optionally act on it (D9/D39/D51/#60).
 
-    Three modes, selected by the ``seed`` / ``persona`` flags:
+    Four modes, selected by the ``seed`` / ``persona`` / ``world`` flags:
 
-    * neither flag — parse and echo the card, no side effects;
+    * no flag — parse and echo the card, no side effects;
     * ``seed`` — append a ``session_created`` system event, the truthful
       ``card_imported`` system marker, the card ``system`` event, and the D39
       persona upsert to a brand-new session id (no fabricated ``user`` turn);
     * ``persona`` — definition-only: upsert the card as a persona on the
-      ``__personas__`` anchor and return it, creating no session at all.
+      ``__personas__`` anchor and return it, creating no session at all;
+    * ``world`` — definition-only: materialize the card as a world through the
+      same write path ``POST /api/worlds/import`` uses (issue #60).
 
-    ``seed`` and ``persona`` together are a precise 422 ("choose one mode") —
-    neither silently wins. Never mutates existing history.
+    Any two modes together are a precise 422 ("choose one mode") — none
+    silently wins. Never mutates existing history.
     """
     log = _log_for(request)
 
@@ -282,7 +329,7 @@ async def import_card(request: Request):
             data = await upload.read()
         if data is None:
             raise CardError("no card data in request body")
-        source, body_seed, body_persona = _decode_source(data)
+        source, body_seed, body_persona, body_world = _decode_source(data)
         card: "CardV2" = parse_card_v2(source)
     except CardError as exc:
         return _card_error(str(exc))
@@ -291,8 +338,15 @@ async def import_card(request: Request):
 
     seed = seed or body_seed
     persona = _persona_requested(request) or body_persona
-    if seed and persona:
-        return _card_error("choose one mode: ?persona=1 or ?seed=1")
+    world = _world_requested(request) or body_world
+    modes = [
+        name
+        for name, asked in (("seed", seed), ("persona", persona), ("world", world))
+        if asked
+    ]
+    if len(modes) > 1:
+        # No mode wins: an ambiguous request is refused, never silently resolved.
+        return _card_error("choose one mode: " + " or ".join(f"?{m}=1" for m in modes))
     # A PNG import carries the original image bytes; retain them as a media
     # asset so the card can be exported back to a PNG later (D28 / A4).
     card_png = source if isinstance(source, bytes) else None
@@ -303,6 +357,10 @@ async def import_card(request: Request):
         result["title"] = title
     elif persona:
         result["persona"] = _persona_wire_for_card(log, card, card_png=card_png)
+    elif world:
+        result["world"], result["book_id"] = _world_from_card(
+            log, card, card_png=card_png
+        )
     return result
 
 

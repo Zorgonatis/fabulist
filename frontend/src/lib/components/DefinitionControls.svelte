@@ -6,6 +6,12 @@
 	// support which operations. A kind with neither operation renders nothing.
 	// `id` targets one definition for export (null exports the whole catalog);
 	// `onImported` is called with the new id so the caller can refresh its list.
+	//
+	// ONE import door (issue #60): the button reads simply `Import` in every pane
+	// it appears in — the pane already says what is being imported — and the
+	// click runs the kind's single `importFile` handler, which detects the file
+	// (card PNG, card JSON, exported definition, lore file) and imports it as
+	// this kind. No format choice, no second dialog, no per-pane rules.
 	import { ENTITY_KINDS } from '#lib/entities';
 	import type { ObjectKind } from '#lib/entities';
 
@@ -44,18 +50,18 @@
 	}
 
 	async function onFile(event: Event): Promise<void> {
-		const runImport = spec.import;
+		const runImport = spec.importFile;
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		input.value = '';
 		if (!runImport || !file) return;
 		busy = true;
 		error = '';
+		status = '';
 		try {
-			const parsed = JSON.parse(await file.text()) as unknown;
-			const importedId = await runImport(parsed);
-			status = `Imported ${importedId}`;
-			onImported?.(importedId);
+			const imported = await runImport(file);
+			status = imported.label ? `Imported “${imported.label}”` : 'Imported';
+			onImported?.(imported.id);
 		} catch (err) {
 			error = message(err);
 		} finally {
@@ -64,36 +70,43 @@
 	}
 </script>
 
-{#if spec.import || spec.export}
+{#if spec.importFile || spec.export}
 	<div class="definition-controls">
-		{#if spec.import}
-			<button type="button" class="ghost" disabled={busy} onclick={() => fileInput?.click()}>
-				Import {spec.label}
-			</button>
-		{/if}
-		{#if spec.export}
-			<button type="button" class="ghost" disabled={busy} onclick={() => void doExport()}>
-				Export {spec.label}
-			</button>
+		<div class="door">
+			{#if spec.importFile}
+				<button type="button" class="ghost" disabled={busy} onclick={() => fileInput?.click()}>
+					Import
+				</button>
+			{/if}
+			{#if spec.export}
+				<button type="button" class="ghost" disabled={busy} onclick={() => void doExport()}>
+					Export {spec.label}
+				</button>
+			{/if}
+		</div>
+		{#if error}
+			<p class="error" role="alert">{error}</p>
+		{:else if status}
+			<p class="status" role="status">{status}</p>
 		{/if}
 		<input
 			bind:this={fileInput}
 			class="file-input"
 			type="file"
-			accept="application/json,.json"
-			aria-label="Import {spec.label} JSON"
+			accept=".png,.json,image/png,application/json"
+			aria-label="Import"
 			onchange={onFile}
 		/>
 	</div>
-	{#if error}
-		<p class="error" role="alert">{error}</p>
-	{:else if status}
-		<p class="status" role="status">{status}</p>
-	{/if}
 {/if}
 
 <style>
 	.definition-controls {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.door {
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
