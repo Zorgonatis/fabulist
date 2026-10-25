@@ -14,11 +14,13 @@ Covers the four deliverables layered on the event log (D9/D10):
 * The ``branches`` router endpoints against a real tmp ``EventLog``.
 
 NOTE on the prune pins below: ``removed == 1`` / ``events_deleted == 1`` used to
-encode "a fork copies nothing". Under the new rule a fork copies no history but
-DOES carry post-cut config rows; these fixtures carry no config, so exactly the
-branch's own appended row is removed -- the assertion is now explicitly about
-"a config-less parent contributes no carried rows", not about a blanket
-no-copy rule (deliberate pin evolution: the old rule starved swipes of config).
+encode "a fork copies nothing". Two rules moved them since. A fork copies no
+history but DOES carry post-cut config rows (these fixtures carry none), and
+since issue #62 every fork also writes ONE ``session_state_snapshot`` row into
+the new chat -- so the count is the branch's own appended rows, snapshot
+included. The pin is about "the parent contributes no carried history", never
+about a blanket no-copy rule (deliberate pin evolution: the old rule starved
+swipes of config, and a fork with no state at all starved it of everything).
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from fabulist.api import create_app
 from fabulist.api.branches import router as branches_router
 from fabulist.api.fake import FakeTurnEngine
 from fabulist.log import EventLog
-from fabulist.log.repo import PruneError
+from fabulist.log.repo import PruneError, is_state_snapshot_event
 from fabulist.prompts.variables import PERSONAS_ANCHOR
 
 
@@ -71,9 +73,11 @@ def test_prune_branch_removes_own_rows_and_session_row(log):
     log.append_event("base", "user", "user", {"text": "hi"})
     log.append_event("base", "narrative", "narrator", {"prose": "hello"})
     log.fork_session("base", 1, "branch")
-    # New semantics, explicit: the parent carries no config, so the fork still
-    # contributes no rows of its own ("copies no history" -- F2).
-    assert log.get_events("branch") == []
+    # New semantics, explicit: the parent carries no config and no history is
+    # copied (F2) -- the fork's only own row is the issue #62 state snapshot.
+    own = log.get_events("branch")
+    assert [e.type for e in own] == ["system"]
+    assert is_state_snapshot_event(own[0])
     log.append_event("branch", "narrative", "narrator", {"prose": "branch-only"})
     base_ids = [e.id for e in log.get_events("base")]
 
@@ -82,7 +86,7 @@ def test_prune_branch_removes_own_rows_and_session_row(log):
 
     removed = log.prune_branch("branch")
 
-    assert removed == 1
+    assert removed == 2  # the snapshot row + the branch-only narrative
     assert log.get_events("branch") == []
     assert log.get_session("branch") is None
     # The ghost row is gone: list_branches no longer advertises it.
@@ -182,7 +186,9 @@ def test_nested_fork_carries_ancestor_revision(log):
     log.append_event("root", "user", "user", {"text": "next"})
     log.fork_session("root", 3, "mid")
     log.append_event("mid", "narrative", "narrator", {"prose": "mid reply"})
-    log.fork_session("mid", 4, "leaf")
+    # Cut at mid's LAST row: since issue #62 the branch's first own seq is its
+    # state snapshot, so the reply sits one seq higher than it used to.
+    log.fork_session("mid", log.get_events("mid")[-1].seq, "leaf")
 
     # Edit the root's early turn after the leaf exists.
     log.append_revision(
@@ -359,7 +365,8 @@ def test_router_prune_branch_hard_deletes(build_app):
     assert pruned.json() == {
         "session_id": new_id,
         "pruned": True,
-        "events_deleted": 1,
+        # the issue #62 state snapshot row + the branch's own reply
+        "events_deleted": 2,
     }
     assert after.json()["branches"] == []
     assert [s["session_id"] for s in sessions.json()["sessions"]] == [base]

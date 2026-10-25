@@ -36,6 +36,7 @@ from fabulist.api import create_app
 from fabulist.api.fake import FakeTurnEngine
 from fabulist.cards.v2 import IMPORT_SEED_PREFIX
 from fabulist.log import EventLog
+from fabulist.log.repo import is_state_snapshot_event
 
 
 def run(coro):
@@ -384,10 +385,12 @@ def test_delete_tail_carries_the_title_onto_the_new_branch(build_app):
 
     new_id, listed = run(scenario())
     own = app.state.log.get_events(new_id)
-    # Exactly one carry row: a title rename, never a compaction marker (a marker
-    # would drop the new branch out of the swipe group).
-    assert [event.type for event in own] == ["system"]
-    assert own[0].payload == {"event": "session_renamed", "title": "Night Market"}
+    # Exactly one CARRY row: a title rename, never a compaction marker (a marker
+    # would drop the new branch out of the swipe group). The fork's other own row
+    # is its issue #62 state snapshot.
+    assert [event.type for event in own] == ["system", "system"]
+    assert is_state_snapshot_event(own[0])
+    assert own[1].payload == {"event": "session_renamed", "title": "Night Market"}
 
     # The rail can render the line the reader just switched to.
     entries = {row["session_id"]: row for row in listed.json()["sessions"]}
@@ -426,11 +429,14 @@ def test_delete_tail_untitled_source_still_lists_the_new_branch(build_app):
     new_id = resp.json()["session_id"]
 
     # Exactly one own row: the empty-title carry. No marker, so the child stays
-    # a plain ``kind:"user"`` swipe alternate of the line it replaced.
+    # a plain ``kind:"user"`` swipe alternate of the line it replaced. (The
+    # fork's other own row is the issue #62 state snapshot, which is not a
+    # marker either.)
     own = app.state.log.get_events(new_id)
-    assert len(own) == 1
-    assert own[0].type == "system"
-    assert own[0].payload == {"event": "session_renamed", "title": ""}
+    assert len(own) == 2
+    assert own[0].type == "system" and is_state_snapshot_event(own[0])
+    assert own[1].type == "system"
+    assert own[1].payload == {"event": "session_renamed", "title": ""}
     entries_b = branches.json()["branches"]
     assert [entry["session_id"] for entry in entries_b] == [new_id]
     assert entries_b[0]["kind"] == "user"
@@ -491,12 +497,14 @@ def test_delete_tail_from_branch_session_with_inherited_pivot(build_app):
 
     log = app.state.log
     # The grandchild's chain ends at the tighter cut: no base row above it. The
-    # trailing ``system`` row is the new branch's own title carry -- this
-    # intermediate fork owns no title anchor, so the carry lands with "".
+    # last two rows are the new branch's own -- its issue #62 state snapshot and
+    # the title carry (this intermediate fork owns no title anchor, so the carry
+    # lands with "").
     assert [event.type for event in log.get_chain_events(new_id)] == [
         "system",
         "user",
         "narrative",
+        "system",
         "system",
     ]
     assert _texts(log.get_projection(new_id)) == (["one"], ["reply one"])

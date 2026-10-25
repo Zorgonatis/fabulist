@@ -18,6 +18,7 @@ from fabulist.graph.plans import (
     render_plan_for_prompt,
     save_plan,
 )
+from fabulist.log.repo import is_state_snapshot_event
 
 SESSION = "sess-1"
 
@@ -191,8 +192,13 @@ def test_fold_reads_the_fork_chain(log):
     event = save_plan(log, SESSION, make_plan(turn_seq=2))
     fork = log.fork_session(SESSION, event.seq, "sess-fork")
 
-    # The branch owns no plan row of its own …
-    assert [e for e in log.get_events(fork) if e.type == "system"] == []
+    # The branch owns no plan row of its own (its one own row is the issue #62
+    # state snapshot, which carries the plan as DATA, not as a plan event) …
+    assert [
+        e
+        for e in log.get_events(fork)
+        if e.type == "system" and not is_state_snapshot_event(e)
+    ] == []
     # … yet folds the parent's plan, because the read walks the CHAIN.
     inherited = load_last_plan(log, fork)
     assert inherited is not None

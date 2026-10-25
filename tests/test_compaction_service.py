@@ -741,8 +741,10 @@ def test_compacting_a_swipe_branch_summarizes_its_inherited_chain(log):
     """
     add_pair(log, "s", "the first turn")  # rows 1 (user), 2 (narrative)
     log.fork_session("s", 2, "b")
-    add_user(log, "b", "a different question")  # seq 3
-    add_narrative(log, "b", "a different answer")  # seq 4
+    # issue #62: the branch's first own seq (3) is its state snapshot, so its own
+    # turn lands at 4/5 instead of 3/4 -- covers_seqs stays "the whole chain".
+    add_user(log, "b", "a different question")  # seq 4
+    add_narrative(log, "b", "a different answer")  # seq 5
 
     outcome = run(
         compact("b", log, summarizer=FrameSummarizer(), budget_tokens=8192, new_session_id="b-era")
@@ -750,7 +752,7 @@ def test_compacting_a_swipe_branch_summarizes_its_inherited_chain(log):
 
     assert outcome.status == "done"
     summary = summary_rows(log, "b")[0]
-    assert summary.payload["covers_seqs"] == [1, 4]  # chain seqs, user row included
+    assert summary.payload["covers_seqs"] == [1, 5]  # chain seqs, user row included
     assert summary_rows(log, "s") == []  # the parent is untouched
     assert marker_rows(log, "s") == []
     assert log.get_session("b-era")["base_session"] == "b"

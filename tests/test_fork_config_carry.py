@@ -20,6 +20,7 @@ from __future__ import annotations
 from fabulist.api.chat_config_api import resolve_recall_config
 from fabulist.assistants.panel import latest_chat_assistant
 from fabulist.log import EventLog
+from fabulist.log.repo import is_state_snapshot_event
 from fabulist.memory.scope import LAYER_WORLD, collection_for_world, resolve_scope
 from fabulist.personas.registry import persona_for_chat
 from fabulist.prompts.variables import PERSONAS_ANCHOR, resolve_variables
@@ -45,8 +46,20 @@ def _own_kinds(log: EventLog, sid: str) -> list[str]:
     return [
         e.payload.get("event")
         for e in log.get_events(sid)
-        if e.type == "system" and isinstance(e.payload, dict)
+        if e.type == "system"
+        and isinstance(e.payload, dict)
+        and not is_state_snapshot_event(e)
     ]
+
+
+def _own_rows(log: EventLog, sid: str) -> list:
+    """The session's own rows MINUS the issue #62 state snapshot a fork writes.
+
+    The snapshot is branch-local state, not carried content: these tests are
+    about which CONFIG rows (never history) a fork re-appends, so they read the
+    own rows through this filter.
+    """
+    return [e for e in log.get_events(sid) if not is_state_snapshot_event(e)]
 
 
 # --- the bug: config assigned after the turn is carried ---------------------
@@ -95,7 +108,7 @@ def test_fork_does_not_duplicate_config_at_or_before_the_cut(log):
     log.fork_session(parent, at_seq=cut, new_session_id=branch)
 
     assert [k for k in _own_kinds(log, branch) if k == "chat_persona"] == []
-    assert log.get_events(branch) == []
+    assert _own_rows(log, branch) == []
     # ...yet the branch still resolves it through the inherited chain.
     assert persona_for_chat(log, branch) == "p1"
 
@@ -156,7 +169,7 @@ def test_fork_still_copies_no_narrative_or_user_rows(log):
 
     log.fork_session(parent, at_seq=cut, new_session_id=branch)
 
-    own = log.get_events(branch)
+    own = _own_rows(log, branch)
     assert [e.type for e in own] == ["system"]  # only the carried config row
     assert all(e.type not in ("user", "narrative") for e in own)
     # The reply after the cut is NOT inherited; the user turn at the cut IS.
@@ -218,7 +231,7 @@ def test_fork_does_not_carry_content_events(log):
 
     log.fork_session(parent, at_seq=cut, new_session_id=branch)
 
-    assert log.get_events(branch) == []
+    assert _own_rows(log, branch) == []
 
 
 def test_prune_removes_carried_config_with_the_branch(log):
@@ -228,11 +241,12 @@ def test_prune_removes_carried_config_with_the_branch(log):
     log.append_event(parent, "system", "user", {"event": "chat_persona", "persona_id": "p1"})
 
     log.fork_session(parent, at_seq=cut, new_session_id=branch)
-    assert len(log.get_events(branch)) == 1
+    assert len(_own_rows(log, branch)) == 1
 
     removed = log.prune_branch(branch)
 
-    assert removed == 1
+    # the fork's state snapshot (issue #62) + the carried config row
+    assert removed == 2
     assert log.get_events(branch) == []
     # The parent's row is untouched.
     assert persona_for_chat(log, parent) == "p1"

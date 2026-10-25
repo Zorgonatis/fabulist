@@ -65,12 +65,16 @@ def test_fork_below_the_child_base_seq_tightens_every_ancestor(log):
     assert log._session_chain("mid") == [("root", 6), ("mid", None)]
 
     chain = log.get_chain_events("leaf")
+    # root rows 1..2, then the leaf's OWN row at seq 3 -- the issue #62 state
+    # snapshot, which sits at ``base_seq + 1`` and is the branch's own truth.
     assert [(event.session_id, event.seq) for event in chain] == [
         ("root", 1),
         ("root", 2),
+        ("leaf", 3),
     ]
-    # And the middle branch still inherits through its own cut.
-    assert len(log.get_chain_events("mid")) == 6
+    # And the middle branch still inherits through its own cut (6 root rows plus
+    # its own snapshot at seq 7).
+    assert len(log.get_chain_events("mid")) == 7
 
 
 def test_chain_bound_is_the_minimum_across_a_multi_level_path(log):
@@ -87,4 +91,10 @@ def test_chain_bound_is_the_minimum_across_a_multi_level_path(log):
         ("leaf", 3),
         ("deep", None),
     ]
-    assert [event.seq for event in log.get_chain_events("deep")] == [1, 2, 3]
+    assert [event.seq for event in log.get_chain_events("deep")] == [
+        1,
+        2,
+        3,
+        # the deep branch's own issue #62 state snapshot (``base_seq + 1``)
+        4,
+    ]

@@ -27,6 +27,7 @@ from fabulist.context.facts import (
     static_prefix_parts,
 )
 from fabulist.log import EventLog
+from fabulist.log.repo import is_state_snapshot_event
 from fabulist.memory.scope import LAYER_WORLD, collection_for_world, resolve_scope
 from fabulist.personas.registry import persona_for_chat
 from fabulist.prompts.cast import CAST_SNAPSHOT_EVENT, ensure_cast_snapshot
@@ -123,9 +124,12 @@ def test_get_events_stays_session_local_on_a_branch(log: EventLog):
 
     # The raw audit view must NOT walk forks (pinned contract).
     own = log.get_events(branch)
-    assert [e.session_id for e in own] == [branch]
+    assert [e.session_id for e in own] == [branch, branch]
     assert all(e.session_id != parent for e in own)
-    assert own[0].payload == {"text": "branch only"}
+    # Row 0 is the fork's issue #62 state snapshot (the branch's own truth at
+    # the cut); the branch's first WRITE follows it.
+    assert is_state_snapshot_event(own[0])
+    assert own[1].payload == {"text": "branch only"}
 
 
 def test_chain_events_honours_max_schema_version(log: EventLog):

@@ -66,7 +66,9 @@ def test_fork_diverges(log):
 
     # Appending to the fork leaves the base projection untouched.
     forked = log.append_event("branch", "narrative", "narrator", {"text": "branch-only"})
-    assert forked.seq == 3  # sequence continues from the fork point
+    # issue #62: seq 3 (``base_seq + 1``) is the branch's own state snapshot row,
+    # so the first branch WRITE continues from 4 -- still strictly ordered.
+    assert forked.seq == 4
 
     base_projection = log.get_projection("base")
     assert [n["payload"]["text"] for n in base_projection["narratives"]] == [

@@ -17,6 +17,17 @@ additionally carries the source's whitelisted config rows with ``seq >`` the
 cut onto the branch (rows at/before the cut already arrive through the chain).
 Narrative/user prose is still never copied (FORK-SEMANTICS F2).
 
+Session *state* is carried as one persisted SNAPSHOT (issue #62, owner ruling:
+the whole state is as important as the preceding history). ``fork_session``
+writes ONE ``system``/``session_state_snapshot`` row into the new session whose
+payload is the state of the session at the CUT, folded through the existing
+projection reads (never a second fold, never a hand-rolled chain walk): the
+projection's ``state``, the entity registry (:func:`fabulist.state.entities.registry`)
+and the latest plan (:func:`fabulist.graph.plans.load_last_plan`), each read
+through :class:`_CutView` so nothing above the cut can leak in. The branch then
+resolves its state from its OWN snapshot first and falls back to the parent
+chain (an older branch without a snapshot keeps reading the chain unchanged).
+
 Projections are always rebuilt from raw events (the log is truth, D9/D11);
 superseded content is resolved latest-wins and the originals stay queryable.
 """
@@ -25,6 +36,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +65,15 @@ def _now() -> str:
 
 def _dump(value: Any) -> str:
     return json.dumps({} if value is None else value, ensure_ascii=False)
+
+
+#: The ``system`` variant that carries a fork's whole-session state snapshot
+#: (issue #62). Naming/verification helper: :func:`is_state_snapshot_event`.
+STATE_SNAPSHOT_EVENT = "session_state_snapshot"
+
+#: Actor recorded on the snapshot row a fork writes (D9: the dispatcher/proposer
+#: writes; a fork is repo bookkeeping, not a turn step).
+STATE_SNAPSHOT_ACTOR = "system"
 
 
 class PruneError(RuntimeError):
@@ -97,6 +118,84 @@ FORK_CONFIG_EVENTS = frozenset(
         "chat_npc_dispatch",
     }
 )
+
+
+def is_state_snapshot_event(event: Any) -> bool:
+    """Whether ``event`` is a fork's persisted state snapshot row (issue #62).
+
+    The one predicate every reader/tests share, so "is this row the snapshot?"
+    has a single definition instead of a payload string scattered around.
+    Accepts an :class:`Event` or a projection dict alike.
+    """
+    if isinstance(event, dict):
+        payload = event.get("payload")
+        event_type = event.get("type")
+        ephemeral = event.get("ephemeral", False)
+    else:
+        payload = getattr(event, "payload", None)
+        event_type = getattr(event, "type", None)
+        ephemeral = getattr(event, "ephemeral", False)
+    if event_type != "system" or ephemeral:
+        return False
+    return isinstance(payload, dict) and payload.get("event") == STATE_SNAPSHOT_EVENT
+
+
+class _CutView:
+    """A session's fork-resolved reads, TRUNCATED at a seq (issue #62).
+
+    The state a fork must carry is the state as of the CUT, which is not the
+    source's current state: the cut can sit below the source's tip (delete-tail,
+    a fork from an older message, a fork of a fork). This adapter exposes the
+    two duck-typed log reads the existing folds consume
+    (``get_chain_events``/``get_events``) over the inherited slice
+    (``seq <= at_seq``) only, so
+    :func:`fabulist.state.entities.registry` and
+    :func:`fabulist.graph.plans.load_last_plan` fold the cut without a single
+    new fold and without a hand-rolled chain walk.
+
+    Read-only by construction: it never appends, never mints, and never touches
+    the log's connection.
+    """
+
+    __slots__ = ("_log", "_session_id", "at_seq")
+
+    def __init__(self, log: "EventLog", session_id: str, at_seq: int) -> None:
+        self._log = log
+        self._session_id = session_id
+        self.at_seq = at_seq
+
+    def _bound(self, session_id: str | None) -> str:
+        return self._session_id if session_id is None else session_id
+
+    def get_chain_events(
+        self, session_id: str | None = None, **_kwargs: Any
+    ) -> list[Event]:
+        """The chain slice at or below the cut (fork-aware, revisions kept raw)."""
+        return [
+            event
+            for event in self._log.get_chain_events(self._bound(session_id))
+            if event.seq <= self.at_seq
+        ]
+
+    def get_events(
+        self, session_id: str | None = None, **_kwargs: Any
+    ) -> list[Event]:
+        """The session-local slice at or below the cut (audit shape)."""
+        return [
+            event
+            for event in self._log.get_events(self._bound(session_id))
+            if event.seq <= self.at_seq
+        ]
+
+    def get_projection(
+        self, session_id: str | None = None, **kwargs: Any
+    ) -> dict:
+        """The projection at the cut (``state`` fold included)."""
+        kwargs.pop("at_seq", None)
+        return self._log.get_projection(
+            self._bound(session_id), at_seq=self.at_seq, **kwargs
+        )
+
 
 
 class EventLog:
@@ -331,7 +430,11 @@ class EventLog:
         return events
 
     def get_projection(
-        self, session_id: str, *, max_schema_version: int = SCHEMA_VERSION
+        self,
+        session_id: str,
+        *,
+        max_schema_version: int = SCHEMA_VERSION,
+        at_seq: int | None = None,
     ) -> dict:
         """Rebuild the derived view of a session (fork-aware).
 
@@ -365,12 +468,33 @@ class EventLog:
         ``compactions`` is the era MARKER list — one break per item, and the
         LAST item is the current era's. Both are additive keys: no existing key
         changes shape for them.
+
+        ``at_seq`` truncates the view at a seq: the projection a fork cut there
+        inherits (no row above the cut is folded). It is what
+        :meth:`build_state_snapshot` reads, and the default ``None`` keeps every
+        existing caller on the whole stream.
+
+        Issue #62 (owner ruling: a fork persists the WHOLE session state): a
+        session's own ``session_state_snapshot`` row is folded into ``state`` in
+        seq order, i.e. AFTER the inherited ``state-delta`` rows it was built
+        from and BEFORE anything the branch writes itself. That is the read
+        precedence — the branch's persisted snapshot first, the parent chain as
+        the fallback for older branches (which carry no snapshot row) — and it
+        is why a late revision of an inherited state row can no longer move a
+        branch's committed state.
         """
         active = [
             e
             for e in self._stream_events(session_id)
             if not e.ephemeral and e.schema_version <= max_schema_version
         ]
+        if at_seq is not None:
+            # Fork cut (issue #62): the inherited slice only. Seq is monotonic
+            # along a chain (a branch's own seqs start at ``base_seq + 1``), so
+            # one seq filter truncates the ancestor prefix, the branch's own
+            # rows, and the ancestor revisions carried across the boundary (F7)
+            # in one move.
+            active = [e for e in active if e.seq <= at_seq]
         resolved = self._resolve_payloads(active)
 
         narratives: list[dict] = []
@@ -455,6 +579,15 @@ class EventLog:
                             "payload": payload,
                         }
                     )
+                elif variant == STATE_SNAPSHOT_EVENT:
+                    # Issue #62: the state a fork persisted at its cut. Folded
+                    # here (not seeded up front) so ``active``'s seq order gives
+                    # the precedence for free: the snapshot lands above the
+                    # inherited deltas it was built from and below anything the
+                    # branch writes after the fork.
+                    snapshot_state = payload.get("state")
+                    if isinstance(snapshot_state, dict):
+                        state.update(snapshot_state)
 
         # Additive: a turn with a persisted trace carries it on its payload as
         # ``steps`` (the same ordered record the live ``stage`` frames fold to).
@@ -491,9 +624,19 @@ class EventLog:
         """Create a branch whose projection is ``source`` up to ``at_seq``.
 
         History is not copied -- only a session row pointing back at the source
-        is written (F2). The source's session-constant config rows *after* the
-        cut ARE carried onto the branch (see :meth:`_carry_config`), so a swipe
-        keeps a persona/world/assistant/memory assigned after the swiped turn.
+        is written (F2). Two things ARE written onto the branch:
+
+        * the source's session-constant config rows *after* the cut
+          (:meth:`_carry_config`), so a swipe keeps a persona/world/assistant/
+          memory assigned after the swiped turn;
+        * ONE complete state snapshot of the session at the cut
+          (:meth:`_carry_state`, issue #62), so the new chat holds the whole
+          state -- entity registry, plan, tracks, every object -- beside the
+          inherited history.
+
+        Building the snapshot is the only work done before the transaction: it
+        is a pure read, and doing it first means a fork that cannot assemble its
+        state writes nothing at all.
         Returns ``new_session_id``.
         """
         if at_seq < 0:
@@ -506,6 +649,9 @@ class EventLog:
         if exists is not None:
             raise ValueError(f"session already exists: {new_session_id!r}")
 
+        # Read-only, outside the write lock: the state this fork is cut from.
+        snapshot = self.build_state_snapshot(source_session, at_seq)
+
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             self._ensure_session(source_session)
@@ -515,11 +661,117 @@ class EventLog:
                 (new_session_id, source_session, at_seq, _now()),
             )
             self._carry_config(source_session, new_session_id, at_seq)
+            self._carry_state(new_session_id, snapshot)
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
         self._conn.execute("COMMIT")
         return new_session_id
+
+    def _carry_state(self, new_session_id: str, snapshot: dict) -> None:
+        """Re-append the cut's state snapshot onto the branch (issue #62).
+
+        Called inside :meth:`fork_session`'s transaction, after
+        :meth:`_carry_config` (so the branch's first own row stays the carried
+        config, which the era-marker/branch-kind readers depend on). ONE
+        ``system`` row: append-only like everything else (ADR-001), revisable
+        through the ordinary revision door (ADR-002, the superseding payload
+        wins latest-wins), and read back by :meth:`get_state_snapshot`.
+        """
+        self._insert_event(
+            session_id=new_session_id,
+            type="system",
+            actor=STATE_SNAPSHOT_ACTOR,
+            payload=snapshot,
+            ts=None,
+            ephemeral=False,
+            meta={},
+            supersedes=None,
+            schema_version=SCHEMA_VERSION,
+        )
+
+    def build_state_snapshot(self, session_id: str, at_seq: int) -> dict:
+        """The complete state of ``session_id`` AT ``at_seq`` (issue #62).
+
+        Assembled from the existing projection reads only -- there is no second
+        fold here and no chain walk of its own:
+
+        * ``state`` -- :meth:`get_projection` truncated at the cut (the
+          fork- and revision-aware fold of the ``state-delta`` rows);
+        * ``registry`` -- :func:`fabulist.state.entities.registry` over a
+          :class:`_CutView`, i.e. every established object: locations, threads
+          (the plot tracks), relationships, meters, items, conditions, bodies,
+          the economy purse, being→location assignments and the legacy shim;
+        * ``plan`` -- :func:`fabulist.graph.plans.load_last_plan` over the same
+          cut view, so a fork inherits the plan only when it sits AT or BELOW
+          the cut (a plan written above the cut is not the state the fork was
+          cut from) and therefore does not re-plan inside its inherited cadence
+          window.
+
+        ``None`` values are normalized to empty shapes (``state``/``registry``
+        dicts, ``plan`` null) so a reader never has to guess. Nothing above the
+        cut is read: every fold above runs over ``seq <= at_seq``.
+        """
+        if at_seq < 0:
+            raise ValueError("at_seq must be >= 0")
+        # Lazy imports: ``fabulist.state.entities`` pulls the state layer and
+        # ``fabulist.graph.plans`` the graph layer, both of which import THIS
+        # package (the ``_render_user_texts`` pattern for a cycle-free leaf).
+        from fabulist.graph.plans import load_last_plan
+        from fabulist.state.entities import registry
+
+        view = _CutView(self, session_id, at_seq)
+        projection = self.get_projection(session_id, at_seq=at_seq)
+        plan = load_last_plan(view, session_id)
+        return {
+            "event": STATE_SNAPSHOT_EVENT,
+            "at_seq": at_seq,
+            "state": dict(projection.get("state") or {}),
+            "registry": asdict(registry(view, session_id)),
+            "plan": plan.to_dict() if plan is not None else None,
+        }
+
+    def get_state_snapshot(self, session_id: str) -> dict | None:
+        """The session's OWN persisted state snapshot, or ``None``.
+
+        Session-local by construction (``get_events``): this is the read a
+        branch does FIRST, and it never touches the parent chain, so a fork's
+        state survives its parent's later writes and costs no ancestor walk.
+        Revisions are applied latest-wins (ADR-002), so a corrected snapshot
+        reads as corrected. A pre-#62 branch owns no snapshot row and gets
+        ``None`` -- callers fall back to :meth:`get_session_state`.
+        """
+        own = [
+            event
+            for event in self.get_events(session_id)
+            if is_state_snapshot_event(event)
+        ]
+        if not own:
+            return None
+        resolved = self._resolve_payloads(own)
+        latest = own[-1]
+        payload = resolved.get(latest.id) or {}
+        snapshot = dict(payload)
+        snapshot.setdefault("event", STATE_SNAPSHOT_EVENT)
+        snapshot["seq"] = latest.seq
+        return snapshot
+
+    def get_session_state(self, session_id: str) -> dict:
+        """A session's state, snapshot FIRST and parent chain as fallback.
+
+        The read contract issue #62 lands: a branch resolves the state it
+        persisted at its cut; a legacy (pre-#62) session and a root session have
+        no snapshot row, so the same dict is folded from the chain as before --
+        old branches keep working, they just pay the walk they always paid.
+        ``persisted`` names which path answered, so a caller (or a test) can
+        tell them apart without guessing.
+        """
+        snapshot = self.get_state_snapshot(session_id)
+        if snapshot is not None:
+            return {**snapshot, "persisted": True}
+        chain = self.get_chain_events(session_id)
+        tip = max((event.seq for event in chain), default=0)
+        return {**self.build_state_snapshot(session_id, tip), "persisted": False}
 
     def _carry_config(
         self, source_session: str, new_session_id: str, at_seq: int
