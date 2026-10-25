@@ -326,6 +326,9 @@
 		if (row.via === 'authored') return 'set here';
 		const [kind, key] = row.via.split(':', 2);
 		if (kind === 'legacy') return `via legacy ${key}`;
+		// A task-less TYPE served by the item slot declared under it
+		// (`embedding` -> `item:embedder`): the item is what actually runs.
+		if (kind === 'item') return `via ${key} slot`;
 		return key.includes('.') ? `via task ${key}` : 'via type default';
 	}
 
@@ -1384,7 +1387,8 @@
 					{/each}
 					<p class="hint">
 						Each row shows the connection it resolves to and how it got there (its own key, a
-						legacy alias, the task, or the type default). Rebinding saves immediately — callers
+						legacy alias, the task, the type default, or the item slot that serves the type).
+						Rebinding saves immediately — callers
 						pick it up on the next turn (no restart).
 					</p>
 				{/if}

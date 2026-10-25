@@ -6,15 +6,19 @@ W9.25 lets that map ALSO carry typed slots — ``completion``,
 ``completion.narration``, ``completion.extraction``, ``completion.state``,
 ``embedding`` — so a model can be bound "under the type OR per item as today".
 The hierarchy lives HERE, in code, never in the document's shape: one flat map
-stays the schema of record, and compatibility is exact (a config with only the
-legacy keys resolves byte-identically — no typed key authored means
-:func:`resolve_slot` short-circuits at the exact key).
+stays the schema of record, and compatibility is exact: every key a live
+config authors keeps resolving to the same connection, and no typed key
+authored means :func:`resolve_slot` short-circuits at the name's own spelling
+(the one intended exception is read-side — a task-less TYPE row reports the
+item slot that actually serves it, see below — and it never changes which
+connection a key a config authored resolves to).
 
 Vocabulary
 ----------
 * **types**: ``completion`` | ``embedding`` | ``decision``. ``decision`` is both
   the type name and the live item key (the decision model is one model), and
-  ``embedding`` is a legal type key that no live config authors yet.
+  ``embedding`` is a legal type key that live configs rarely author — the live
+  binding is the ``embedder`` item key, which IS what serves the type.
 * **tasks**: under ``completion`` only — ``narration`` | ``extraction`` |
   ``state``.
 * **legacy twins**: ``narrator`` == ``completion.narration`` and ``extractor``
@@ -30,7 +34,22 @@ Resolution — ONE rule, both directions
 --------------------------------------
 :func:`resolve_slot` tries, in order: **both spellings of the name's twin pair
 (typed first)**, then the item's **affinity task key** (both of ITS spellings —
-the twin rule holds at every level), then the **type key**.
+the twin rule holds at every level), then the **type key**. A TYPE that has NO
+task layer (``embedding``, ``decision`` — ``TASKS`` names none) additionally
+falls DOWN to the affinity-``None`` item slots declared under it, in
+``ITEM_SLOTS`` declaration order: its own exact key is tried FIRST, so an
+authored typed key always wins, and an item key (``embedder``) is the fallback
+rather than a dead end. That downward leg exists because the item slot is what
+actually serves the type: authoring only ``embedder`` means embedding calls
+WORK, so the type row must not read "unresolved" (a false dead reading caused a
+production incident). Types WITH a task layer (``completion``) deliberately get
+no downward leg: its item slots (``summarizer``/``captioner``/``imagegen``) are
+optional extras, and letting ``completion`` resolve through ``imagegen`` would
+report the completion type as served by an image model. This fallback is
+read-side and call-side consistent — :func:`resolve_slot`, :func:`slot_view`
+and :func:`~fabulist.connections.registry.configuration_report` all agree — and
+it never outranks an authored key: the type's own spelling is tried first.
+
 Because the twin pair is symmetric, resolving ``"narrator"`` and resolving
 ``"completion.narration"`` are the SAME lookup — typed beats twin, so authoring
 ``completion.narration`` makes the legacy ``narrator`` key inert, and authoring
@@ -63,6 +82,7 @@ __all__ = [
     "declared_spellings",
     "resolve_interaction_agent",
     "resolve_slot",
+    "serving_item_slots",
     "slot_view",
 ]
 
@@ -189,13 +209,32 @@ def _type_of(name: str) -> str | None:
     return None
 
 
+def serving_item_slots(type_name: str) -> tuple[str, ...]:
+    """The item slots declared under ``type_name`` with NO affinity task.
+
+    Declaration order, as :data:`ITEM_SLOTS` states it. These are the keys that
+    serve the TYPE itself (``embedding`` -> ``embedder``); an item slot with an
+    affinity (``summarizer``/``captioner`` -> ``completion.extraction``) belongs
+    to a TASK and never represents its type.
+    """
+    return tuple(
+        item
+        for item, (item_type, affinity) in ITEM_SLOTS.items()
+        if item_type == type_name and affinity is None
+    )
+
+
 def candidate_slots(name: str) -> tuple[str, ...]:
     """The ``agents`` keys :func:`resolve_slot` consults for ``name``, in order.
 
     Item (both twin spellings, typed first) > affinity task (both of ITS twin
     spellings — the twin rule applies at every level, so an authored ``extractor``
-    IS an authored extraction-task key) > type. Exposed for tests and for the
-    drawer's provenance line; the precedence itself lives only here.
+    IS an authored extraction-task key) > type > (for a TYPE with no task layer)
+    the item slots that serve that type: ``embedding`` -> ``("embedding",
+    "embedder")``, ``decision`` -> ``("decision",)``. The type's OWN key comes
+    first, so an authored typed spelling always beats the item fallback.
+    Exposed for tests and for the drawer's provenance line; the precedence
+    itself lives only here.
     """
     candidates: list[str] = list(_twin_pair(name))
     affinity = ITEM_SLOTS.get(name)
@@ -207,6 +246,10 @@ def candidate_slots(name: str) -> tuple[str, ...]:
     type_name = _type_of(name)
     if type_name is not None:
         candidates.append(type_name)
+    # Downward leg, TASK-LESS TYPES only (a type with a task layer keeps its
+    # single-purpose item slots as optional extras, not as its own fallback).
+    if name in TYPES and not TASKS.get(name):
+        candidates.extend(serving_item_slots(name))
     seen: set[str] = set()
     ordered: list[str] = []
     for candidate in candidates:
@@ -221,7 +264,9 @@ def resolve_slot(agents: Mapping[str, str], name: str) -> str | None:
 
     ``agents`` is the registry's raw slot -> connection map. Order: the name's
     twin pair (typed spelling first), the item's affinity task key, the type
-    key. ``None`` means "no authored key covers this slot" — the registry raises
+    key, then — for a task-less TYPE only — the item slots declared under it
+    (``embedding`` -> ``embedder``). ``None`` means "no authored key covers this
+    slot" — the registry raises
     :class:`~fabulist.connections.registry.ConnectionConfigError` naming it.
     """
     for candidate in candidate_slots(name):
@@ -239,11 +284,18 @@ def _resolved_slot(agents: Mapping[str, str], name: str) -> tuple[str, str] | No
 
 
 def _via(slot: str, matched: str) -> str:
-    """Provenance for a slot resolved through ``matched`` (see :func:`slot_view`)."""
+    """Provenance for a slot resolved through ``matched`` (see :func:`slot_view`).
+
+    ``authored`` (the slot's own key) | ``legacy:<key>`` (its legacy twin) |
+    ``type:<key>`` (an ancestor slot key) | ``item:<slot>`` (a TYPE served by the
+    item slot declared under it, e.g. ``embedding`` -> ``item:embedder``).
+    """
     if matched == slot:
         return "authored"
     if matched in LEGACY_TWINS:
         return f"legacy:{matched}"
+    if matched in ITEM_SLOTS:
+        return f"item:{matched}"
     return f"type:{matched}"
 
 
@@ -347,8 +399,9 @@ def slot_view(agents: Mapping[str, str]) -> list[dict[str, Any]]:
     (``type``/``task`` ``None``): "per item as today" stays first-class and
     visible. ``via`` is ``authored`` (the slot's own key), ``legacy:<key>`` (its
     legacy twin), ``type:<key>`` (an ancestor slot key — a task or type key),
-    or ``None`` (unresolved). Legacy keys never get their own row; they appear
-    in the typed slot's ``aliases``.
+    ``item:<slot>`` (a task-less TYPE served by the item slot declared under it,
+    e.g. ``embedding`` -> ``item:embedder``), or ``None`` (unresolved). Legacy
+    keys never get their own row; they appear in the typed slot's ``aliases``.
     """
     rows: list[dict[str, Any]] = []
     for type_name in TYPES:

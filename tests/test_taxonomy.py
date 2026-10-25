@@ -9,6 +9,11 @@ The load-bearing pins live here:
 * zero migration — a config with only the seven legacy keys resolves every key,
   unchanged;
 * precedence item > task > type, typed spelling beats legacy twin;
+* a TASK-LESS type falls DOWN to the item slot that serves it (``embedding`` ->
+  ``embedder``) — the type row must never read "unresolved" while embedding
+  calls work (D1: that false dead reading caused a production incident) — while
+  a type WITH a task layer (``completion``) never does;
+* an authored typed key still wins over the item fallback;
 * authored-but-undeclared custom keys resolve as per-item slots and render;
 * ``slot_view`` (the drawer/API payload) reports the SAME resolution the registry
   performs, with provenance.
@@ -19,7 +24,7 @@ from __future__ import annotations
 import pytest
 
 from fabulist.connections import taxonomy
-from fabulist.connections.registry import ConnectionConfigError, Registry
+from fabulist.connections.registry import ConnectionConfigError, Registry, configuration_report
 from fabulist.prompts.agent_sets import DEFAULT_BINDINGS, INTERACTIONS
 
 #: The seven keys a live/legacy ``connections.json`` authors today.
@@ -165,7 +170,8 @@ def test_candidate_order_is_item_then_task_then_type():
     assert taxonomy.candidate_slots("imagegen") == ("imagegen", "completion")
     assert taxonomy.candidate_slots("embedder") == ("embedder", "embedding")
     assert taxonomy.candidate_slots("completion") == ("completion",)
-    assert taxonomy.candidate_slots("embedding") == ("embedding",)
+    # A task-less TYPE falls down to the item slots that serve it.
+    assert taxonomy.candidate_slots("embedding") == ("embedding", "embedder")
     assert taxonomy.candidate_slots("decision") == ("decision",)
     assert taxonomy.candidate_slots("my-own-slot") == ("my-own-slot",)
 
@@ -191,6 +197,91 @@ def test_type_key_is_the_last_resort():
 def test_embedder_resolves_through_the_embedding_type():
     assert taxonomy.resolve_slot({"embedder": "own"}, "embedder") == "own"
     assert taxonomy.resolve_slot({"embedding": "type"}, "embedder") == "type"
+
+
+# --- type -> item fallback (D1) ---------------------------------------------------
+#
+# A TYPE with NO task layer (``embedding``, ``decision``) falls DOWN to the
+# affinity-None item slots declared under it. ``embedder`` IS what serves
+# ``embedding``, so authoring only ``embedder`` must never render the embedding
+# TYPE row as unresolved (the incident: the drawer said "unresolved" and
+# ``unbound_slots`` listed ``embedding`` while embedding calls worked). A type
+# WITH a task layer keeps its single-purpose item slots as optional extras:
+# ``completion`` must not read as served by an image model.
+
+
+def test_serving_item_slots_are_the_affinity_none_items_of_a_type():
+    assert taxonomy.serving_item_slots("embedding") == ("embedder",)
+    assert taxonomy.serving_item_slots("decision") == ()
+    assert taxonomy.serving_item_slots("ghost") == ()
+    # ``imagegen`` is declared under completion with no affinity, but the
+    # task-layer gate in ``candidate_slots`` keeps it out of the type's order.
+    assert taxonomy.serving_item_slots("completion") == ("imagegen",)
+    assert taxonomy.candidate_slots("completion") == ("completion",)
+
+
+def test_authored_item_slot_serves_its_taskless_type_row():
+    """D1 regression: fails on the old dead-end order ``embedding -> ('embedding',)``."""
+    assert taxonomy.candidate_slots("embedding") == ("embedding", "embedder")
+    assert taxonomy.resolve_slot({"embedder": "sidecar-embed"}, "embedding") == (
+        "sidecar-embed"
+    )
+
+
+def test_slot_view_type_row_reports_the_item_slot_that_serves_it():
+    agents = {"embedder": "sidecar-embed", "reranker": "x", "decision": "d"}
+    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
+
+    assert rows["embedding"]["connection"] == "sidecar-embed"
+    assert rows["embedding"]["via"] == "item:embedder"
+    # the item row itself stays authored, and its provenance is unchanged
+    assert rows["embedder"]["connection"] == "sidecar-embed"
+    assert rows["embedder"]["via"] == "authored"
+    # custom per-item keys and the decision type are untouched by the fallback
+    assert rows["reranker"]["via"] == "authored"
+    assert rows["decision"]["connection"] == "d"
+    assert rows["decision"]["via"] == "authored"
+
+
+def test_configuration_report_does_not_call_the_embedding_type_unbound():
+    report = configuration_report(_registry({"embedder": "sidecar-embed"}))
+    assert "embedder" not in report["unbound_slots"]
+    assert "embedding" not in report["unbound_slots"]
+    # a type nothing serves is still reported honestly
+    assert "decision" in report["unbound_slots"]
+
+
+def test_completion_never_resolves_through_its_optional_item_slots():
+    """Guards the task-layer exclusion: ``imagegen`` is an extra, not the type."""
+    agents = {"imagegen": "img"}
+    assert taxonomy.resolve_slot(agents, "completion") is None
+
+    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
+    assert rows["completion"]["connection"] is None
+    assert rows["completion"]["via"] is None
+    assert rows["imagegen"]["via"] == "authored"
+
+    report = configuration_report(_registry(agents))
+    assert "completion" in report["unbound_slots"]
+
+
+def test_an_authored_typed_key_beats_the_item_slot():
+    agents = {"embedding": "typed-emb", "embedder": "item-emb"}
+    assert taxonomy.candidate_slots("embedding")[0] == "embedding"
+    assert taxonomy.resolve_slot(agents, "embedding") == "typed-emb"
+
+    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
+    assert rows["embedding"]["connection"] == "typed-emb"
+    assert rows["embedding"]["via"] == "authored"
+    # the item slot keeps its own item-then-type order (unchanged)
+    assert taxonomy.resolve_slot(agents, "embedder") == "item-emb"
+
+
+def test_the_type_row_and_the_registry_agree_after_the_fallback():
+    agents = {"embedder": "sidecar-embed"}
+    registry = _registry(agents)
+    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
+    assert rows["embedding"]["connection"] == registry.connection_for("embedding").name
 
 
 def test_undeclared_custom_key_resolves_as_a_per_item_slot():
