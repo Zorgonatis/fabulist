@@ -482,13 +482,22 @@ def test_a_repair_can_set_a_body_and_only_adjust_a_purse_that_exists(log):
 # -- §3.3 the tail -----------------------------------------------------------
 
 
-def test_the_protocol_and_palette_ride_a_final_system_message(log):
+def test_the_protocol_and_palette_ride_an_assistant_tail_before_the_final_user_message(
+    log,
+):
+    """Issue #67: the seed tail is an ASSISTANT message, never a second system one.
+
+    A stock Jinja chat template (the Qwen family) ``raise_exception``s on any
+    system message after index 0, so the old ``[system, user, system]`` seed was a
+    hard 500 in the seed phase. The tail rides the narrator's own carrier
+    (``prompts.envelope``): immediately before the FINAL USER message.
+    """
     caller = LoopCaller((None, "nothing to seed."), (None, PLAN_JSON))
     run(_node(log, caller)(_state(log)))
 
     messages = caller.calls[0]["messages"]
-    assert [message["role"] for message in messages] == ["system", "user", "system"]
-    system, ask, tail = (message["content"] for message in messages)
+    assert [message["role"] for message in messages] == ["system", "assistant", "user"]
+    system, tail, ask = (message["content"] for message in messages)
     assert system.startswith("You are the story planner")
     assert BOOTSTRAP_DIRECTIVE in tail
     # The palette is byte-identical to the tracker's own tail render.
@@ -499,6 +508,11 @@ def test_the_protocol_and_palette_ride_a_final_system_message(log):
     assert ESTABLISH_ECONOMY_TOOL in tail and SET_BODY_TOOL in tail
     assert ESTABLISH_ECONOMY_TOOL not in system + ask
     assert SET_BODY_TOOL not in system + ask
+    # The player's message space is untouched (owner ruling): the ask is the
+    # compiled prompt alone, no engine bytes folded in.
+    assert BOOTSTRAP_DIRECTIVE not in ask and registry_palette(log, SID) not in ask
+    # And only ONE system message exists, at index 0.
+    assert [i for i, m in enumerate(messages) if m["role"] == "system"] == [0]
 
 
 def test_the_bootstrap_directive_teaches_the_two_optional_seeds(log):
@@ -548,10 +562,12 @@ def test_repair_swaps_the_directive_in_the_same_tail_position(log):
     run(_node(log, caller)(_state(log)))
 
     messages = caller.calls[0]["messages"]
-    assert [message["role"] for message in messages] == ["system", "user", "system"]
-    assert REPAIR_DIRECTIVE in messages[-1]["content"]
-    assert BOOTSTRAP_DIRECTIVE not in messages[-1]["content"]
-    assert "Repair the object stores for turn 0" in messages[1]["content"]
+    assert [message["role"] for message in messages] == ["system", "assistant", "user"]
+    # The repair directive rides the SAME carrier as the bootstrap one (issue #67).
+    assert REPAIR_DIRECTIVE in messages[1]["content"]
+    assert BOOTSTRAP_DIRECTIVE not in messages[1]["content"]
+    assert "Repair the object stores for turn 0" in messages[2]["content"]
+    assert REPAIR_DIRECTIVE not in messages[2]["content"]
 
 
 # -- D9a ensure_roster FIRST -------------------------------------------------

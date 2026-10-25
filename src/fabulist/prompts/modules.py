@@ -86,7 +86,7 @@ from .surfaces import (
     preset_surfaces,
 )
 from .variables import render_template
-from .envelope import insert_engine_envelope
+from .envelope import ENVELOPE_ROLE, insert_engine_envelope
 from .wrapper import fold_system_prefix
 
 __all__ = [
@@ -440,6 +440,15 @@ def _session_module_row(entry: dict) -> PromptModule | None:
     Returns ``None`` for a disabled row or a blank body (an empty text module
     is prompt noise). ``type`` is always ``"text"`` — the session module owns
     its rendered content; ``role`` selects the chat role.
+
+    Issue #68: a row anchored ``post_history`` renders AFTER history, so a
+    ``system`` role there is a system message after index 0 — a hard 500 on a
+    stock Jinja chat template (the Qwen family). A card's
+    ``post_history_instructions`` is authored to sit immediately before the ask,
+    so it keeps that position and rides the narrator's ``assistant`` carrier
+    (``prompts.envelope.ENVELOPE_ROLE``) instead of moving into the frozen
+    prefix — where a card edit would rewrite the whole cache (ADR-005). An
+    explicit non-system role (a user-authored row) is never overridden.
     """
     if not entry.get("enabled", True):
         return None
@@ -450,6 +459,8 @@ def _session_module_row(entry: dict) -> PromptModule | None:
     role = entry.get("role") or "system"
     if role not in ("system", "user", "assistant"):
         role = "system"
+    if role == "system" and entry.get("anchor") == "post_history":
+        role = ENVELOPE_ROLE
     return PromptModule(
         id=str(entry.get("module_id") or uuid.uuid4().hex),
         name=str(entry.get("name") or "Session module"),

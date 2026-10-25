@@ -45,7 +45,9 @@ def test_top_lands_after_system_prefix_post_before_final_user():
         ("system", "narrator prefix"),
         ("system", "TOP-MODULE"),
         ("user", "seed history row"),
-        ("system", "POST-MODULE"),
+        # Issue #68: a post_history row rides the ASSISTANT carrier — a system
+        # row after history is a hard 500 on a stock Jinja chat template.
+        ("assistant", "POST-MODULE"),
         ("user", "the actual turn"),
     ]
 

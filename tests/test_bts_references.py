@@ -1347,18 +1347,24 @@ def test_the_tail_message_overrides_a_stored_notation_prompt(build_log):
     A stored preset customisation of the bts surface can therefore never drop
     either of them — the seeded prefix stays byte-stable (AGENTS 6) and the
     action protocol plus the registry arrive last, whatever the prefix says.
+    Issue #67: "last" is the ASSISTANT message immediately before the final user
+    message, never a trailing system message a stock Jinja template would 500 on.
     """
     caller = _StructuredCaller([[{"type": "content", "delta": "recorded"}]])
     runner = BtsRunner(
         caller, log=build_log(), profile_fn=lambda: {"tools": [bts_tool()], "tool_choice": "required"}
     )
     run(runner("hello", "Zahra narrows her eyes."))
-    last = caller.calls[0][-1]
-    assert last["role"] == "system"
-    assert last["content"].startswith(BTS_ACTION_PROTOCOL)
-    assert ENTITY_PALETTE_DIRECTIVE in last["content"]
+    messages = caller.calls[0]
+    assert [m["role"] for m in messages] == ["system", "assistant", "user"]
+    tail = messages[-2]
+    assert tail["role"] == "assistant"
+    assert tail["content"].startswith(BTS_ACTION_PROTOCOL)
+    assert ENTITY_PALETTE_DIRECTIVE in tail["content"]
     # The seeded system prompt above it is untouched by the swap.
-    assert caller.calls[0][0]["content"] == BTS_SYSTEM_PROMPT
+    assert messages[0]["content"] == BTS_SYSTEM_PROMPT
+    # …and the payload below it is the flow's own user message, not the tail.
+    assert BTS_ACTION_PROTOCOL not in messages[-1]["content"]
 
 
 def test_legacy_path_skips_role_words_and_pronouns(cast_proposals):

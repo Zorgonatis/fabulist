@@ -773,9 +773,21 @@ def _render_session(app, session_id: str, payload):
 
 
 def _context_message(call: list[dict]) -> str | None:
-    """The injected CAST/RECENT system message from a captured call, or None."""
+    """The injected CAST/RECENT block from a captured call, or None.
+
+    Issue #68: the request template and the session context are FOLDED into ONE
+    system message (a second system message is a 500 on a stock Jinja chat
+    template — the Qwen family), joined by the renderer's own section divider
+    ``prompts.wrapper.PREFIX_DIVIDER``. The template still leads verbatim; the
+    context follows it.
+    """
     systems = [m for m in call if m["role"] == "system"]
-    return systems[1]["content"] if len(systems) > 1 else None
+    if len(systems) != 1:
+        return None
+    head, _, tail = str(systems[0]["content"]).partition("\n\n")
+    if head != "SYS":  # the template leads, byte-verbatim
+        return None
+    return tail or None
 
 
 def test_session_render_unknown_session_is_404(build_app):
@@ -802,8 +814,10 @@ def test_session_render_inherits_cast_through_fork_chain(build_app):
     ctx = _context_message(fake.calls[0])
     assert ctx is not None
     assert "CAST CONTEXT" in ctx and "Tessa" in ctx
-    # The template stays verbatim; the request still arrives as the final USER.
-    assert fake.calls[0][0] == {"role": "system", "content": "SYS"}
+    # The template stays verbatim in the ONE leading system message; the request
+    # still arrives as the final USER message.
+    assert fake.calls[0][0]["role"] == "system"
+    assert fake.calls[0][0]["content"].startswith("SYS\n\n")
     assert fake.calls[0][-1] == {"role": "user", "content": "A picture of Tessa"}
 
 

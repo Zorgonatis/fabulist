@@ -439,7 +439,10 @@ def test_validation_notice_sits_directly_after_its_narrative_and_not_in_recalled
         assert messages[narrative_index]["role"] == "assistant"
         # Pin (b): index relationship — the notice is the VERY NEXT message.
         notice_index = narrative_index + 1
-        assert messages[notice_index]["role"] == "system"
+        # Issue #68: the notice rides the ASSISTANT carrier, not a second system
+        # message (a stock Jinja template refuses any system message after index
+        # 0). Its POSITION is unchanged — directly after the narrative it flags.
+        assert messages[notice_index]["role"] == "assistant"
         assert _payload(contents[notice_index]).startswith("<validation_notice>")
         assert NOTICE_FLAG["fix"] in contents[notice_index]
         # ... and the trailing envelope does NOT carry the notice: it is
@@ -480,7 +483,7 @@ def test_a_validation_notice_does_not_move_the_provenance_hash(tmp_path: Path) -
             if message not in with_notice_absent
         ]
         assert len(removed) == 1
-        assert removed[0]["role"] == "system"
+        assert removed[0]["role"] == "assistant"  # issue #68: never a system row
         assert _payload(removed[0]["content"]).startswith("<validation_notice>")
         # Prefix byte-stability: every message before the notice is identical.
         assert with_notice_present[: with_notice_present.index(removed[0])] == (

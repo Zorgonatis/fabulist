@@ -161,6 +161,11 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, Sequence
 
+from ..prompts.envelope import (
+    assert_envelope_not_in_system_scope,
+    assert_envelope_not_in_user_scope,
+    insert_engine_envelope,
+)
 from .cast import CastMember, REFERENCE_DESCRIPTOR, REFERENCE_IDENTITY
 
 logger = logging.getLogger(__name__)
@@ -3090,10 +3095,25 @@ class BtsRunner:
         # the seeded prefix stays byte-stable (AGENTS 6) and a stored preset
         # customisation of this surface cannot drop either of them (§7 N5). The
         # reconcile sentence is the LAST line on its turn — most recent wins.
+        #
+        # Issue #67: the tail is the NARRATOR's carrier (:mod:`fabulist.prompts.
+        # envelope`), not a second system message — ONE ephemeral ``assistant``
+        # message inserted immediately before the final user message, because a
+        # stock Jinja chat template refuses any system message after index 0
+        # ("System message must be at the beginning") and a local GGUF answered
+        # the old shape with a 500.
         tail = f"{BTS_ACTION_PROTOCOL}\n\n{registry_palette(self._log, session_id)}"
         if reconcile:
             tail = f"{tail}\n\n{RECONCILE_DIRECTIVE}"
-        seeded = [*messages, {"role": "system", "content": tail}]
+        # ``insert_engine_envelope`` copies: the caller's list is never mutated.
+        seeded, _def_end, _tail_at = insert_engine_envelope(
+            messages, len(messages), tail
+        )
+        # The envelope module's own provenance rails: engine-authored content
+        # reaches neither the player's message space nor a post-prefix system
+        # message (both RAISE, naming the offending index).
+        assert_envelope_not_in_user_scope(seeded, tail)
+        assert_envelope_not_in_system_scope(seeded, tail)
         watcher = _FinishWatch(self._caller)
         loop_result = await run_agent_loop(
             caller=watcher,
@@ -3202,8 +3222,14 @@ class BtsRunner:
         messages = self._messages(user_msg, narrative, None, False)
         # The directive IS the tail here: the action protocol and the registry
         # palette would both be wrong for this pass (it offers no write actions,
-        # and showing the registry would make every belief a copy of it).
-        seeded = [*messages, {"role": "system", "content": RECONCILE_DIRECTIVE}]
+        # and showing the registry would make every belief a copy of it). Issue
+        # #67: the tail rides the same assistant carrier as every other engine
+        # tail — immediately before the final user message, never a second system.
+        seeded, _def_end, _tail_at = insert_engine_envelope(
+            messages, len(messages), RECONCILE_DIRECTIVE
+        )
+        assert_envelope_not_in_user_scope(seeded, RECONCILE_DIRECTIVE)
+        assert_envelope_not_in_system_scope(seeded, RECONCILE_DIRECTIVE)
         watcher = _FinishWatch(self._caller)
         loop_result = await run_agent_loop(
             caller=watcher,

@@ -253,14 +253,20 @@ def test_history_places_the_notice_directly_after_its_narrative(tmp_path):
         if message["content"] == "Warmth spreads."
     )
     assert roles[narrative_index] == "assistant"
-    assert roles[narrative_index + 1] == "system"
+    # Issue #68: the notice is an ASSISTANT row at the same position — a system
+    # row there is a hard 500 on a stock Jinja chat template (the Qwen family).
+    assert roles[narrative_index + 1] == "assistant"
     assert hist[narrative_index + 1]["content"].startswith("<validation_notice>")
     assert NOTICE_FLAG["fix"] in hist[narrative_index + 1]["content"]
     # Exactly one notice, and it belongs to the second narrative (the first
-    # assistant message has no system turn after it).
-    assert [index for index, role in enumerate(roles) if role == "system"] == [
-        narrative_index + 1
-    ]
+    # assistant message carries no notice). Issue #68: history contains NO
+    # system rows at all — the notice rides the assistant carrier.
+    assert [index for index, role in enumerate(roles) if role == "system"] == []
+    assert [
+        index
+        for index, content in enumerate(str(m.get("content")) for m in hist)
+        if content.startswith("<validation_notice>")
+    ] == [narrative_index + 1]
 
 
 def test_a_notice_whites_out_with_the_narrative_the_depth_cut_drops(tmp_path):

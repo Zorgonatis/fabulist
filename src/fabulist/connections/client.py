@@ -14,6 +14,14 @@ names the provider's OWN error code (z.ai's ``{"error": {"code": "1301", …}}``
 :class:`ProviderRequestError`, so a platform CONTENT FILTER reads differently from a
 network fault — the code rides the message and the attribute, and the ADR-023 phase
 contract (phase + model) keeps working through the existing duck-typed chain walk.
+
+:func:`build_request` also enforces the ONE message-shape invariant (issues #67,
+#68): every ``system`` message must LEAD the list — only the leading run (the frozen
+prefix) may be system — because a stock Jinja chat template (the Qwen family) refuses
+any non-first one outright. The engine's per-turn rows (the tail envelope, a
+validation notice, a card's post-history instructions) ride the ``assistant`` carrier
+at their own position, and a list that breaks the rule raises
+:class:`SystemMessageOrderError` naming the index — at this chokepoint, never repaired.
 """
 
 from __future__ import annotations
@@ -39,6 +47,7 @@ __all__ = [
     "ModelCallDeadlineExceeded",
     "PROVIDER_FILTER_CODES",
     "ProviderRequestError",
+    "SystemMessageOrderError",
     "build_request",
     "call_deadline_s",
     "configure",
@@ -90,6 +99,87 @@ def configure(path: str | os.PathLike[str]) -> Registry:
     registry = load_registry(path)
     set_registry(registry)
     return registry
+
+
+class SystemMessageOrderError(RuntimeError):
+    """A built request carried a ``system`` message after index 0 (issue #67/#68).
+
+    Stock Jinja chat templates — the Qwen family among them — ``raise_exception``
+    with "System message must be at the beginning" on ANY system message that is
+    not the FIRST of the list, so such a payload is a hard 500 at the provider
+    before a single token is generated.
+
+    Four engine phases shipped exactly that shape (the planner seed, the planner
+    repair, the BTS action pass and the reconciliation pass): each appended its
+    protocol+palette tail as a TRAILING ``system`` message. Three more assembly
+    seams did too (issue #68): imagegen's ``[system, system, user]``, the
+    ``<validation_notice>`` riding history as a system row, and a card's
+    ``post_history_instructions`` rendering as a system row before the ask.
+
+    The engine tail is an ``assistant`` message inserted immediately before the
+    final user message — ``prompts.envelope``'s ONE carrier (``ENVELOPE_ROLE`` /
+    :func:`fabulist.prompts.envelope.insert_engine_envelope`), which the narrator
+    already rode. This class is the CENTRAL guard that keeps the shape from
+    branching off again: ``build_request`` is the chokepoint every consumer
+    rides, so a list is REFUSED here, naming the offending index and the slot
+    that built it.
+
+    The rule is STRICT — leading system run only, never "the tail row" — because
+    the template rule is strict: one non-leading system message is the whole
+    payload. All three #68 shapes were fixed to satisfy it in the same change;
+    a caller that reintroduces one meets this error instead of a provider 500.
+
+    Refused, never repaired (owner ruling, issue #67: "do not hide runtime
+    errors"): silently rewriting the list would move the offending message to a
+    role nobody chose — the exact provenance bug ``prompts.envelope`` exists to
+    prevent — and would let the phase whose assembly is wrong keep shipping.
+
+    ``transport = True`` is ADR-023's "fatal in a pre-commit phase" signal, which
+    :func:`fabulist.graph.provider_errors.phase_failure` reads: a request that is
+    illegal at the wire can never be answered, so containing the failure would
+    only surface it at the next phase, without its cause. The abort frame then
+    names the phase ("Planning (seed) failed: …"), the slot and the index.
+    """
+
+    #: True: no answer can arrive for a request the wire refuses — never content.
+    transport = True
+
+    def __init__(self, agent_name: str, index: int, total: int) -> None:
+        #: The slot whose built list is malformed (``narrator``, ``bts``, …).
+        self.agent = agent_name
+        #: The index of the offending (non-leading) ``system`` message.
+        self.index = int(index)
+        #: The list length, for the reader comparing the two numbers.
+        self.total = int(total)
+        super().__init__(
+            f"system message at index {self.index} of {self.total} "
+            f"(slot {agent_name!r}): a stock Jinja chat template (the Qwen "
+            "family) raises 'System message must be at the beginning' on any "
+            "system message after index 0 — the engine tail is an ASSISTANT "
+            "message inserted immediately before the final user message, and "
+            "every other engine row rides a non-system role (issues #67, #68)"
+        )
+
+
+def _assert_system_messages_lead(
+    agent_name: str, messages: list[dict[str, Any]]
+) -> None:
+    """Refuse a list whose ``system`` messages do not all lead (issues #67, #68).
+
+    The invariant is positional: only the LEADING run of ``system`` messages may
+    be system (what ``prompts.wrapper.fold_system_prefix`` produces for the
+    frozen prefix). The engine's per-turn rows — the tail envelope, a validation
+    notice, a card's post-history instructions — ride the ``assistant`` carrier
+    at their own position instead, which is legal on every template.
+
+    No slot is exempt: the narrator reaches here through the same
+    ``build_request``, and its assembly is held to the rule too.
+    """
+    for index, message in enumerate(messages):
+        if index == 0 or not isinstance(message, dict):
+            continue
+        if message.get("role") == "system":
+            raise SystemMessageOrderError(agent_name, index, len(messages))
 
 
 class ModelCallDeadlineExceeded(RuntimeError):
@@ -521,9 +611,16 @@ def build_request(
             f"build_request({agent_name!r}): request_profile extra_body must be an object"
         )
 
+    wire_messages = _with_reasoning_history(messages, connection)
+    # Issues #67/#68: the ONE shape guard. Every consumer rides this builder (the
+    # narrator, the tool loops, the extractor, imagegen), so "system messages
+    # LEAD and the engine tail is an assistant message" is enforced HERE rather
+    # than re-argued at each assembly seam. It refuses; it never repairs.
+    _assert_system_messages_lead(agent_name, wire_messages)
+
     kwargs: dict[str, Any] = {
         "model": connection.model,
-        "messages": _with_reasoning_history(messages, connection),
+        "messages": wire_messages,
     }
     # R5 (issue #26): the reasoning DEPTH is a TOP-LEVEL body field of the same
     # name, so it is set here — before the samplers and the profile — which keeps

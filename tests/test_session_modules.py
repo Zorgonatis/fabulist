@@ -358,10 +358,13 @@ def test_seeded_post_history_renders_after_history_before_user():
     messages = compile_flow("narrate", spliced, NARRATE_PARTS)
     roles = [m["role"] for m in messages]
     contents = [m["content"] for m in messages]
-    # history renders two messages (user, assistant); the post-history system
-    # message follows them and precedes the facts/user user-messages.
+    # history renders two messages (user, assistant); the post-history row
+    # follows them and precedes the facts/user user-messages. Issue #68: it rides
+    # the ASSISTANT carrier — a system row after history is a 500 on a stock
+    # Jinja chat template, and its authored position (immediately before the ask)
+    # is preserved.
     post_at = contents.index("POST")
-    assert roles[post_at] == "system"
+    assert roles[post_at] == "assistant"
     assert contents.index("FACTS") > post_at
     assert contents.index("USER") > post_at
     assert contents.index("hey") < post_at

@@ -22,7 +22,11 @@ The protocol rides a runner-side TAIL message (:data:`BOOTSTRAP_DIRECTIVE` /
 :data:`REPAIR_DIRECTIVE` + the entity palette), exactly like
 :data:`fabulist.state.bts.BTS_ACTION_PROTOCOL`: AGENTS 6 keeps the seeded prefix
 (the preset's ``planner`` flow directive + the world/cast context) byte-stable, and
-a stored preset customisation cannot drop the protocol (D2).
+a stored preset customisation cannot drop the protocol (D2). The tail itself is the
+NARRATOR's carrier (issue #67): ONE ephemeral ``assistant`` message inserted
+immediately before the final user message, never a second ``system`` message — a
+stock Jinja chat template refuses any system message after index 0, which killed
+the turn in the seed phase.
 
 The plan itself is NOT produced here (§3.2): the phase's closing summary is
 discarded and the unchanged single-call plan ladder runs afterwards in the node.
@@ -36,6 +40,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..prompts.envelope import (
+    assert_envelope_not_in_system_scope,
+    assert_envelope_not_in_user_scope,
+    insert_engine_envelope,
+)
 from .bts import (
     FOLDED_STATE_TOOL,
     RECENT_DELTAS_TOOL,
@@ -368,14 +377,28 @@ async def run_planner_tool_phase(
         BOOTSTRAP_DIRECTIVE if bootstrap else REPAIR_DIRECTIVE,
         registry_palette(log, session_id),
     )
+    # The protocol + palette ride the TAIL (AGENTS 6, the
+    # ``BtsRunner._action_call`` position): the seeded prefix stays stable and
+    # nothing the model must obey lives where a preset edit could drop it.
+    #
+    # Issue #67: the tail is the NARRATOR's carrier, not a third system message —
+    # ONE ephemeral ``assistant`` message inserted immediately BEFORE the final
+    # user message (``prompts.envelope.ENVELOPE_ROLE`` / ``insert_engine_envelope``).
+    # A trailing system message is a hard 500 on a stock Jinja template ("System
+    # message must be at the beginning"), which killed the turn in the seed phase;
+    # folding it into the leading prefix is equally wrong (the protocol must not
+    # sit where a preset edit could drop it), and the player's message space is
+    # never touched. So: the seed shape is [system, assistant(tail), user(ask)].
     seeded = [
         {"role": "system", "content": system},
         {"role": "user", "content": ask},
-        # The protocol + palette ride the TAIL (AGENTS 6, the
-        # ``BtsRunner._action_call`` position): the seeded prefix stays stable and
-        # nothing the model must obey lives where a preset edit could drop it.
-        {"role": "system", "content": tail},
     ]
+    seeded, _def_end, _tail_at = insert_engine_envelope(seeded, len(seeded), tail)
+    # The two provenance rails, reusing the envelope module's own guards: the
+    # tail is engine-authored, so it may live in neither the player's message
+    # space nor a post-prefix system message (both RAISE, naming the index).
+    assert_envelope_not_in_user_scope(seeded, tail)
+    assert_envelope_not_in_system_scope(seeded, tail)
     tools = (
         planner_bootstrap_tools(log, session_id, turn)
         if bootstrap

@@ -90,6 +90,7 @@ from fabulist.log import EventLog
 from fabulist.prompts import assemble_messages
 from fabulist.prompts.compiler import DEFAULT_BUDGET, DEFAULT_HISTORY_STRIP_DSL
 from fabulist.prompts.envelope import (
+    ENVELOPE_ROLE,
     assert_envelope_not_in_system_scope,
     assert_envelope_not_in_user_scope,
     insert_engine_envelope,
@@ -842,11 +843,14 @@ def history_from_log(
     assistant / preview) leave this off: their history is not the same
     projection-plus-live-ask shape.
 
-    D-F: a flagged turn's ``validation_notice`` rides history as a ``system``
-    message IMMEDIATELY AFTER the narrative it refers to (the builder's demand:
-    the natural position, never the prefix and never ``<recalled>``). The notice
-    is attached AFTER the depth cut, so trimming can never leave an orphan
-    notice behind without its narrative.
+    D-F: a flagged turn's ``validation_notice`` rides history IMMEDIATELY AFTER the
+    narrative it refers to (the builder's demand: the natural position, never the
+    prefix and never ``<recalled>``). The notice is attached AFTER the depth cut,
+    so trimming can never leave an orphan notice behind without its narrative.
+    Issue #68: the notice is an ``assistant`` row, not a ``system`` one — a stock
+    Jinja chat template (the Qwen family) refuses any system message after index
+    0, and folding a PER-TURN notice into the stable prefix would break the cache
+    contract (ADR-005). Same position, same tag, legal role.
 
     W9.26 §2.4 (the era model): a turn already folded into a ``summary`` is DROPPED
     — its text reaches the model through the ``<recalled>`` recap instead, so the
@@ -1006,6 +1010,14 @@ def history_from_log(
     # refers to. Done after the depth cut and the regex stage (which only rewrites
     # the narrative/user strings) so an orphan notice can never survive a trim.
     # The chain was read once above (W9.26 §2.4) — this pass reuses those events.
+    #
+    # Issue #68: the row is an ASSISTANT message (``prompts.envelope.
+    # ENVELOPE_ROLE``), never a second ``system`` one — the template rule (the
+    # Qwen family raises "System message must be at the beginning") makes any
+    # non-leading system row a hard 500. The POSITION is unchanged (D-F: directly
+    # after the narrative it flags, which is also cache-stable — the notice never
+    # edits bytes above it); only the role moves, exactly the carrier the
+    # narrator's own engine envelope already rides.
     notices = validation_notices(log, session_id, events=chain_events)
     if notices:
         interleaved: list[dict] = []
@@ -1013,7 +1025,7 @@ def history_from_log(
             interleaved.append(message)
             notice = notices.get(seq)
             if notice:
-                interleaved.append({"role": "system", "content": notice})
+                interleaved.append({"role": ENVELOPE_ROLE, "content": notice})
         treated = interleaved
     return treated
 
@@ -1293,11 +1305,19 @@ def _splice_compiled_messages_with_counts(
     this is the byte-faithful compiler path's equivalent. ``top`` rows insert
     after the leading system prefix (ahead of history); ``post_history`` rows
     insert immediately before the final user message — the turn's actual ask.
-    Each row renders as one system-role message carrying its content verbatim.
     Returns a NEW list plus ``(top_count, post_count)`` — both land BEFORE the
     final user message, so both shift the ``<preset_def>`` close (§5.1, issue
     #26; ``top`` rows shift the history-splice boundary as well). The input is
     never mutated.
+
+    Roles (issue #68): a ``top`` row rides the leading ``system`` run (it is
+    inside the frozen prefix, which ``fold_system_prefix`` folds into ONE), while
+    a ``post_history`` row — a card's ``post_history_instructions`` — rides the
+    ``assistant`` carrier. It sits AFTER history, so a system role there is a
+    system message after index 0: a hard 500 on a stock Jinja template (the
+    Qwen family). Its POSITION is deliberately unchanged (the card author put it
+    immediately before the ask), so the served content and its recency survive;
+    only the role moves.
     """
 
     tops: list[dict] = []
@@ -1305,8 +1325,12 @@ def _splice_compiled_messages_with_counts(
     for row in rows:
         if not isinstance(row, dict) or not row.get("enabled", True):
             continue
-        msg = {"role": "system", "content": str(row.get("content") or "")}
-        (posts if row.get("anchor") == "post_history" else tops).append(msg)
+        post = row.get("anchor") == "post_history"
+        stored = str(row.get("role") or "system")
+        if post and stored == "system":
+            stored = ENVELOPE_ROLE
+        msg = {"role": stored, "content": str(row.get("content") or "")}
+        (posts if post else tops).append(msg)
     if not tops and not posts:
         return messages, 0, 0
     out = list(messages)

@@ -503,8 +503,16 @@ async def _render_prompts(
     usage row — must be present; otherwise :class:`RenderUnavailable` is raised
     so the run endpoint can take its degraded path and the render route can
     report a row-level error.
+
+    Issue #68: those two system messages are folded into ONE by
+    :func:`fabulist.prompts.wrapper.fold_system_prefix` — the same mechanism the
+    narrator's frozen prefix uses — because a stock Jinja chat template (the
+    Qwen family) refuses a second system message outright. Nothing is lost: the
+    blocks keep their order and are joined by the renderer's own section
+    divider, and the request template still never gets rewritten.
     """
     from fabulist.graph.types import collect_text
+    from fabulist.prompts.wrapper import fold_system_prefix
 
     if not callable(caller):
         raise RenderUnavailable("imagegen caller unavailable")
@@ -512,6 +520,7 @@ async def _render_prompts(
     if context:
         messages.append({"role": "system", "content": context})
     messages.append({"role": "user", "content": request_text})
+    messages, _ = fold_system_prefix(messages)
     positive, negative, path = parse_render(await collect_text(caller, messages))
     return {"positive": positive, "negative": negative, "parse": path}
 

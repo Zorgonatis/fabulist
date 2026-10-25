@@ -1023,10 +1023,12 @@ class _ScriptedCaller:
     def __init__(self, *replies):
         self.replies = list(replies)
         self.tails: list[str] = []
+        self.calls: list[list[dict]] = []
         self.profiles: list[dict | None] = []
 
     async def __call__(self, messages, stream=True, request_profile=None):
         self.tails.append(str(messages[-1].get("content") or ""))
+        self.calls.append([dict(message) for message in messages])
         self.profiles.append(request_profile)
         name, payload = self.replies.pop(0) if self.replies else (None, "checked.")
         if name is None:
@@ -1119,7 +1121,11 @@ def test_reconcile_now_files_drift_and_never_writes_the_registry(build_app):
     # The loop carried ONLY the reconcile tool and the directive was its tail.
     names = [tool["function"]["name"] for tool in caller.profiles[0]["tools"]]
     assert names == [RECONCILE_TOOL]
-    assert caller.tails[0] == RECONCILE_DIRECTIVE
+    # Issue #67: the tail is the assistant message immediately before the final
+    # user message — never a trailing system message.
+    messages = caller.calls[0]
+    assert [message["role"] for message in messages] == ["system", "assistant", "user"]
+    assert messages[-2] == {"role": "assistant", "content": RECONCILE_DIRECTIVE}
 
 
 def test_reconcile_now_soft_fails_instead_of_500(build_app):

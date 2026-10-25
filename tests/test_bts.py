@@ -963,19 +963,32 @@ def test_a_connection_without_function_calling_writes_no_state(log):
 
 
 def test_the_tail_carries_the_action_protocol_and_the_palette(log):
+    """Issue #67: the tail is an ASSISTANT message before the final user message.
+
+    The old shape appended a second ``system`` message after the payload, which a
+    stock Jinja chat template (the Qwen family) refuses outright — a 500 on a
+    local GGUF. The tail now rides the narrator's own carrier
+    (``prompts.envelope``), so the shape is ``[system, assistant, user]``.
+    """
     _use_session()
 
     caller = LoopCaller((None, "nothing to record"))
     run(BtsRunner(caller, log=log, profile_fn=_profiled)("u", "prose"))
 
-    tail = caller.calls[0][-1]
-    assert tail["role"] == "system"
+    messages = caller.calls[0]
+    assert [message["role"] for message in messages] == ["system", "assistant", "user"]
+    tail = messages[-2]
+    assert tail["role"] == "assistant"
     assert tail["content"].startswith(BTS_ACTION_PROTOCOL)
     assert ENTITY_PALETTE_DIRECTIVE in tail["content"]
     assert "loc_off_screen" in tail["content"]
     # The protocol states the budget and the close-out explicitly.
     assert "writes cost one of fifteen" in tail["content"]
     assert "close" in tail["content"]
+    # The payload (the user message) is untouched by the engine tail, and only
+    # index 0 is a system message.
+    assert BTS_ACTION_PROTOCOL not in messages[-1]["content"]
+    assert [i for i, m in enumerate(messages) if m["role"] == "system"] == [0]
 
 
 def test_the_protocol_names_the_w9_32_verbs_and_the_player_rule():
@@ -1018,7 +1031,7 @@ def test_the_reconcile_tool_and_directive_appear_only_on_a_cadence_turn(log):
     ordinary = LoopCaller((None, "nothing to record"))
     ordinary_runner = BtsRunner(ordinary, log=log, profile_fn=_profiled)
     run(ordinary_runner("u", "prose"))
-    assert RECONCILE_DIRECTIVE not in ordinary.calls[0][-1]["content"]
+    assert RECONCILE_DIRECTIVE not in ordinary.calls[0][-2]["content"]
     assert ordinary_runner.last_reconcile is False
     assert ordinary_runner.last_turn.reconcile is False
 
@@ -1030,7 +1043,11 @@ def test_the_reconcile_tool_and_directive_appear_only_on_a_cadence_turn(log):
 
     assert runner.last_reconcile is True
     assert runner.last_turn.reconcile is True
-    tail = caller.calls[0][-1]["content"]
+    messages = caller.calls[0]
+    # Issue #67: the tail is the assistant message immediately before the final
+    # user message — never a second system message.
+    assert [message["role"] for message in messages] == ["system", "assistant", "user"]
+    tail = messages[-2]["content"]
     assert RECONCILE_DIRECTIVE in tail
     # LAST in the tail: the instruction that changes per turn is the most recent
     # content (AGENTS 6 — the seeded prefix stays byte-stable).
