@@ -183,7 +183,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "No stage frame is emitted today; static in wave 1.",
+            "description": "Engine step — no model call, nothing to edit here.",
             "notes": []
           },
           "prompt_surface": {
@@ -192,7 +192,7 @@
           },
           "runs": {
             "call_site": "fabulist.graph.nodes.make_pre_turn_node",
-            "description": "Classify the action and advance the clock; compile injected facts.",
+            "description": "Reads what you just did, moves the clock on, and gathers the facts the narrator needs.",
             "interaction": null,
             "kind": "fixed"
           },
@@ -228,7 +228,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "W9.20: the plan junction's arm — runs BEFORE the lanes and the narration, only when the preset's cadence says a plan is due (turn 1 is mandatory), never per turn. W9.31: the run starts with the bootstrap (first run) or repair (later runs) tool phase.",
+            "description": "Runs before the lanes and the narration, and only when a plan is due (always on turn 1) — never every turn.",
             "notes": []
           },
           "prompt_surface": {
@@ -237,7 +237,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "W9.31: first the seed phase — one bounded entity-tool loop that bootstraps the object stores on the session's first run and repairs them on every later one — then one steering pass: the story strings, the scene date/time, weather and the facts the plan holds established.",
+            "description": "First checks the world's records — building them on the first turn, tidying them afterwards — then plans the scene: the story paths, the date and time, the weather, and the facts the plan keeps established.",
             "interaction": "planner",
             "kind": "model_pass"
           },
@@ -269,7 +269,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "One lane per ACTIVE cast member (intent + narrative), pooled max_parallel at a time, merged by the narrator. Zero lanes with no cast: the turn is byte-identical.",
+            "description": "One lane per cast member in the scene, merged back into the narration. With no cast there are no lanes and the turn runs as usual.",
             "notes": []
           },
           "prompt_surface": {
@@ -278,7 +278,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "Every active cast member's intent, 4 requests in flight.",
+            "description": "Every cast member in the scene works out what they want and acts on it — four at a time.",
             "interaction": "npc",
             "kind": "model_pass"
           },
@@ -304,7 +304,7 @@
           },
           "kind": "fanout",
           "meta": {
-            "description": "W9.17: the fan-out's per-member node — ONE model pass per `Send`, bounded by the npc_lanes pool. Its rows are written at the fan-in join in member order, never completion order.",
+            "description": "One lane. Lanes are written down in cast order, not in the order they happen to finish.",
             "notes": []
           },
           "prompt_surface": {
@@ -313,7 +313,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "One ACTIVE cast member's intent, narrative and lines.",
+            "description": "One cast member's intent, narration and lines.",
             "interaction": "npc",
             "kind": "model_pass"
           },
@@ -411,7 +411,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "Narrator system block (the cached system prompt).",
+                  "description": "The narrator's standing instructions — sent identically every turn.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -439,7 +439,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "Generated OpenUI component library doc.",
+                  "description": "What the narrator is told about the visual panels it may draw.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -467,7 +467,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "Treated chat history.",
+                  "description": "Earlier turns, cleaned up.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -495,7 +495,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "Per-turn state facts.",
+                  "description": "What the world currently records.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -523,7 +523,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "The turn's final user message (may carry injected facts).",
+                  "description": "Your latest message.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -551,7 +551,7 @@
                 },
                 "runs": {
                   "call_site": null,
-                  "description": "Vector recall block.",
+                  "description": "Memories and lore pulled in for this turn.",
                   "interaction": null,
                   "kind": "fixed"
                 },
@@ -591,19 +591,19 @@
                 "id": "stable_prefix",
                 "kind": "stable_prefix",
                 "order": 0,
-                "title": "Stable prefix (cache contract)"
+                "title": "Fixed start (the same every turn)"
               },
               {
                 "id": "neutral",
                 "kind": "neutral",
                 "order": 1,
-                "title": "Conversation (neutral)"
+                "title": "Conversation"
               },
               {
                 "id": "dynamic_tail",
                 "kind": "dynamic_tail",
                 "order": 2,
-                "title": "Dynamic tail"
+                "title": "Changes every turn"
               }
             ],
             "sink": "assembled_prompt",
@@ -618,7 +618,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "The in-character streaming pass. ONE draft streams; on validator flags the same node repairs it in-loop with targeted `patch_prose` / `patch_dsl` edits (working memory, pre-commit — W9.24), and the repair iterations annotate this slot's label.",
+            "description": "The in-character pass. One draft streams; if the checks flag it, the same step repairs it in place before anything is kept.",
             "notes": []
           },
           "prompt_surface": {
@@ -627,7 +627,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "Streaming prose + openui DSL.",
+            "description": "Streams the prose and the panel markup.",
             "interaction": "narrate",
             "kind": "model_pass"
           },
@@ -648,7 +648,7 @@
           },
           "kind": "engine",
           "meta": {
-            "description": "The node boundary that separates streamed from kept (D4/D10).",
+            "description": "The line between what streamed and what was kept.",
             "notes": []
           },
           "prompt_surface": {
@@ -657,7 +657,7 @@
           },
           "runs": {
             "call_site": "fabulist.graph.nodes._commit_narrative",
-            "description": "Append the user (echo-deduped) + narrative events; a cancelled turn never reaches it.",
+            "description": "Saves your message and the narrator's reply. A cancelled turn never gets here.",
             "interaction": null,
             "kind": "fixed"
           },
@@ -680,7 +680,7 @@
           },
           "kind": "gate",
           "meta": {
-            "description": "Emitted stage name is 'dsl'.",
+            "description": "A rule-based check — no model call.",
             "notes": []
           },
           "prompt_surface": {
@@ -689,7 +689,7 @@
           },
           "runs": {
             "call_site": "fabulist.graph.nodes.validate_dsl",
-            "description": "Deterministic DSL gate; re-synthesizes on failure.",
+            "description": "Checks the panel markup and rebuilds it if it is malformed.",
             "interaction": null,
             "kind": "fixed"
           },
@@ -713,7 +713,7 @@
           },
           "kind": "gate",
           "meta": {
-            "description": "Advisory flags only; no stage frame today. Static in wave 1.",
+            "description": "Flags only: it never changes the reply.",
             "notes": []
           },
           "prompt_surface": {
@@ -722,7 +722,7 @@
           },
           "runs": {
             "call_site": "fabulist.graph.nodes._run_turn_gate",
-            "description": "d1-3b batched advisory calls (slop map + movement), chunked at 30 questions.",
+            "description": "Asks the yes/no checks — the anti-slop list and the movement question — 30 at a time.",
             "interaction": null,
             "kind": "model_pass"
           },
@@ -750,7 +750,7 @@
           },
           "kind": "gate",
           "meta": {
-            "description": "Branches: ok/diffs -> bts (keep the turn). A fail verdict keeps the turn too and logs its verdict — the regenerate path is retired (W9.24). The planner runs BEFORE the narration, so no verdict routes to it (W9.20).",
+            "description": "A failing verdict still keeps the turn — repairs happen inside the narrator step, and the verdict is recorded so you can see what it objected to.",
             "notes": []
           },
           "prompt_surface": {
@@ -759,7 +759,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "Quality gate: ok | diffs (a fail keeps the turn).",
+            "description": "Reviews the reply: either fine, or the issues it found. The turn is kept either way.",
             "interaction": "critic",
             "kind": "model_pass"
           },
@@ -795,7 +795,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "Emitted stage name is 'world_state'.",
+            "description": "The tracker: it writes the state you see in the side panel.",
             "notes": []
           },
           "prompt_surface": {
@@ -804,7 +804,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "World-state delta / checkpoint.",
+            "description": "Records what changed in the world.",
             "interaction": "bts",
             "kind": "model_pass"
           },
@@ -837,7 +837,7 @@
           },
           "runs": {
             "call_site": "fabulist.state.env_hud.env_hud_statement",
-            "description": "Engine-emitted EnvTracker HUD statement (D38).",
+            "description": "Writes the scene's status strip (weather, time, place).",
             "interaction": null,
             "kind": "engine"
           },
@@ -861,7 +861,7 @@
           },
           "kind": "stage",
           "meta": {
-            "description": "Emitted stage name is 'attribution'. The row is engine-emitted: the markup pass resolves each quoted line from the palette colour the narrator wrapped it in, then the node records first-sighting colours.",
+            "description": "Tags every quoted line with its speaker, and remembers the first colour each character appears in.",
             "notes": []
           },
           "prompt_surface": {
@@ -870,7 +870,7 @@
           },
           "runs": {
             "call_site": "fabulist.state.attribution.parse_attribution",
-            "description": "Colour-markup per-quote attribution: each quoted line resolves from the speaker's palette colour the narrator wrote — no model call (owner ruling Q2=B, W9.28).",
+            "description": "Works out who says each quoted line from the colour the narrator wrapped it in — no model call.",
             "interaction": null,
             "kind": "engine"
           },
@@ -898,7 +898,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "Turn complete; post-turn hooks fire after 'done'.",
+            "description": "The turn is finished; clean-up runs after this.",
             "interaction": null,
             "kind": "engine"
           },
@@ -944,7 +944,7 @@
           },
           "kind": "trigger",
           "meta": {
-            "description": "No stage frame; off-turn in wave 1.",
+            "description": "Runs alongside the turn, before it, not inside it.",
             "notes": []
           },
           "prompt_surface": {
@@ -953,7 +953,7 @@
           },
           "runs": {
             "call_site": "fabulist.memory.embedder.embed_texts",
-            "description": "Embed the user message and surface nearest older turns (W3.2).",
+            "description": "Turns your message into a search and pulls the closest earlier turns back in.",
             "interaction": null,
             "kind": "embedder"
           },
@@ -1001,7 +1001,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "An image-triggering DSL statement in the narrator reply.",
+            "description": "A panel in the narrator's reply that asks for an image.",
             "interaction": null,
             "kind": "fixed"
           },
@@ -1034,7 +1034,7 @@
           },
           "runs": {
             "call_site": "fabulist.api.imagegen_api",
-            "description": "Render the DSL-requested image.",
+            "description": "Draws the image the reply asked for.",
             "interaction": null,
             "kind": "hook"
           },
@@ -1073,7 +1073,7 @@
           },
           "kind": "trigger",
           "meta": {
-            "description": "Runs AFTER 'done'; never on the turn stream (D42).",
+            "description": "Runs after the turn finishes, never during it.",
             "notes": []
           },
           "prompt_surface": {
@@ -1082,7 +1082,7 @@
           },
           "runs": {
             "call_site": "fabulist.graph.compaction.CompactService.compact",
-            "description": "Post-turn hook (monitor-forced at 90%) and the [Compact] button: summarize the whole history into an era (W9.26 §2.3).",
+            "description": "Runs after the turn — automatically when the chat gets close to the window, or when you press Compact — and rolls the history into a summary.",
             "interaction": null,
             "kind": "engine"
           },
@@ -1115,7 +1115,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "Compact long history into a summary.",
+            "description": "Writes one summary of the turns so far.",
             "interaction": "summarize",
             "kind": "model_pass"
           },
@@ -1163,7 +1163,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "A per-turn assistant hook or a manual consult.",
+            "description": "Something that woke an assistant: a per-turn hook, or you asking it.",
             "interaction": null,
             "kind": "engine"
           },
@@ -1196,7 +1196,7 @@
           },
           "runs": {
             "call_site": null,
-            "description": "A side assistant's reply.",
+            "description": "What the assistant answered.",
             "interaction": "assistant",
             "kind": "model_pass"
           },

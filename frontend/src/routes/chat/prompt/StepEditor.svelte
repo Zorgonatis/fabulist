@@ -178,7 +178,7 @@
 
 {#if inherited}
 	<p class="inherited-note">
-		Inherited from the default pipeline — the first edit copies these blocks into this preset.
+		Inherited from the default prompt — the first edit copies these blocks into this preset.
 	</p>
 {/if}
 

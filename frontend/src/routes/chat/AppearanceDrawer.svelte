@@ -284,8 +284,9 @@
 				<p class="hint">Reading the saved appearance…</p>
 			{/if}
 			<p class="hint">
-				Light is the strict preset (every divider holds 3:1). Dark is the default. OLED is
-				true black, driven by the display; Savilen is the reference teal.
+				Light is the highest-contrast choice — every divider stays clearly visible. Dark is the
+				default. OLED is true black, which lets the display switch pixels off; Savilen is the
+				reference teal.
 			</p>
 		</section>
 

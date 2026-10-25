@@ -158,7 +158,7 @@
 
 	{#if expanded}
 		<section class="mem-section">
-			<h4 class="hud-heading">Queries this turn</h4>
+			<h4 class="hud-heading">What it searched for</h4>
 			{#if rag && rag.queries.length}
 				<ol class="query-list">
 					{#each rag.queries as q, i (i)}
@@ -166,26 +166,26 @@
 					{/each}
 				</ol>
 			{:else}
-				<p class="hud-note">No query captured for the last turn.</p>
+				<p class="hud-note">Nothing was searched for on the last turn.</p>
 			{/if}
 		</section>
 
 		<section class="mem-section">
-			<h4 class="hud-heading">Recalled block</h4>
+			<h4 class="hud-heading">What the narrator was given</h4>
 			{#if rag && rag.recall_text.trim()}
 				<pre class="recall-block">{rag.recall_text}</pre>
 			{:else}
-				<p class="hud-note">Nothing was recalled for the last turn.</p>
+				<p class="hud-note">No memories were recalled for the last turn.</p>
 			{/if}
 		</section>
 
 		<section class="mem-section">
-			<h4 class="hud-heading">Result rows</h4>
+			<h4 class="hud-heading">What came back</h4>
 			{#if rag && rag.results.length}
 				<ul class="result-list">
 					{#each rag.results as row, i (i)}
 						<li class="result-row">
-							<span class="result-seq">seq {row.seq ?? '—'}</span>
+							<span class="result-seq">turn {row.seq ?? '—'}</span>
 							<span class="result-distance">
 								{row.distance === null ? '—' : row.distance.toFixed(3)}
 							</span>
@@ -195,7 +195,7 @@
 				</ul>
 			{:else}
 				<p class="hud-note">
-					Nothing was surfaced for the last turn (or it predates result-row capture).
+					Nothing came back for the last turn — or this chat is older than the record.
 				</p>
 			{/if}
 		</section>

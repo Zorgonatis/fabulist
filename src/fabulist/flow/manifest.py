@@ -87,41 +87,41 @@ REGION_OF_MODULE_TYPE: dict[str, str] = {
 
 #: Region display metadata; ``order`` fixes the rendered top-to-bottom layout.
 _REGION_META: dict[str, dict[str, Any]] = {
-    "stable_prefix": {"title": "Stable prefix (cache contract)", "order": 0},
-    "neutral": {"title": "Conversation (neutral)", "order": 1},
-    "dynamic_tail": {"title": "Dynamic tail", "order": 2},
+    "stable_prefix": {"title": "Fixed start (the same every turn)", "order": 0},
+    "neutral": {"title": "Conversation", "order": 1},
+    "dynamic_tail": {"title": "Changes every turn", "order": 2},
 }
 
 #: Authored per-module-type description + prompt-surface link for the narrate
 #: composition (the door is a link, never a content copy).
 _COMPOSITION_MODULE_META: dict[str, dict[str, str]] = {
     "narrator_system": {
-        "description": "Narrator system block (the cached system prompt).",
+        "description": "The narrator's standing instructions — sent identically every turn.",
         "door": "step_editor",
         "step_id": "narrate",
     },
     "library": {
-        "description": "Generated OpenUI component library doc.",
+        "description": "What the narrator is told about the visual panels it may draw.",
         "door": "step_editor",
         "step_id": "narrate",
     },
     "history": {
-        "description": "Treated chat history.",
+        "description": "Earlier turns, cleaned up.",
         "door": "fixed",
         "reason": "engine-supplied treated history",
     },
     "user": {
-        "description": "The turn's final user message (may carry injected facts).",
+        "description": "Your latest message.",
         "door": "fixed",
         "reason": "engine-supplied user message",
     },
     "facts": {
-        "description": "Per-turn state facts.",
+        "description": "What the world currently records.",
         "door": "fixed",
         "reason": "engine-injected facts",
     },
     "recalled": {
-        "description": "Vector recall block.",
+        "description": "Memories and lore pulled in for this turn.",
         "door": "fixed",
         "reason": "engine recall seam",
     },
@@ -224,11 +224,11 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "fixed",
             call_site="fabulist.graph.nodes.make_pre_turn_node",
-            description="Classify the action and advance the clock; compile injected facts.",
+            description="Reads what you just did, moves the clock on, and gathers the facts the narrator needs.",
         ),
         prompt_surface={"door": "fixed", "reason": "engine-owned rules clock/classifier"},
         inspector=_inspector("fixed_stage"),
-        description="No stage frame is emitted today; static in wave 1.",
+        description="Engine step — no model call, nothing to edit here.",
     ),
     _node(
         "planner",
@@ -238,11 +238,9 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
             "model_pass",
             interaction="planner",
             description=(
-                "W9.31: first the seed phase — one bounded entity-tool loop that "
-                "bootstraps the object stores on the session's first run and "
-                "repairs them on every later one — then one steering pass: the "
-                "story strings, the scene date/time, weather and the facts the "
-                "plan holds established."
+                "First checks the world's records — building them on the first turn, "
+                "tidying them afterwards — then plans the scene: the story paths, the "
+                "date and time, the weather, and the facts the plan keeps established."
             ),
         ),
         agent=_agent("planner", "narrator", "agent_bindings"),
@@ -272,10 +270,8 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         ),
         activation=["plan"],
         description=(
-            "W9.20: the plan junction's arm — runs BEFORE the lanes and the "
-            "narration, only when the preset's cadence says a plan is due "
-            "(turn 1 is mandatory), never per turn. W9.31: the run starts with "
-            "the bootstrap (first run) or repair (later runs) tool phase."
+            "Runs before the lanes and the narration, and only when a plan is due "
+            "(always on turn 1) — never every turn."
         ),
     ),
     _node(
@@ -285,7 +281,7 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             interaction="npc",
-            description="Every active cast member's intent, 4 requests in flight.",
+            description="Every cast member in the scene works out what they want and acts on it — four at a time.",
         ),
         agent=_agent("npc", "completion.narration", "agent_bindings"),
         prompt_surface={"door": "step_editor", "step_id": "npc"},
@@ -301,9 +297,8 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
             "nodes": ["npc_lane"],
         },
         description=(
-            "One lane per ACTIVE cast member (intent + narrative), pooled "
-            "max_parallel at a time, merged by the narrator. Zero lanes with "
-            "no cast: the turn is byte-identical."
+            "One lane per cast member in the scene, merged back into the narration. "
+            "With no cast there are no lanes and the turn runs as usual."
         ),
     ),
     _node(
@@ -313,15 +308,14 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             interaction="npc",
-            description="One ACTIVE cast member's intent, narrative and lines.",
+            description="One cast member's intent, narration and lines.",
         ),
         agent=_agent("npc", "completion.narration", "agent_bindings"),
         prompt_surface={"door": "step_editor", "step_id": "npc"},
         inspector=_inspector("model_pass", agent_filter="npc", events=["npc_lane"]),
         description=(
-            "W9.17: the fan-out's per-member node — ONE model pass per `Send`, "
-            "bounded by the npc_lanes pool. Its rows are written at the fan-in "
-            "join in member order, never completion order."
+            "One lane. Lanes are written down in cast order, not in the order they "
+            "happen to finish."
         ),
     ),
     _node(
@@ -331,17 +325,15 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             interaction="narrate",
-            description="Streaming prose + openui DSL.",
+            description="Streams the prose and the panel markup.",
         ),
         agent=_agent("narrate", "narrator", "agent_bindings"),
         prompt_surface={"door": "step_editor", "step_id": "narrate"},
         inspector=_inspector("model_pass", agent_filter="narrate"),
         activation=["narrate"],
         description=(
-            "The in-character streaming pass. ONE draft streams; on validator "
-            "flags the same node repairs it in-loop with targeted `patch_prose` / `patch_dsl` "
-            "edits (working memory, pre-commit — W9.24), and the repair "
-            "iterations annotate this slot's label."
+            "The in-character pass. One draft streams; if the checks flag it, the same "
+            "step repairs it in place before anything is kept."
         ),
     ),
     _node(
@@ -351,11 +343,11 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "fixed",
             call_site="fabulist.graph.nodes._commit_narrative",
-            description="Append the user (echo-deduped) + narrative events; a cancelled turn never reaches it.",
+            description="Saves your message and the narrator's reply. A cancelled turn never gets here.",
         ),
         prompt_surface={"door": "fixed", "reason": "event-log commit, no prompt"},
         inspector=_inspector("fixed_stage", events=["narrative"]),
-        description="The node boundary that separates streamed from kept (D4/D10).",
+        description="The line between what streamed and what was kept.",
     ),
     _node(
         "validate",
@@ -364,12 +356,12 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "fixed",
             call_site="fabulist.graph.nodes.validate_dsl",
-            description="Deterministic DSL gate; re-synthesizes on failure.",
+            description="Checks the panel markup and rebuilds it if it is malformed.",
         ),
         prompt_surface={"door": "fixed", "reason": "deterministic gate + resynthesizer"},
         inspector=_inspector("gate", events=["validator_flags"]),
         activation=["dsl"],
-        description="Emitted stage name is 'dsl'.",
+        description="A rule-based check — no model call.",
     ),
     _node(
         "decision_gate",
@@ -378,12 +370,12 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             call_site="fabulist.graph.nodes._run_turn_gate",
-            description="d1-3b batched advisory calls (slop map + movement), chunked at 30 questions.",
+            description="Asks the yes/no checks — the anti-slop list and the movement question — 30 at a time.",
         ),
         agent=_agent(None, None, "engine"),
         prompt_surface={"door": "fixed", "reason": "decision client, not a W6 step"},
         inspector=_inspector("gate", agent_filter="narrate_repair"),
-        description="Advisory flags only; no stage frame today. Static in wave 1.",
+        description="Flags only: it never changes the reply.",
     ),
     _node(
         "critic",
@@ -392,17 +384,15 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             interaction="critic",
-            description="Quality gate: ok | diffs (a fail keeps the turn).",
+            description="Reviews the reply: either fine, or the issues it found. The turn is kept either way.",
         ),
         agent=_agent("critic", "extractor", "agent_bindings"),
         prompt_surface={"door": "step_editor", "step_id": "critic"},
         inspector=_inspector("gate", agent_filter="critic", events=["critic_verdict"]),
         activation=["critic"],
         description=(
-            "Branches: ok/diffs -> bts (keep the turn). A fail verdict keeps the "
-            "turn too and logs its verdict — the regenerate path is retired "
-            "(W9.24). The planner runs BEFORE the narration, so no verdict "
-            "routes to it (W9.20)."
+            "A failing verdict still keeps the turn — repairs happen inside the narrator "
+            "step, and the verdict is recorded so you can see what it objected to."
         ),
     ),
     _node(
@@ -412,7 +402,7 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "model_pass",
             interaction="bts",
-            description="World-state delta / checkpoint.",
+            description="Records what changed in the world.",
         ),
         agent=_agent("bts", "extractor", "agent_bindings"),
         prompt_surface={"door": "step_editor", "step_id": "bts"},
@@ -435,7 +425,7 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
             ],
         ),
         activation=["world_state"],
-        description="Emitted stage name is 'world_state'.",
+        description="The tracker: it writes the state you see in the side panel.",
     ),
     _node(
         "env_hud",
@@ -444,7 +434,7 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         runs=_runs(
             "engine",
             call_site="fabulist.state.env_hud.env_hud_statement",
-            description="Engine-emitted EnvTracker HUD statement (D38).",
+            description="Writes the scene's status strip (weather, time, place).",
         ),
         prompt_surface={"door": "fixed", "reason": "engine-emitted HUD, never narrator"},
         inspector=_inspector("fixed_stage", events=["env_hud", "env_hud_failed"]),
@@ -458,9 +448,8 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
             "engine",
             call_site="fabulist.state.attribution.parse_attribution",
             description=(
-                "Colour-markup per-quote attribution: each quoted line resolves "
-                "from the speaker's palette colour the narrator wrote — no model "
-                "call (owner ruling Q2=B, W9.28)."
+                "Works out who says each quoted line from the colour the narrator wrapped "
+                "it in — no model call."
             ),
         ),
         prompt_surface={
@@ -472,16 +461,15 @@ TURN_NODES: tuple[dict[str, Any], ...] = (
         ),
         activation=["attribution"],
         description=(
-            "Emitted stage name is 'attribution'. The row is engine-emitted: the "
-            "markup pass resolves each quoted line from the palette colour the "
-            "narrator wrapped it in, then the node records first-sighting colours."
+            "Tags every quoted line with its speaker, and remembers the first colour each "
+            "character appears in."
         ),
     ),
     _node(
         "done",
         "Done",
         "terminal",
-        runs=_runs("engine", description="Turn complete; post-turn hooks fire after 'done'."),
+        runs=_runs("engine", description="The turn is finished; clean-up runs after this."),
         prompt_surface={"door": "none", "reason": "terminal"},
         inspector=_inspector("terminal"),
     ),
@@ -540,12 +528,12 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 runs=_runs(
                     "embedder",
                     call_site="fabulist.memory.embedder.embed_texts",
-                    description="Embed the user message and surface nearest older turns (W3.2).",
+                    description="Turns your message into a search and pulls the closest earlier turns back in.",
                 ),
                 agent=_agent(None, None, "engine"),
                 prompt_surface={"door": "fixed", "reason": "memory seam, not a W6 step"},
                 inspector=_inspector("fixed_stage", events=["recall_queries"]),
-                description="No stage frame; off-turn in wave 1.",
+                description="Runs alongside the turn, before it, not inside it.",
             )
         ],
         "edges": [
@@ -565,7 +553,7 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 "trigger",
                 runs=_runs(
                     "fixed",
-                    description="An image-triggering DSL statement in the narrator reply.",
+                    description="A panel in the narrator's reply that asks for an image.",
                 ),
                 prompt_surface={"door": "none", "reason": "narrator output, not an authored step"},
                 inspector=_inspector("fixed_stage"),
@@ -577,7 +565,7 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 runs=_runs(
                     "hook",
                     call_site="fabulist.api.imagegen_api",
-                    description="Render the DSL-requested image.",
+                    description="Draws the image the reply asked for.",
                 ),
                 agent=_agent(None, "imagegen", "agent_bindings"),
                 prompt_surface={"door": "fixed", "reason": "engine hook, no W6 step"},
@@ -603,14 +591,14 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                     "engine",
                     call_site="fabulist.graph.compaction.CompactService.compact",
                     description=(
-                        "Post-turn hook (monitor-forced at 90%) and the "
-                        "[Compact] button: summarize the whole history into "
-                        "an era (W9.26 §2.3)."
+                        "Runs after the turn — automatically when the chat gets close to "
+                        "the window, or when you press Compact — and rolls the history "
+                        "into a summary."
                     ),
                 ),
                 prompt_surface={"door": "fixed", "reason": "post-turn hook"},
                 inspector=_inspector("fixed_stage"),
-                description="Runs AFTER 'done'; never on the turn stream (D42).",
+                description="Runs after the turn finishes, never during it.",
             ),
             _node(
                 "summarize",
@@ -619,7 +607,7 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 runs=_runs(
                     "model_pass",
                     interaction="summarize",
-                    description="Compact long history into a summary.",
+                    description="Writes one summary of the turns so far.",
                 ),
                 agent=_agent("summarize", "summarizer", "agent_bindings"),
                 prompt_surface={"door": "step_editor", "step_id": "summarize"},
@@ -643,7 +631,7 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 "trigger",
                 runs=_runs(
                     "engine",
-                    description="A per-turn assistant hook or a manual consult.",
+                    description="Something that woke an assistant: a per-turn hook, or you asking it.",
                 ),
                 prompt_surface={"door": "fixed", "reason": "event trigger"},
                 inspector=_inspector("fixed_stage"),
@@ -655,7 +643,7 @@ OFF_TURN_FLOWS: tuple[dict[str, Any], ...] = (
                 runs=_runs(
                     "model_pass",
                     interaction="assistant",
-                    description="A side assistant's reply.",
+                    description="What the assistant answered.",
                 ),
                 agent=_agent("assistant", "narrator", "agent_bindings"),
                 prompt_surface={"door": "step_editor", "step_id": "assistant"},

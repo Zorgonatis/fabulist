@@ -387,7 +387,7 @@
 		Agents propose; you dispose. Every chat’s live amendments are queued here — accept,
 		reject, or dismiss them, singly or by the group mask. Nothing is written until you
 		accept, and an accept is undoable from the chat’s Proposals drawer (the committed
-		list is per chat). Nothing here needs a chat open: proposals name catalog assets.
+		list is per chat). Nothing here needs a chat open: proposals name the assets they change.
 	</p>
 
 	<ProposalReview {inbox} {mode} onRefresh={() => void refreshAfterDecision()} />
