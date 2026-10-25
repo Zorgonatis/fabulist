@@ -5,6 +5,87 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-10-25
+
+### Added
+
+- **Planner and NPC lanes are mappable from the connections pane.** Both are declared per-item
+  roles (`planner`, `npc` under `completion`/`narration`) — the same shape as `summarizer` and
+  `embedder` — so each renders exactly one resolved row and is rebindable like every other
+  agent. Unauthored, both keep resolving through the narrator's binding (legacy `narrator`,
+  typed `completion.narration`, or the `completion` type): no config migration, today's
+  behaviour is the fallback. The NPC lanes render as their own headed group ("Npc lanes");
+  the planner sits in the Completion group. Resolution gains one step — preset binding, then
+  the interaction's own authored item slot, then per-item default, task, type — so a rebind is
+  effective with zero wiring change (the planner and lane callers resolve per call). Honest
+  limit: per-member routing (one model per lane member) is not wired — the lane call site does
+  not name its member, so an override key would be a rebind that reports success and changes
+  nothing; the drawer says so under the group.
+
+- **The Image Prompter endpoint is a setting.** `comfy.base_url` (label: "Image Prompter
+  endpoint (ComfyUI URL)") rides the settings log on the same anchor as the boolean flags, in a
+  new string `values` fold — validated on write (http(s) only, host required, trailing slash
+  stripped, `""` clears to the default). The effective URL resolves per call — setting
+  override, then the injectable deployment seam, then the shipped default
+  `http://127.0.0.1:8188` — and every ComfyUI consumer (config probe, render, session
+  generation) goes through it, so a URL saved in the drawer's Image Prompter section applies
+  to the next request with no restart. The field reads back the *effective* URL, so it can
+  never show an address the client is not using.
+
+- **NPC lane live preview, surfaced.** The lanes flow panel gained a one-line lane config row
+  — max lanes in flight (1..8) and an on/off switch — writing the fan-out node's `data`
+  through the validated topology door. The served flow rows and manifest now overlay the
+  EFFECTIVE width from the stored topology instead of the code default, so a saved value is
+  what the panel reports.
+
+### Changed
+
+- **The connections drawer renders one resolved row per agent role.** `GET /api/connections`
+  slots are now one row per resolved ROLE on the canonical spelling: `embedder` folds into the
+  `embedding` row (`via: item:embedder`), the legacy `narrator`/`extractor` twins never get
+  rows of their own, and each row carries the EFFECTIVE binding (resolved through the
+  spelling the engine's call sites use), `write_slot` (the `agents` key a rebind writes —
+  `embedding` writes `embedder`, so a rebind can never be silently shadowed), and `inert`
+  (authored spellings that lost precedence, with their connections — a conflict is surfaced
+  with a marker, never hidden). PATCH semantics are byte-identical: any declared spelling
+  still writes and resolves exactly as before.
+
+- **"imagegen" is labelled "Image Prompter" end to end** (slot label, drawer heading,
+  settings label, mock fixtures). The slot KEY stays `imagegen` — alias discipline; authored
+  configs are untouched.
+
+- **NPC lanes can be switched off for real.** `enabled: false` on the fan-out node's topology
+  data PRUNES the stage from the compiled graph — dispatcher, Send fan-out and lane node all
+  gone, predecessors re-pointed at the zero-lane route — so the turn runs the narrator's
+  single forward pass and no lane node executes. The prune has one implementation used by
+  both the write door and the builder: a disabling edit that cannot be honoured is refused
+  with a new `disabled_stage_unprunable` violation instead of being stored, and validation
+  judges the pruned wiring, so an off switch that would strand the narrator cannot be saved.
+
+### Fixed
+
+- **The live preview showed the previous turn's NPCs (or none) mid-turn.** The engine wrote
+  no lane fact until the fan-in join, minutes after the lanes were planned, so the drawer had
+  nothing current to serve. The dispatcher now records the turn's planned set as an
+  `npc_lanes_plan` row at route time (member ids and display names, after the narrator's
+  shared prefix is built so the prompt never sees it); the lanes endpoint serves that set —
+  members marked pending — while the plan is ahead of the newest lane summary. A zero-lane
+  turn records an empty plan (an answer, not a stale set).
+
+- **Popout panels resize, and the inspector's context readouts stop wrapping mid-number.**
+  `DraggablePane`'s resize grip only rendered when a caller passed a height — no caller ever
+  did, so every popout was size-locked. Edge/corner handles now work on every panel (clamped,
+  viewport-aware, growing slides the pane back into view), sizes persist per panel in
+  localStorage, and double-clicking the header restores the seed size. The inspector's
+  context-ledger lines use tabular numerals and no-break handling.
+
+- **SECURITY.md states the real bind posture.** "The default is 127.0.0.1" was false for the
+  shipped deployment: only a bare `scripts/serve.py` run binds loopback — the image starts
+  the engine on `--host 0.0.0.0` (required for any published port) and the compose files
+  publish `2727:2727` on every host interface. The security doc and the README's Exposure
+  section now state the same truth, cross-referenced ("change both or neither"), and the
+  doc no longer forbids the flag the shipped image requires.
+
 ## [0.0.2] - 2026-10-25
 
 ### Added
