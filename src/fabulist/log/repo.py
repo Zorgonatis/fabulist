@@ -187,16 +187,6 @@ class _CutView:
             if event.seq <= self.at_seq
         ]
 
-    def get_projection(
-        self, session_id: str | None = None, **kwargs: Any
-    ) -> dict:
-        """The projection at the cut (``state`` fold included)."""
-        kwargs.pop("at_seq", None)
-        return self._log.get_projection(
-            self._bound(session_id), at_seq=self.at_seq, **kwargs
-        )
-
-
 
 class EventLog:
     """Repository over one SQLite event-log file."""
@@ -741,14 +731,14 @@ class EventLog:
         reads as corrected. A pre-#62 branch owns no snapshot row and gets
         ``None`` -- callers fall back to :meth:`get_session_state`.
         """
-        own = [
-            event
-            for event in self.get_events(session_id)
-            if is_state_snapshot_event(event)
-        ]
+        own_rows = self.get_events(session_id)
+        own = [event for event in own_rows if is_state_snapshot_event(event)]
         if not own:
             return None
-        resolved = self._resolve_payloads(own)
+        # Resolve over the WHOLE own-row set, not just the snapshot rows: a
+        # revision that corrects a snapshot is its own row of type
+        # ``revision`` (ADR-002), so dropping it would read the stale payload.
+        resolved = self._resolve_payloads(own_rows)
         latest = own[-1]
         payload = resolved.get(latest.id) or {}
         snapshot = dict(payload)
