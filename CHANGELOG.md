@@ -75,6 +75,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   register and the rules for anything the UI renders. Note: an already-saved preset keeps the
   old rule-row descriptions until that preset is reset — nothing in the prompt itself changed.
 
+- **NPC lane configuration lives where NPCs are managed.** The on/off switch and the
+  in-flight width are now quick options in the cast pane (beside the dispatch policy, disabled
+  with the reason when the engine is unreachable) and a dedicated studio page ("NPC lanes",
+  engine group) with the effective state in plain words, the write door's confirmation, the
+  door's own refusal sentence when a save cannot be honoured, and the open chat's last-turn
+  lane set. All three surfaces (cast pane, studio page, the flow panel's during-turn row) share
+  one store and agree live. A latent client bug fell out: the flow client dropped the `fanout`
+  edge marker on read and save, which would have made every later "lanes off" save refused —
+  the marker now round-trips.
+
 ### Fixed
 
 - **The live preview showed the previous turn's NPCs (or none) mid-turn.** The engine wrote
