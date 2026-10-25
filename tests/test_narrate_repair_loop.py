@@ -2054,9 +2054,13 @@ def test_a_present_empty_draft_reasoning_rides_the_seeded_pair(tmp_path):
         assert "reasoning_content" not in result
         # The repair still lands.
         assert _prose(out) == PATCHED_PROSE
-        # Iteration 2's completion carried no field, so its message sends none.
+        # Iteration 2's completion carried no field, but the REQUEST already does
+        # (the pair's turns): presence is all-or-nothing per request at the vendor,
+        # so that turn carries the field EMPTY (filled, not invented) instead of
+        # making the request MIXED (a 400 with ``tools``).
         model_call = caller.calls[2]["messages"][-2]
-        assert "reasoning_content" not in model_call
+        assert model_call["role"] == "assistant"
+        assert model_call["reasoning_content"] == ""
     finally:
         log.close()
 

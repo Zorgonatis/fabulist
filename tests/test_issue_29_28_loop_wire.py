@@ -240,8 +240,16 @@ def test_the_current_round_pays_for_every_block_it_has_reasoned(tmp_path):
     ]
 
 
-def test_an_iteration_that_reasons_nothing_adds_no_field_and_erases_nothing(tmp_path):
-    """Round 2 sent no field: no field appears, and round 1's block stays."""
+def test_an_iteration_that_reasons_nothing_fills_the_field_and_erases_nothing(tmp_path):
+    """Round 2 sent no field: it is filled ``""`` (no MIXED request) and round 1's
+    block stays verbatim.
+
+    The vendor validates presence across the WHOLE request (measured on
+    ``deepseek-flash`` with ``tools``: none present = 200, all present = 200,
+    MIXED = 400), so a turn that reasoned nothing inside a conversation that
+    already carries the field must carry it too — with the vendor's own
+    "nothing reasoned" value, never invented text.
+    """
     caller = WireCaller(
         [
             [{"type": "reasoning", "delta": REASONING_UNIT},
@@ -257,12 +265,12 @@ def test_an_iteration_that_reasons_nothing_adds_no_field_and_erases_nothing(tmp_
     assert [m["reasoning_content"] for _, m in reasoning_fields(caller.requests[1])] == [
         REASONING_UNIT
     ]
-    # Request 3 continues from round 2, which reasoned nothing: that turn carries
-    # NO field (the runtime never invents reasoning), and round 1's block is still
-    # there verbatim — nothing is blanked.
+    # Request 3 continues from round 2, which reasoned nothing: presence must stay
+    # UNIFORM, so that turn carries the field EMPTY (filled by
+    # ``normalise_reasoning_presence``, the runtime never invents text) while round
+    # 1's block is still there verbatim — nothing is blanked or rewritten.
     carried = reasoning_fields(caller.requests[2])
-    assert len(carried) == 1
-    assert carried[0][1]["reasoning_content"] == REASONING_UNIT
+    assert [m["reasoning_content"] for _, m in carried] == [REASONING_UNIT, ""]
     assert [iteration.reasoning for iteration in result.iterations] == [
         REASONING_UNIT,
         None,

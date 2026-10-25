@@ -1544,6 +1544,228 @@ def test_non_reasoning_provider_requests_are_byte_identical(tmp_path):
     }
 
 
+# -- presence is ALL-OR-NOTHING per REQUEST (measured vendor fact) -----------
+#
+# With ``tools`` on the request, DeepSeek accepts no field anywhere (200) or the
+# field on EVERY assistant message (200), and 400s on a MIXED request ("The
+# `reasoning_content` in the thinking mode must be passed back to the API").
+# History assembly stamps only the turns that STORED reasoning, so one legacy
+# turn is enough to make the next narrator turn a 400. The loop therefore
+# normalises presence once per request, right before the model call.
+
+#: A caller-supplied history that mixes presence: the first assistant turn stored
+#: reasoning (history assembly stamps it present-but-empty), the second stored
+#: none (no key at all — a session begun on a non-thinking connection).
+MIXED_HISTORY = [
+    {"role": "system", "content": "You are the narrator."},
+    {"role": "user", "content": "Light the lantern."},
+    {"role": "assistant", "content": "The lantern flares.", "reasoning_content": ""},
+    {"role": "user", "content": "Who is there?"},
+    {"role": "assistant", "content": "Only silence."},
+]
+
+
+def test_a_mixed_history_request_carries_the_field_on_every_assistant_turn(tmp_path):
+    """History without the field + a round that stamps it = BOTH carry it.
+
+    This is the 400 shape the vendor measured: the loop's own stamped turn had
+    the field while a caller-supplied turn did not. The request that reaches the
+    transport must be uniform, and the fill is ``""`` (the vendor's own "nothing
+    reasoned" value) — never invented text, never a rewritten stored value.
+    """
+    history = [dict(message) for message in MIXED_HISTORY]
+    caller = FakeCaller(
+        [
+            {
+                "reasoning": "Weigh the answer, then note it.",
+                "tool_args": '{"note": "LANTERN"}',
+                "tool_name": "leave_note",
+            },
+            {"content": "Noted the lantern."},
+        ]
+    )
+
+    asyncio.run(
+        run_agent_loop(
+            caller=caller,
+            messages=history,
+            tools=[echo_tool()],
+            surface="narrate",
+            log=EventLog(tmp_path / "loop.db"),
+            session_id=SESSION_ID,
+            capabilities=FUNCTION_CALLING,
+        )
+    )
+
+    second = caller.calls[1]["messages"]
+    assistant_turns = [m for m in second if m.get("role") == "assistant"]
+    assert len(assistant_turns) == 3, second
+    assert all("reasoning_content" in m for m in assistant_turns), assistant_turns
+    # The stored-reasoning turn kept its (empty) value; the legacy turn was
+    # FILLED; the round's own turn carries the provider's text verbatim.
+    assert assistant_turns[0]["reasoning_content"] == ""
+    assert assistant_turns[1] == {
+        "role": "assistant",
+        "content": "Only silence.",
+        "reasoning_content": "",
+    }
+    assert assistant_turns[2]["reasoning_content"] == "Weigh the answer, then note it."
+    # Only assistant messages are touched: system/user stay byte-identical.
+    assert second[0] == MIXED_HISTORY[0]
+    assert second[1] == MIXED_HISTORY[1]
+    assert second[3] == MIXED_HISTORY[3]
+    # The caller's own history is never rewritten (the loop works on its copy).
+    assert "reasoning_content" not in history[4]
+    assert history[2]["reasoning_content"] == ""
+
+
+def test_a_reasoning_less_conversation_is_byte_identical(tmp_path):
+    """No field anywhere = the EXACT message lists, before and after the loop.
+
+    Non-thinking providers and older sessions must not notice this repair: the
+    first request is the caller's history verbatim and the second is that list
+    plus the one assistant ``tool_calls`` turn the loop appends.
+    """
+    history = [
+        {"role": "system", "content": "You are the narrator."},
+        {"role": "user", "content": "Light the lantern."},
+        {"role": "assistant", "content": "The lantern flares."},
+        {"role": "user", "content": "Who is there?"},
+    ]
+    caller = FakeCaller(
+        [
+            {"tool_args": '{"note": "PLAIN"}', "tool_name": "leave_note"},
+            {"content": "Noted the plain word."},
+        ]
+    )
+
+    asyncio.run(
+        run_agent_loop(
+            caller=caller,
+            messages=history,
+            tools=[echo_tool()],
+            surface="narrate",
+            log=EventLog(tmp_path / "loop.db"),
+            session_id=SESSION_ID,
+            capabilities=FUNCTION_CALLING,
+        )
+    )
+
+    assert caller.calls[0]["messages"] == history
+    assert caller.calls[1]["messages"] == [
+        *history,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "leave_note",
+                        "arguments": '{"note": "PLAIN"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": json.dumps({"ok": True, "seen": {"note": "PLAIN"}}),
+        },
+    ]
+    for call in caller.calls:
+        for message in call["messages"]:
+            assert "reasoning_content" not in message
+
+
+def test_an_all_present_conversation_keeps_its_reasoning_text_untouched(tmp_path):
+    """Uniform presence is already valid: values (and prose) survive verbatim."""
+    history = [
+        {"role": "system", "content": "You are the narrator."},
+        {"role": "user", "content": "Light the lantern."},
+        {
+            "role": "assistant",
+            "content": "The lantern flares.",
+            "reasoning_content": "stored block, never rewritten",
+        },
+    ]
+    caller = FakeCaller(
+        [
+            {
+                "reasoning": "Weigh the answer.",
+                "tool_args": '{"note": "LANTERN"}',
+                "tool_name": "leave_note",
+            },
+            {"content": "Noted the lantern."},
+        ]
+    )
+
+    asyncio.run(
+        run_agent_loop(
+            caller=caller,
+            messages=history,
+            tools=[echo_tool()],
+            surface="narrate",
+            log=EventLog(tmp_path / "loop.db"),
+            session_id=SESSION_ID,
+            capabilities=FUNCTION_CALLING,
+        )
+    )
+
+    second = caller.calls[1]["messages"]
+    assert second[2] == {
+        "role": "assistant",
+        "content": "The lantern flares.",
+        "reasoning_content": "stored block, never rewritten",
+    }
+    assert second[3]["role"] == "assistant"
+    assert second[3]["reasoning_content"] == "Weigh the answer."
+    assert second[3]["content"] == ""
+
+
+def test_return_thinking_false_leaves_a_mixed_caller_history_alone(tmp_path):
+    """Explicit OFF: the loop stamps nothing, so it normalises nothing.
+
+    A history that mixes presence while the connection says "never send this
+    field" is the CALLER's contradiction — filling blanks here would put the
+    field on turns that lacked it on a connection that forbids it.
+    """
+    history = [dict(message) for message in MIXED_HISTORY]
+    caller = FakeCaller(
+        [
+            {
+                "reasoning": "Weigh the answer.",
+                "tool_args": '{"note": "LANTERN"}',
+                "tool_name": "leave_note",
+            },
+            {"content": "Noted the lantern."},
+        ]
+    )
+
+    asyncio.run(
+        run_agent_loop(
+            caller=caller,
+            messages=history,
+            tools=[echo_tool()],
+            surface="narrate",
+            log=EventLog(tmp_path / "loop.db"),
+            session_id=SESSION_ID,
+            capabilities=FUNCTION_CALLING,
+            return_thinking=False,
+        )
+    )
+
+    second = caller.calls[1]["messages"]
+    assistant_turns = [m for m in second if m.get("role") == "assistant"]
+    # The caller's stored field is untouched, the legacy turn stays content-only
+    # (nothing invented), and the loop's own turn sends no field.
+    assert assistant_turns[0]["reasoning_content"] == ""
+    assert "reasoning_content" not in assistant_turns[1]
+    assert "reasoning_content" not in assistant_turns[2]
+    assert assistant_turns[1] == {"role": "assistant", "content": "Only silence."}
+
+
 @pytest.mark.parametrize(("return_thinking", "echoed"), [(None, True), (False, False)])
 def test_injected_flags_pair_follows_the_reasoning_echo_rule(
     tmp_path, return_thinking, echoed

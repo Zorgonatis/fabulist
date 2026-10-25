@@ -100,10 +100,25 @@ Owner rulings this module implements (do not reintroduce the retired patterns)
   verbatim — the vendor rejects an ABSENT field (400) but accepts ``""`` (200)
   — which is why the echo is decided by presence and not by truthiness: reading
   ``if reasoning:`` here is what made the planner's seed phase 400 on turn 1.
-  The absence rule is narrower than it sounds: a conversation whose assistant
-  ``tool_calls`` turn never carried the field at all is accepted, so once
-  thinking mode has engaged, every later assistant turn of a tools request must
-  carry it.
+
+  **Presence is ALL-OR-NOTHING per REQUEST, not per message.** Measured on
+  ``deepseek-flash`` with ``tools`` on the request: no assistant message carrying
+  the field is 200, EVERY assistant message carrying it (``""`` or text) is 200,
+  and a MIXED request (some yes, some no) is a 400 with the same "must be passed
+  back to the API" body; without ``tools`` a mixed request is 200. What the vendor
+  validates is the CONSISTENCY of field presence across the request's assistant
+  messages, so a conversation that mixes turns with stored reasoning and turns
+  without (a session started on a non-thinking connection then switched, an older
+  session, a provider that sometimes omits the field) used to 400 on its next
+  narrator turn. That gap is closed ONCE PER REQUEST by
+  :func:`normalise_reasoning_presence`, which :func:`run_agent_loop` calls
+  immediately before the conversation is handed to the model caller — the only
+  place that sees the whole request, the loop's own appends included. It only
+  FILLS blanks (``""``) when at least one assistant message already carries the
+  field; a request with no field anywhere is left byte-identical (non-thinking
+  providers, older sessions), and a present field's value is never rewritten.
+  Nothing outside ``role == "assistant"`` is touched, so the prompt cache's
+  stable prefix and append-only tail (AGENTS 6) are undisturbed.
 
   **The CURRENT round is carried VERBATIM, in full (owner ruling).** Every
   iteration of the running round keeps its own ``reasoning_content`` on its
@@ -115,9 +130,10 @@ Owner rulings this module implements (do not reintroduce the retired patterns)
   boundary, not the iteration boundary: prior graph executions (past turns) are
   re-attached by history assembly with the field PRESENT but EMPTY (``""``) — a
   past turn's reasoning is stored for diagnosis and is never re-sent as text
-  (``wiring.history_from_log``). The vendor's presence rule still holds per
-  assistant message: the FIELD travels on every stamped turn, and a provider
-  that never sent it keeps a byte-identical message list.
+  (``wiring.history_from_log``). The vendor's presence rule is enforced on the
+  REQUEST (all-or-nothing, above): the FIELD travels on every assistant message
+  of a request that carries it anywhere, and a conversation that never carried
+  it keeps a byte-identical message list.
 
 Deviations (grounded in the code as read, per the "be faithful" instruction)
 ---------------------------------------------------------------------------
@@ -177,6 +193,7 @@ __all__ = [
     "LoopTool",
     "is_transport_timeout",
     "loop_request_profile",
+    "normalise_reasoning_presence",
     "run_agent_loop",
     "should_echo_reasoning",
 ]
@@ -337,16 +354,67 @@ def should_echo_reasoning(return_thinking: bool | None, reasoning: str | None) -
     reasoned nothing returns exactly that, and omitting it is the 400). Emptiness
     is therefore never a reason to drop the field; absence is the only one.
 
-    The answer is per assistant message, and EVERY message the loop stamps inside
+    The answer is per STAMPED message, and EVERY message the loop stamps inside
     the current round carries the provider's value verbatim (owner ruling: a
     repair round must see its own deliberation). The text stops at the ROUND
     boundary, not between iterations: history assembly re-attaches a prior
     execution's field PRESENT but EMPTY, so older turns contribute no reasoning
-    text to the prompt.
+    text to the prompt. Stamping alone is not enough, because the vendor's rule
+    is per REQUEST and all-or-nothing: a turn that stamps nothing into a
+    conversation that already carries the field elsewhere would make the request
+    MIXED (a 400 with ``tools``). :func:`normalise_reasoning_presence` closes that
+    gap once per request, immediately before the call.
     """
     if reasoning is None:
         return False
     return return_thinking is not False
+
+
+def normalise_reasoning_presence(
+    conversation: list[dict[str, Any]], return_thinking: bool | None = None
+) -> bool:
+    """Make ``reasoning_content`` presence uniform across ONE request's turns.
+
+    The vendor's rule is per REQUEST, not per message (measured on
+    ``deepseek-flash`` with ``tools``: none present = 200, all present = 200,
+    MIXED = 400 "The `reasoning_content` in the thinking mode must be passed back
+    to the API"). The loop stamps turns as they complete, and history assembly
+    stamps past turns that stored reasoning — so a conversation can easily mix
+    the two (a session begun on a non-thinking connection, an older session, a
+    provider that omits the field on some turns). This pass makes presence
+    uniform: if AT LEAST ONE assistant message carries the key, every assistant
+    message that lacks it gets the vendor's own "nothing reasoned" value
+    (``""``).
+
+    It fills blanks and nothing else: a present field's value is never rewritten
+    (``None`` never suppresses one; the echo rule already decided whether the
+    field travels), and when NO assistant message carries the field the list is
+    left byte-identical — non-thinking providers and older sessions stay exactly
+    as they were before the field existed. Only ``role == "assistant"`` messages
+    are inspected or touched, and the pass is idempotent, so the append-only
+    prompt-cache contract holds (the stable prefix is never rewritten and within
+    one round the fill only ever happens before the first call that needs it).
+
+    ``return_thinking=False`` is the owner's "never send this field" switch: the
+    loop stamps nothing in that case, so there is nothing for it to normalise and
+    the caller's history travels untouched (if that caller-supplied history mixes
+    presence, the contradiction is the caller's, not the loop's — the loop does
+    not invent a field on a connection that forbids it).
+
+    Returns whether the request carries the field at all after the pass (``False``
+    = the list was left byte-identical).
+    """
+    if return_thinking is False:
+        return False
+    assistant = [
+        message for message in conversation if message.get("role") == "assistant"
+    ]
+    if not any("reasoning_content" in message for message in assistant):
+        return False
+    for message in assistant:
+        if "reasoning_content" not in message:
+            message["reasoning_content"] = ""
+    return True
 
 
 def _echoed_reasoning(return_thinking: bool | None, reasoning: str | None) -> str | None:
@@ -426,7 +494,14 @@ async def run_agent_loop(
     conversation carries one FIELD and one paid BLOCK per stamped assistant turn
     of the running round. The round boundary is where the text stops: history
     assembly re-attaches a PRIOR execution's field present-but-empty, never its
-    text.
+    text. Because the vendor validates presence across the WHOLE request rather
+    than per message (a mixed tools request is a 400), every request is passed
+    through :func:`normalise_reasoning_presence` right before the model call: the
+    field is filled in (``""``) on the assistant turns that lack it whenever ANY
+    assistant turn carries it, so a caller-supplied history and this round's
+    appends never disagree. A request with no field anywhere is not touched.
+    ``return_thinking is False`` means the loop stamps nothing, so there is
+    nothing to normalise and a caller-supplied field stays the caller's business.
 
     Only a transport TIMEOUT is recovered (the owner's per-connection doctrine);
     every other failure raises through to the caller's own error handling.
@@ -449,6 +524,12 @@ async def run_agent_loop(
 
     while True:
         iteration += 1
+        # Presence of ``reasoning_content`` is ALL-OR-NOTHING per request at the
+        # vendor (a MIXED tools request 400s), so normalise the WHOLE conversation
+        # here — immediately before it is handed to the model caller, the one
+        # point that sees both the caller's history and this round's appends.
+        # Idempotent and fill-only: no field anywhere = list untouched.
+        normalise_reasoning_presence(conversation, return_thinking)
         # W9.25 §3.5.3: the headroom the NEXT prompt has, measured before the call.
         # It only ever shrinks (the tail is append-only) and it NEVER stops the loop.
         headroom = _headroom_tokens(window_fn, conversation)
