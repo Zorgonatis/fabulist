@@ -17,6 +17,7 @@
 	import { API_BASE } from '#lib/api';
 	import { getAgentCalls } from '#lib/api/bts';
 	import { getFlowManifest, getLanes, getTopology, putTopology, violationsFromError } from '#lib/api/flow';
+	import { laneConfigOf, laneConfigStore } from '#lib/api/npcLanes';
 	import type { FlowLanes } from '#lib/api/flow';
 	import { activationFromSteps } from '#lib/flow/activation';
 	import { cloneTopology } from '#lib/flow/editor';
@@ -57,13 +58,27 @@
 	let laneBusy = $state(false);
 	let laneNote = $state('');
 
+	// The lane config is SHARED with the cast pane and the studio's NPC lanes
+	// page (issue #56): they publish every successful read and save to
+	// `laneConfigStore`, and this row renders that value when it has one, so an
+	// open panel never shows a value another surface changed a moment ago.
+	// The local draft stays the write base — the manifest may name a fan-out
+	// under another id, and this panel keeps resolving that itself.
+	const sharedLaneConfig = $derived($laneConfigStore);
+
 	const laneNodeId = $derived(
 		manifest?.graphs.flatMap((graph) => graph.nodes).find((node) => node.fanout)?.id ?? null
 	);
 	/** The fan-out's topology row: the manifest's id, else the canonical one. */
 	const laneNode = $derived(findFanNode(topologyDraft, laneNodeId));
-	const laneEnabled = $derived(laneData("enabled") !== false);
-	const laneWidth = $derived(Number(laneData("max_lanes")) || 4);
+	const laneEnabled = $derived(
+		sharedLaneConfig ? sharedLaneConfig.enabled : laneData("enabled") !== false
+	);
+	const laneWidth = $derived(
+		sharedLaneConfig
+			? Number(sharedLaneConfig.maxLanes) || 4
+			: Number(laneData("max_lanes")) || 4
+	);
 
 	function findFanNode(topo: Topology | null, hint: string | null): TopologyNode | null {
 		if (!topo) return null;
@@ -80,6 +95,10 @@
 		try {
 			const body = await getTopology();
 			topologyDraft = body.topology;
+			// Publish the read so the other lane surfaces agree (and so this row
+			// agrees with THEM when they read first — the store keeps one truth).
+			const config = laneConfigOf(body.topology);
+			if (config) laneConfigStore.set(config);
 		} catch {
 			// The surface is optional: a failed read just hides the config row.
 			topologyDraft = null;
@@ -107,6 +126,10 @@
 		try {
 			const body = await putTopology(next);
 			topologyDraft = body.topology;
+			// Publish the save: the cast pane and the studio page render the store,
+			// so they move the moment this panel saves (and not on their next open).
+			const config = laneConfigOf(body.topology);
+			if (config) laneConfigStore.set(config);
 			laneNote = 'saved — applies to the next turn';
 			// The manifest's fan-out descriptor is the endpoint's overlay of this
 			// very setting, so re-read it: the board's note follows the save.
