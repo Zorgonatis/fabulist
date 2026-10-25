@@ -147,6 +147,8 @@ services:
       # refuses to guess when several devices are visible. Set ONE of these in
       # .env:
       #   FABULIST_SIDECAR_DEVICE=Vulkan0     (a bare `0` is accepted too)
+      #   FABULIST_SIDECAR_DEVICE=cpu         (or `none`: no offload — models stay
+      #                                        on the CPU even when a GPU is visible)
       #   FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"   (name substring)
       # Exactly one visible device needs no setting; zero visible devices is
       # the build's native CPU fallback (warned, not fatal); an explicit id

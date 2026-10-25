@@ -262,22 +262,27 @@ DEV=""
 DEV_LINE=""
 
 if [ -n "$WANT" ]; then
-    # Accept both "Vulkan0" and a bare "0"; reject anything else loudly.
+    # Accept both "Vulkan0" and a bare "0"; "cpu"/"none" ask for NO offload
+    # (llama-server's own --device none: the models stay on the CPU even when
+    # a GPU is visible — the mode the sidecar was measured for, spike #10).
     case "$WANT" in
         [0-9]*) WANT="Vulkan$WANT" ;;
     esac
     case "$WANT" in
         Vulkan[0-9]*) : ;;
-        *) fatal "FABULIST_SIDECAR_DEVICE='$WANT' is not a Vulkan device id (examples: Vulkan0, 0)" ;;
+        cpu|CPU|none|NONE) DEV="none" ;;
+        *) fatal "FABULIST_SIDECAR_DEVICE='$WANT' is not a Vulkan device id (examples: Vulkan0, 0) or 'cpu'" ;;
     esac
-    DEV_LINE=$(printf '%s\n' "$device_lines" | grep "^$WANT|" || true)
-    if [ -z "$DEV_LINE" ]; then
-        echo "[sidecar] FATAL: FABULIST_SIDECAR_DEVICE=$WANT was requested but no such Vulkan device exists." >&2
-        echo "[sidecar] devices this host exposes:" >&2
-        show_devices
-        exit 1
+    if [ "$DEV" != "none" ]; then
+        DEV_LINE=$(printf '%s\n' "$device_lines" | grep "^$WANT|" || true)
+        if [ -z "$DEV_LINE" ]; then
+            echo "[sidecar] FATAL: FABULIST_SIDECAR_DEVICE=$WANT was requested but no such Vulkan device exists." >&2
+            echo "[sidecar] devices this host exposes:" >&2
+            show_devices
+            exit 1
+        fi
+        DEV="$WANT"
     fi
-    DEV="$WANT"
 elif [ -n "$MATCH" ]; then
     matches=$(printf '%s\n' "$device_lines" | grep -i -F -- "$MATCH" || true)
     match_count=$(printf '%s\n' "$matches" | grep -c . || true)
@@ -306,7 +311,9 @@ elif [ "$device_count" -gt 1 ]; then
     exit 1
 fi
 
-if [ -n "$DEV" ]; then
+if [ "$DEV" = "none" ]; then
+    log "CPU only (--device none): models stay on the CPU by request."
+elif [ -n "$DEV" ]; then
     log "using Vulkan device: $DEV_LINE"
     free_mib=$(printf '%s' "$DEV_LINE" | sed -n 's/.*, *\([0-9][0-9]*\) MiB free).*/\1/p')
     if [ -n "$free_mib" ] && [ "$free_mib" -lt 4096 ]; then
