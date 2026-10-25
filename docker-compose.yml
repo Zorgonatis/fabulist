@@ -69,6 +69,14 @@ services:
       # name, so FABULIST_HOST_ALIAS never rewrites it. Leave it EMPTY (or
       # unset) to disable auto-pinning and configure the roles by hand.
       FABULIST_SIDECAR_URL: http://fabulist-models:8080/v1
+    depends_on:
+      # Start the engine AFTER the sidecar's healthcheck passes, so a cold first
+      # boot (Vulkan init, device guard, image start-up) cannot race the
+      # boot-time auto-pin. `service_healthy` waits for the healthcheck below;
+      # the engine's own bounded re-probe schedule (src/fabulist/sidecar.py) is
+      # the second line of defence for a sidecar that restarts later.
+      fabulist-models:
+        condition: service_healthy
     restart: unless-stopped
     # Voice input is optional and NOT installed by default, so POST /api/stt
     # answers 503 with the install hint. To turn it on, REPLACE the `build: .`
@@ -156,6 +164,28 @@ services:
       # this mapping. Default 8445 because 4445 is the conventional port for an
       # existing host model server; override with FABULIST_SIDECAR_PORT.
       - "127.0.0.1:${FABULIST_SIDECAR_PORT:-8445}:8080"
+    healthcheck:
+      # "Healthy" means THE ROUTER ANSWERS WITH ITS PRESET — not that a model is
+      # loaded. /v1/models is served by the router itself the moment it listens
+      # (llama.cpp lists the preset's three ids with status "unloaded"), so this
+      # probe never spawns a model child, never downloads a weight, and never
+      # waits for Vulkan to finish compiling a model load. Verified against the
+      # pinned image (b11804) on a fresh container: /health and /v1/models both
+      # answer 200 with every model "unloaded" and /cache empty. /v1/models is
+      # preferred over /health because it also proves the preset parsed — the
+      # same answer the engine's auto-pin consumes. The image's own default
+      # healthcheck hits /health; this overrides it.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/models"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # GENEROUS on purpose: a first start on a cold host may spend a while in
+      # image start-up, --list-devices / Vulkan enumeration, and the device
+      # guard. Failures during the start period do not count against `retries`,
+      # and `depends_on: service_healthy` simply waits — the engine container is
+      # not started until this passes (there is no model load on this path, so
+      # the wait is seconds, not the 2.7 GiB weight pull).
+      start_period: 120s
     devices:
       # AMD/Intel Vulkan: the render nodes are the access path, and this line
       # is all they need (some hosts also require the `render` group). On a

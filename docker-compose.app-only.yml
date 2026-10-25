@@ -25,6 +25,12 @@ services:
       # The base file arms the issue #36 boot-time auto-pin; this opt-out runs
       # NO sidecar, so clear the trigger (empty = no probe, no notice).
       FABULIST_SIDECAR_URL: ""
+    # `extends` copies the base service INCLUDING its sidecar ordering, but this
+    # file ships no `fabulist-models` service, so the dependency would name an
+    # undefined service (compose refuses the project). Reset it: with no
+    # sidecar there is nothing to wait for, and the engine boots alone exactly
+    # as before.
+    depends_on: !reset []
 
 networks:
   default:

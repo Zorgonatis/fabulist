@@ -34,18 +34,34 @@ it can and logs ONE notice naming what was skipped; an unreachable sidecar pins
 nothing and logs ONE notice. Nothing in this module can raise into boot — a
 degraded sidecar is a notice, not a startup failure.
 
-Boot race (compose): ``docker compose up`` starts the engine and the sidecar
-TOGETHER, so the one-shot boot probe can lose the race — the models host may not
-resolve yet (``ConnectError: [Errno -2] Name or service not known``) or the
-sidecar may still be crash-looping its device guard, and the pin would then
-never happen until a manual restart. So an UNREACHABLE boot probe arms exactly
-ONE deferred re-probe (:func:`schedule_autopin_retry`, ~25 s, never a loop): the
-same probe + fill-empty-slots pin, which is idempotent (a rerun on an already
-pinned store writes nothing), and the same one-notice-per-attempt discipline on
-a second failure. A boot probe that ANSWERED (or an unset env) arms nothing and
-behaves exactly as a single-shot boot. The retry is fire-and-forget — boot never
-waits for it — and its task is held in a module-level strong-ref set and
+Boot race (compose): ``docker compose up`` can start the engine and the sidecar
+TOGETHER, so the boot probe can lose the race — the models host may not resolve
+yet (``ConnectError: [Errno -2] Name or service not known``), the sidecar may
+still be crash-looping its device guard, or a first boot's Vulkan init and image
+pull may simply be slower than the engine. The default compose file now also
+orders the engine behind a sidecar healthcheck (``depends_on: ...
+condition: service_healthy``, probing ``/v1/models`` — an endpoint the router
+answers before ANY model is loaded, so the check downloads nothing). That
+ordering is not sufficient on its own: a sidecar can be recreated/restarted
+behind a running engine, and the host-network variant points the engine at a
+published port instead of a compose service.
+
+So an UNREACHABLE boot probe arms a BOUNDED REPEATING re-probe
+(:func:`schedule_autopin_retry`): the same probe + fill-empty-slots pin, every
+:data:`RETRY_DELAY_S` seconds, at most :data:`RETRY_MAX_ATTEMPTS` times (24 ×
+25 s ≈ a 10 minute window), stopping at the FIRST probe that ANSWERS. The pin is
+idempotent (a rerun on an already pinned store writes nothing), so a sidecar
+that came up — or a user who bound a role meanwhile — simply ends the schedule
+without writing. A boot probe that ANSWERED (or an unset env) arms nothing and
+behaves exactly as a single-shot boot. The schedule is fire-and-forget — boot
+never waits for it — and its task is held in a module-level strong-ref set and
 cancelled by loop shutdown, like every other background task in the engine.
+
+Logging discipline (ONE convention, chosen here): ONE warning PER FAILED
+ATTEMPT — the probe's own notice, unchanged from the boot path — plus exactly
+ONE final warning when the attempt budget is exhausted and the schedule gives
+up; a successful attempt logs the ordinary ``info`` pin line. Attempts are
+never silent and never double-log.
 """
 
 from __future__ import annotations
@@ -63,6 +79,7 @@ __all__ = [
     "CONNECTION_TIMEOUT_S",
     "PROBE_TIMEOUT_S",
     "RETRY_DELAY_S",
+    "RETRY_MAX_ATTEMPTS",
     "SIDECAR_CONTEXT_WINDOWS",
     "SIDECAR_ROLES",
     "SIDECAR_URL_ENV",
@@ -88,13 +105,21 @@ PROBE_TIMEOUT_S = 3.0
 #: (README's manual snippet uses the same 120 s).
 CONNECTION_TIMEOUT_S = 120.0
 
-#: How long the ONE deferred re-probe waits after an unreachable boot probe.
-#: Long enough for container DNS/service discovery to settle and for a sidecar
-#: restarting its device guard to come back; short enough that a first turn does
-#: not have to wait long for recall. Read at schedule time (a test overrides it).
+#: How long the bounded retry schedule waits between deferred re-probes after
+#: an unreachable boot probe. Long enough for container DNS/service discovery to
+#: settle and for a sidecar restarting its device guard to come back; short
+#: enough that a first turn does not have to wait long for recall. Read at
+#: schedule time (a test overrides it).
 RETRY_DELAY_S = 25.0
 
-#: Strong references to the in-flight deferred re-probes. ``asyncio`` keeps only
+#: How many deferred re-probes the bounded schedule runs before giving up.
+#: 24 × 25 s ≈ a 10 minute window from boot: enough for a first boot's Vulkan
+#: init plus the HuggingFace weight pull a first request triggers on a slow
+#: line. After the budget the schedule STOPS with one final warning instead of
+#: probing forever. Read at schedule time (a test overrides it).
+RETRY_MAX_ATTEMPTS = 24
+
+#: Strong references to the in-flight retry schedules. ``asyncio`` keeps only
 #: weak references to tasks, so an unreferenced one can be garbage-collected
 #: mid-flight (silent: the notice would never log) — the same discipline as the
 #: engine's other fire-and-forget tasks (``api/app._BACKGROUND_TASKS``).
@@ -162,23 +187,27 @@ def schedule_autopin_retry(
     transport: Any = None,
     timeout: float = PROBE_TIMEOUT_S,
     delay: float | None = None,
+    attempts: int | None = None,
     on_result: Callable[[SidecarPin], None] | None = None,
 ) -> asyncio.Task[SidecarPin | None] | None:
-    """Arm the ONE deferred re-probe after an UNREACHABLE boot probe (#36).
+    """Arm the BOUNDED retry schedule after an UNREACHABLE boot probe (#36).
 
     ``boot`` is what :func:`autopin_sidecar` returned at boot. Nothing is
     scheduled unless it was a real unreachable attempt (env set, probe failed),
     so a served sidecar and the no-env no-op keep today's single-shot boot
-    exactly. The task sleeps ``delay`` (default :data:`RETRY_DELAY_S`) and then
-    re-runs the SAME :func:`autopin_sidecar` — same fill-empty-slots pin, same
-    one-notice discipline — so it is idempotent: if the sidecar came up empty or
-    a user pinned meanwhile, the second pass writes nothing.
+    exactly. The task sleeps ``delay`` (default :data:`RETRY_DELAY_S`) between
+    re-probes and re-runs the SAME :func:`autopin_sidecar` — same
+    fill-empty-slots pin, same one-notice-per-attempt discipline — until a probe
+    ANSWERS or the ``attempts`` budget (default :data:`RETRY_MAX_ATTEMPTS`) is
+    spent. It is idempotent: if the sidecar came up (or a user pinned meanwhile)
+    the first answering pass ends the schedule and writes nothing.
 
     Returns the task (or ``None`` when nothing was armed). Never raises: with
     no running event loop (a test calling ``build_app`` synchronously) there is
-    simply no task, which keeps boot non-blocking and side-effect free.
-    ``on_result`` receives the retry's :class:`SidecarPin` on the loop thread
-    (the wiring hook uses it to refresh ``app.state.sidecar_pin``).
+    simply no task, which keeps boot non-blocking and side-effect free. An
+    ``attempts`` budget of zero (or less) arms nothing as well. ``on_result``
+    receives each attempt's :class:`SidecarPin` on the loop thread (the wiring
+    hook uses it to refresh ``app.state.sidecar_pin``).
     """
     if not boot.unreachable or not boot.url:
         return None
@@ -188,6 +217,10 @@ def schedule_autopin_retry(
         logger.debug("sidecar auto-pin retry not scheduled: no running event loop")
         return None
     pause = RETRY_DELAY_S if delay is None else delay
+    budget = RETRY_MAX_ATTEMPTS if attempts is None else attempts
+    if budget <= 0:
+        logger.debug("sidecar auto-pin retry not scheduled: attempt budget is %s", budget)
+        return None
     task = asyncio.create_task(
         _retry_autopin(
             registry,
@@ -195,11 +228,22 @@ def schedule_autopin_retry(
             transport=transport,
             timeout=timeout,
             delay=pause,
+            attempts=budget,
             on_result=on_result,
         )
     )
     _RETRY_TASKS.add(task)
     return task
+
+
+def _report(on_result: Callable[[SidecarPin], None] | None, result: SidecarPin) -> None:
+    """Hand one attempt's result to the wiring hook; never let it abort the loop."""
+    if on_result is None:
+        return
+    try:
+        on_result(result)
+    except Exception:  # noqa: BLE001 - a diagnostic refresh never matters
+        logger.warning("sidecar auto-pin retry callback failed", exc_info=True)
 
 
 async def _retry_autopin(
@@ -209,13 +253,35 @@ async def _retry_autopin(
     transport: Any,
     timeout: float,
     delay: float,
+    attempts: int,
     on_result: Callable[[SidecarPin], None] | None,
 ) -> SidecarPin | None:
-    """Sleep once, then re-probe + pin; drop the strong ref on every exit path."""
+    """Re-probe every ``delay`` until one ANSWERS or ``attempts`` are spent.
+
+    ONE warning per failed attempt comes from :func:`autopin_sidecar` itself; a
+    spent budget adds exactly ONE final warning naming what was tried. The
+    strong ref is dropped on every exit path (success, exhaustion, cancel).
+    """
     current = asyncio.current_task()
+    last: SidecarPin | None = None
     try:
-        await asyncio.sleep(delay)
-        result = autopin_sidecar(registry, url=base, transport=transport, timeout=timeout)
+        for _attempt in range(attempts):
+            await asyncio.sleep(delay)
+            last = autopin_sidecar(
+                registry, url=base, transport=transport, timeout=timeout
+            )
+            _report(on_result, last)
+            if not last.unreachable:
+                return last
+        logger.warning(
+            "sidecar auto-pin at %s: still unreachable after %d re-probe(s) over "
+            "~%.0f s — giving up; the roles stay unbound until the sidecar is up "
+            "and the engine restarts (or bind them in the Connections drawer)",
+            base,
+            attempts,
+            attempts * delay,
+        )
+        return last
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - housekeeping must never surface
@@ -226,12 +292,6 @@ async def _retry_autopin(
     finally:
         if current is not None:
             _RETRY_TASKS.discard(current)
-    if on_result is not None:
-        try:
-            on_result(result)
-        except Exception:  # noqa: BLE001 - a diagnostic refresh never matters
-            logger.warning("sidecar auto-pin retry callback failed", exc_info=True)
-    return result
 
 
 def _as_base(url: str) -> str:

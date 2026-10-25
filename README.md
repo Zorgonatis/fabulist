@@ -162,8 +162,20 @@ you at boot**: it asks the sidecar which model ids it serves, creates
 binds each one — but only when the agent slot is **empty** and the model is served. A role that
 already points somewhere is never touched (and the narrator is never touched at all), deleting a
 pin stays deleted across reboots, and a partial or unreachable sidecar pins what it can and logs
-one notice instead of failing the boot. The snippet below is the manual fallback for a custom
-setup (another host, a different port, no compose).
+one notice instead of failing the boot.
+
+Two separate things keep the boot race from costing you the pins. First, the compose file
+starts the engine only after the sidecar reports **healthy** (`depends_on: fabulist-models:
+condition: service_healthy`). That healthcheck requests `/v1/models`, which the router answers
+as soon as it listens — with every model `unloaded` — so it is a real "the router parsed its
+preset" check that never loads a model, never downloads a weight, and never waits for a Vulkan
+model load. Second, if the probe is unreachable anyway (a sidecar restarted behind a running
+engine, the host-network variant, or a first boot slower than the healthcheck's start period),
+the engine keeps re-probing on a **bounded repeating schedule**: every ~25 s, at most 24
+attempts (about ten minutes), stopping at the first probe that answers. Each failed attempt
+logs one notice, a spent budget logs one final giving-up line, and boot never waits for any of
+it. The snippet below is the manual fallback for a custom setup (another host, a different
+port, no compose).
 
 Three connections, one per role:
 

@@ -44,6 +44,7 @@ from fabulist.sidecar import (
     SIDECAR_URL_ENV,
     autopin_sidecar,
     models_url,
+    schedule_autopin_retry,
 )
 from fabulist.wiring import build_app
 
@@ -507,19 +508,22 @@ def test_boot_hook_pins_against_a_real_sidecar_socket(tmp_path, monkeypatch, fak
         app.state.log.close()
 
 
-# --- 7. the compose boot race: ONE deferred re-probe ----------------------
+# --- 7. the boot race: a BOUNDED repeating re-probe schedule --------------
 
 
 def test_unreachable_at_boot_then_reachable_at_retry_pins(tmp_path, monkeypatch):
-    """The compose race: the sidecar is not ready at boot, up ~25 s later.
+    """The race: the sidecar is not ready at boot, up on the first re-probe.
 
-    The boot probe logs its one notice and arms exactly ONE deferred re-probe;
-    when that retry runs against a sidecar that is now serving, the ordinary
-    fill-empty-slots pin lands and refreshes ``app.state.sidecar_pin``.
+    The boot probe logs its one notice and arms the bounded schedule
+    (``RETRY_DELAY_S`` is the knob pinned here); the first re-probe runs against
+    a sidecar that is now serving, so the ordinary fill-empty-slots pin lands,
+    refreshes ``app.state.sidecar_pin``, and the schedule STOPS — the budget it
+    had left is never spent.
     """
     store = make_store(tmp_path)
     monkeypatch.setenv(SIDECAR_URL_ENV, SIDECAR)
     monkeypatch.setattr(sidecar_module, "RETRY_DELAY_S", 0.01)
+    monkeypatch.setattr(sidecar_module, "RETRY_MAX_ATTEMPTS", 5)
     attempts: list[int] = []
 
     def flaky(url, *, timeout=0.0, transport=None):
@@ -535,14 +539,16 @@ def test_unreachable_at_boot_then_reachable_at_retry_pins(tmp_path, monkeypatch)
         booted = app.state.sidecar_pin
         retry = app.state.sidecar_retry
         assert booted.unreachable is True, "the boot probe lost the race"
-        assert retry is not None, "an unreachable boot probe must arm ONE retry"
+        assert retry is not None, "an unreachable boot probe must arm the schedule"
         result = await asyncio.wait_for(retry, timeout=5)
+        # The task is DONE: waiting longer must not produce another attempt.
+        await asyncio.sleep(0.05)
         return app, booted, result
 
     app, booted, result = asyncio.run(_scenario())
     try:
         assert booted.notice is not None
-        assert len(attempts) == 2, "exactly one deferred re-probe, never a loop"
+        assert len(attempts) == 2, "boot + ONE re-probe: success stops the schedule"
         assert result is not None and result.pinned == {
             "embedder": "sidecar-embed",
             "reranker": "sidecar-rerank",
@@ -562,12 +568,62 @@ def test_unreachable_at_boot_then_reachable_at_retry_pins(tmp_path, monkeypatch)
         app.state.log.close()
 
 
+@pytest.mark.parametrize("success_at", [2, 3])
+def test_autopin_retry_repeats_until_success_then_stops(
+    tmp_path, monkeypatch, success_at
+):
+    """A slow sidecar is still pinned: the schedule REPEATS, then stops.
+
+    ``success_at`` counts probes including the boot one: 2 = the first re-probe
+    answers, 3 = the second does. Either way every role is pinned once, and no
+    attempt happens after the answering one (the budget had retries left).
+    """
+    store = make_store(tmp_path)
+    monkeypatch.setenv(SIDECAR_URL_ENV, SIDECAR)
+    monkeypatch.setattr(sidecar_module, "RETRY_DELAY_S", 0.01)
+    monkeypatch.setattr(sidecar_module, "RETRY_MAX_ATTEMPTS", 5)
+    attempts: list[int] = []
+
+    def flaky(url, *, timeout=0.0, transport=None):
+        attempts.append(1)
+        if len(attempts) < success_at:
+            raise httpx.ConnectError("connection refused")
+        return ALL_MODELS
+
+    monkeypatch.setattr(sidecar_module, "fetch_served_models", flaky)
+
+    async def _scenario():
+        app = build_app(registry=store, log_path=tmp_path / "events.db")
+        retry = app.state.sidecar_retry
+        assert retry is not None
+        result = await asyncio.wait_for(retry, timeout=5)
+        await asyncio.sleep(0.05)  # a live schedule would have probed again
+        return app, result
+
+    app, result = asyncio.run(_scenario())
+    try:
+        assert len(attempts) == success_at, "stops at the first answering probe"
+        assert result is not None and not result.unreachable
+        assert set(result.pinned) == {"embedder", "reranker", "decision"}
+        assert store.connection_for("decision").name == "sidecar-decision"
+        assert app.state.sidecar_pin is result
+        assert sidecar_module._RETRY_TASKS == set()
+    finally:
+        app.state.log.close()
+
+
 def test_unreachable_at_boot_and_at_retry_pins_nothing(tmp_path, monkeypatch, caplog):
-    """Still down at the retry: no pin, and each attempt logs exactly ONE notice."""
+    """Still down through a spent budget: no pin, ONE notice per attempt.
+
+    The chosen logging discipline: every failed attempt logs its own ONE notice
+    (the probe's), and the exhausted budget adds exactly ONE final giving-up
+    line — never a pair per attempt, never silence.
+    """
     store = make_store(tmp_path)
     before = store.path.read_text(encoding="utf-8")
     monkeypatch.setenv(SIDECAR_URL_ENV, SIDECAR)
     monkeypatch.setattr(sidecar_module, "RETRY_DELAY_S", 0.01)
+    monkeypatch.setattr(sidecar_module, "RETRY_MAX_ATTEMPTS", 2)
     attempts: list[int] = []
 
     def down(url, *, timeout=0.0, transport=None):
@@ -585,7 +641,7 @@ def test_unreachable_at_boot_and_at_retry_pins_nothing(tmp_path, monkeypatch, ca
     with caplog.at_level(logging.WARNING, logger="fabulist.sidecar"):
         app, result = asyncio.run(_scenario())
     try:
-        assert len(attempts) == 2, "boot + exactly one retry, never a loop"
+        assert len(attempts) == 3, "boot + the two attempts the budget allowed"
         assert result is not None
         assert result.pinned == {} and result.unreachable is True
         assert result.notice is not None and "unreachable" in result.notice
@@ -593,18 +649,108 @@ def test_unreachable_at_boot_and_at_retry_pins_nothing(tmp_path, monkeypatch, ca
         assert set(store.connections) == {"local"}
         assert store.agents == {"narrator": "local"}
         assert app.state.sidecar_pin is result
-        # ONE notice PER ATTEMPT (boot, then the retry's final failure): a single
-        # attempt never logs a pair, and the retry never becomes a loop.
         warnings = [
-            r
+            r.getMessage()
             for r in caplog.records
             if r.levelno == logging.WARNING and r.name == "fabulist.sidecar"
         ]
-        assert len(warnings) == 2
-        assert all("unreachable" in r.getMessage() for r in warnings)
+        # ONE notice PER ATTEMPT (boot + each retry), plus ONE final line.
+        assert len(warnings) == 4, warnings
+        assert sum("models endpoint is unreachable" in m for m in warnings) == 3
+        assert sum("giving up" in m for m in warnings) == 1
         assert sidecar_module._RETRY_TASKS == set()
     finally:
         app.state.log.close()
+
+
+def test_never_reachable_stops_after_the_budget_with_one_final_notice(
+    tmp_path, monkeypatch, caplog
+):
+    """A sidecar that never comes up: the budget ENDS the schedule, loudly once."""
+    store = make_store(tmp_path)
+    before = store.path.read_text(encoding="utf-8")
+    monkeypatch.setenv(SIDECAR_URL_ENV, SIDECAR)
+    monkeypatch.setattr(sidecar_module, "RETRY_DELAY_S", 0.01)
+    monkeypatch.setattr(sidecar_module, "RETRY_MAX_ATTEMPTS", 3)
+    attempts: list[int] = []
+
+    def down(url, *, timeout=0.0, transport=None):
+        attempts.append(1)
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(sidecar_module, "fetch_served_models", down)
+
+    async def _scenario():
+        app = build_app(registry=store, log_path=tmp_path / "events.db")
+        retry = app.state.sidecar_retry
+        assert retry is not None
+        result = await asyncio.wait_for(retry, timeout=10)
+        await asyncio.sleep(0.05)  # proves the schedule ended, not paused
+        return app, result
+
+    with caplog.at_level(logging.WARNING, logger="fabulist.sidecar"):
+        app, result = asyncio.run(_scenario())
+    try:
+        assert len(attempts) == 4, "boot + exactly the three allowed re-probes"
+        assert result is not None and result.pinned == {}
+        assert store.path.read_text(encoding="utf-8") == before
+        assert store.agents == {"narrator": "local"}
+        giving_up = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and r.name == "fabulist.sidecar"
+            and "giving up" in r.getMessage()
+        ]
+        assert len(giving_up) == 1, "ONE final line when the budget is spent"
+        assert "3 re-probe" in giving_up[0]
+        assert sidecar_module._RETRY_TASKS == set()
+    finally:
+        app.state.log.close()
+
+
+def test_no_env_var_arms_no_retry_schedule(tmp_path, monkeypatch):
+    """Unset FABULIST_SIDECAR_URL: no probe, no schedule (the app-only shape)."""
+    store = make_store(tmp_path)
+    before = store.path.read_text(encoding="utf-8")
+
+    def handler(url, *, timeout=0.0, transport=None):  # pragma: no cover
+        raise AssertionError("the sidecar must not be probed when the env is unset")
+
+    monkeypatch.setattr(sidecar_module, "fetch_served_models", handler)
+
+    async def _scenario():
+        app = build_app(registry=store, log_path=tmp_path / "events.db")
+        assert app.state.sidecar_retry is None, "nothing may be armed"
+        await asyncio.sleep(0.05)
+        return app
+
+    app = asyncio.run(_scenario())
+    try:
+        assert app.state.sidecar_pin.url is None
+        assert app.state.sidecar_pin.notice is None
+        assert store.path.read_text(encoding="utf-8") == before
+        assert sidecar_module._RETRY_TASKS == set()
+    finally:
+        app.state.log.close()
+
+
+def test_no_running_event_loop_arms_nothing_and_never_raises(tmp_path, monkeypatch):
+    """A sync ``build_app`` (no loop) has no task to arm - and no exception."""
+    store = make_store(tmp_path)
+    monkeypatch.setenv(SIDECAR_URL_ENV, SIDECAR)
+
+    def down(url, *, timeout=0.0, transport=None):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(sidecar_module, "fetch_served_models", down)
+
+    boot = autopin_sidecar(store)  # deliberately synchronous
+    assert boot.unreachable is True
+    task = schedule_autopin_retry(store, boot, delay=0.01, attempts=2)
+    assert task is None, "no running loop -> no task"
+    assert sidecar_module._RETRY_TASKS == set()
+    assert store.agents == {"narrator": "local"}
 
 
 def test_success_at_boot_arms_no_deferred_task(tmp_path, monkeypatch):

@@ -3270,13 +3270,17 @@ def build_app(
     app.state.sidecar_pin = sidecar_pin
     # Issue #36 (compose boot race): when the boot probe was UNREACHABLE (the
     # sidecar's DNS/service name was not ready, or it was still crash-looping its
-    # device guard), arm exactly ONE deferred re-probe. It re-runs the same
-    # fill-empty-slots pin ~25 s later — non-blocking (boot never waits), never a
-    # loop, and idempotent, so a sidecar that came up (or a user who pinned
-    # meanwhile) simply writes nothing. A boot probe that ANSWERED, or an unset
-    # FABULIST_SIDECAR_URL, arms nothing: single-shot boot is unchanged. The task
-    # refreshes this diagnostic when it lands and is dropped by loop shutdown, so
-    # it never outlives the app (see fabulist.sidecar for the task discipline).
+    # device guard), arm the BOUNDED repeating re-probe. It re-runs the same
+    # fill-empty-slots pin every ~25 s, at most 24 times (~10 minutes), stopping
+    # at the first probe that ANSWERS — non-blocking (boot never waits), and
+    # idempotent, so a sidecar that came up (or a user who pinned meanwhile)
+    # simply ends the schedule without writing. A boot probe that ANSWERED, or an
+    # unset FABULIST_SIDECAR_URL, arms nothing: single-shot boot is unchanged.
+    # The compose file also orders the engine behind the sidecar's healthcheck;
+    # this schedule is the second line of defence for a sidecar that restarts
+    # later. The task refreshes this diagnostic on every attempt and is dropped
+    # by loop shutdown, so it never outlives the app (see fabulist.sidecar for
+    # the task discipline).
     def _refresh_sidecar_pin(result: Any) -> None:
         app.state.sidecar_pin = result
 
