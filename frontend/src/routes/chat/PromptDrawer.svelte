@@ -115,7 +115,7 @@
 	 * `GET /api/prompts/steps` is unreachable (the live titles/blurbs/triggers
 	 * come from `fabulist.prompts.catalog` through that endpoint). */
 	const FLOW_TITLES: Record<PromptFlow, string> = {
-		narrate: 'narrator — the prose turn',
+		narrate: 'the narrator — the prose turn',
 		ooc: 'out-of-character directive',
 		extract: 'state/fact extraction',
 		summarize: 'history compaction',
@@ -1402,16 +1402,16 @@
 				<p class="loading">Loading presets…</p>
 			{:else if !draft}
 				<div class="empty">
-					<p>No preset selected — the engine is using the byte-faithful default pipeline.</p>
-					<p>Use <strong>New from default</strong> to seed an editable preset, then Activate it.</p>
+					<p>No preset selected — the engine is using the built-in default prompt.</p>
+					<p>Use <strong>New from default</strong> to make an editable copy, then Activate it.</p>
 				</div>
 			{:else}
 				{#if editingDefault}
 					<p class="default-note">
 						There is no named preset active — you are editing the <strong
-							>persisted default pipeline</strong
-						> directly (D26). Save applies in place; use <strong>Commit to default</strong> to
-						export it to the repo factory image.
+							>default prompt</strong
+						> directly. Save applies in place; use <strong>Commit to default</strong> to write it
+						back to the shipped defaults.
 					</p>
 				{/if}
 				{#if variables.length && activeView !== 'steps'}
@@ -1544,7 +1544,7 @@
 							</button>
 						</div>
 						<p class="hint">
-							Known variables: {knownNames}. Unknown tokens render literally.
+							Known variables: {knownNames}. Unknown placeholders are left as written.
 							{#if unknownVars.length}<span class="warn">Unknown: {unknownVars.join(', ')}</span
 								>{/if}
 						</p>
@@ -1555,8 +1555,8 @@
 			<div class="session-overrides">
 				<h3>Session overrides</h3>
 				<p class="sub">
-					Modules seeded from the imported card for THIS chat (D29). Toggling or editing
-					appends a session event — shared presets are never touched.
+					Modules copied from the imported card for this chat only. Toggling or editing
+					changes this chat — shared presets are never touched.
 				</p>
 				{#if !sessionId}
 					<p class="hint">Open a chat to see its session modules.</p>

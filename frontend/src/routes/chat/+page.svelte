@@ -2238,8 +2238,8 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 						type="button"
 						class="shell-btn"
 						class:active={promptsOpen}
-						title="Edit the prompt pipeline — presets, modules, variables"
-						aria-label="Prompts — edit the prompt pipeline"
+						title="The prompt — its steps, rules and variables"
+						aria-label="Prompts — the prompt steps and rules"
 						onclick={() => {
 							promptView = 'steps';
 							promptsOpen = true;
@@ -2251,8 +2251,8 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 						type="button"
 						class="shell-btn"
 						class:active={promptsOpen && promptView === 'rules'}
-						title="Runtime directives — enable and order rules"
-						aria-label="Rules — runtime directives"
+						title="Rules — turn rules on, off and reorder them"
+						aria-label="Rules — the narrator rules"
 						onclick={openRules}
 					>
 						<span class="shell-glyph" aria-hidden="true">⚙</span>

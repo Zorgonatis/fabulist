@@ -66,8 +66,8 @@
 
 	/** D27 surfaces placeholders (literal; `{{...}}` in attributes is an
 	 * EXPRESSION in Svelte — keep braces out of attribute strings). */
-	const SURFACE_PLACEHOLDER = 'Inherited from the factory default — type to override';
-	const SURFACE_TEXTAREA_PLACEHOLDER = 'Type to override the factory default';
+	const SURFACE_PLACEHOLDER = 'Using the shipped text — type to override it';
+	const SURFACE_TEXTAREA_PLACEHOLDER = 'Type to replace the shipped text';
 
 	/** The recalled section headers (D27 surface 2). */
 	const RECALLED_HEADERS: { key: 'recall' | 'world_info' | 'recap' | 'bts'; label: string }[] = [
@@ -81,10 +81,10 @@
 <div class="surfaces">
 	<div class="section-head">
 		<button type="button" class="back" onclick={onBack}>← Steps</button>
-		<h3>Advanced — token text</h3>
+		<h3>Advanced — text the engine fills in</h3>
 	</div>
 	<p class="sub">
-		Every prompt-contributing text the engine substitutes outside the step blocks.
+		The text the engine fills in around the step blocks — each field is sent to the model as written.
 	</p>
 	{#if editingDefault}
 		<div class="surface-toolbar">
@@ -106,20 +106,19 @@
 			>
 				Reset to factory
 			</button>
-			<span class="toolbar-note">These surfaces drive the live default pipeline (D26).</span>
+			<span class="toolbar-note">These fields change the default prompt.</span>
 		</div>
 	{:else}
 		<p class="default-note">
-			Advanced token text is carried by <strong>{presetName}</strong>. Commit/reset apply to the
-			default preset.
+			This text belongs to <strong>{presetName}</strong>. Commit and reset apply to the default
+			prompt.
 		</p>
 	{/if}
 
 	<!-- Group 1 — the OpenUI component doc the narrator sees. -->
 	<h3>Component library reference</h3>
 	<p class="sub">
-		The OpenUI component doc substituted for <code>&lt;&lt;library&gt;&gt;</code> — what the
-		narrator sees.
+		What the narrator is told about the visual components it may draw with.
 	</p>
 	<textarea
 		class="surface"
@@ -135,7 +134,7 @@
 	<!-- Group 2 — how recalled memories are wrapped in the post-user block. -->
 	<h3>Recalled reference wrapper</h3>
 	<p class="sub">
-		The post-user <code>&lt;recalled&gt;</code> wrapper copy and its section headers.
+		How recalled memories and lore are introduced to the narrator, and the headings they sit under.
 	</p>
 	<label class="surface-field">
 		<span>Framing</span>
@@ -191,9 +190,9 @@
 	{/each}
 
 	<!-- Group 3 — rewrites and depth applied to projected history. -->
-	<h3>History projection</h3>
+	<h3>Earlier turns</h3>
 	<p class="sub">
-		Rewrites applied when projecting prompt history, plus the depth and DSL-trim knobs.
+		Clean-ups applied to earlier turns before they are sent, plus how far back to send.
 	</p>
 	{#each regexRows as row, index (row.id)}
 		<div class="regex-row">
@@ -266,7 +265,7 @@
 			</button>
 		</div>
 	{:else}
-		<p class="hint">No regex scripts — inherited from the factory default.</p>
+		<p class="hint">No rewrite rules — using the shipped ones.</p>
 	{/each}
 	<button type="button" class="btn" onclick={addRegexRow}>+ add regex</button>
 
@@ -291,29 +290,29 @@
 				checked={historyKnobs.strip_dsl ?? false}
 				onchange={(event) => setHistory({ strip_dsl: event.currentTarget.checked })}
 			/>
-			Strip openui DSL from history
+			Strip panel markup from earlier turns
 		</label>
 	</div>
 
 	<!-- Group 4 — legacy override map, kept until migrated into the Rules rows. -->
-	<h3>Legacy directive text</h3>
+	<h3>Old rule overrides</h3>
 	<p class="sub">
-		Old directive override text this preset still carries — fold it into the Rules rows.
+		Leftover rule text this preset still carries — move it into the Rules rows.
 	</p>
 	{#if legacyOverrideCount > 0}
 		<button
 			type="button"
 			class="btn"
-			title="Fold each override into the matching directive row's content, then clear the map"
+			title="Move each override into its rule's text, then clear this list"
 			onclick={onMigrateDirectives}
 		>
 			Migrate {legacyOverrideCount} legacy text override{legacyOverrideCount === 1 ? '' : 's'}
 		</button>
 	{:else}
-		<p class="hint">No legacy text overrides.</p>
+		<p class="hint">No old overrides to move.</p>
 	{/if}
 	{#if unknownVars.length}
-		<p class="hint"><span class="warn">Unknown tokens: {unknownVars.join(', ')}</span></p>
+		<p class="hint"><span class="warn">Unknown placeholders: {unknownVars.join(', ')}</span></p>
 	{/if}
 </div>
 

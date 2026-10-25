@@ -693,7 +693,7 @@
       "core": false,
       "protected": true,
       "enabled": true,
-      "description": "The provenance contract: how engine context blocks are read, once."
+      "description": "The engine's own notes for this turn, and how the narrator reads them."
     },
     {
       "id": "director",
@@ -715,7 +715,7 @@
       "core": true,
       "protected": false,
       "enabled": true,
-      "description": "Owner-binding limits: not a predictable AI; not responsible for the user."
+      "description": "Hard limits: never a predictable AI, never answerable for the player."
     },
     {
       "id": "perspective",
@@ -748,7 +748,7 @@
       "core": false,
       "protected": false,
       "enabled": true,
-      "description": "NPCs run high autonomy on persona, knowing only what they could."
+      "description": "Characters follow their own persona and only what they could know."
     },
     {
       "id": "character_settings",
@@ -847,7 +847,7 @@
       "core": false,
       "protected": false,
       "enabled": true,
-      "description": "Treats injected state facts as ground truth for the scene."
+      "description": "Treats the tracked facts as ground truth for the scene."
     },
     {
       "id": "scene_images",
@@ -858,7 +858,7 @@
       "core": false,
       "protected": false,
       "enabled": true,
-      "description": "Treats inline images as the visible scene, folding their content into narration."
+      "description": "Treats images in the chat as part of the scene and describes them."
     },
     {
       "id": "visual_panels",
@@ -869,7 +869,7 @@
       "core": false,
       "protected": false,
       "enabled": true,
-      "description": "Drafts novel components interwoven with prose; Custom for raw HTML/CSS."
+      "description": "Adds visual panels between paragraphs; Custom allows raw HTML/CSS."
     },
     {
       "id": "panel_placement",
@@ -880,7 +880,7 @@
       "core": false,
       "protected": true,
       "enabled": true,
-      "description": "Declares panels inline at their anchor, never top or tail."
+      "description": "Puts each panel where it belongs in the prose, never top or tail."
     },
     {
       "id": "hard_prohibition",
@@ -902,7 +902,7 @@
       "core": false,
       "protected": false,
       "enabled": true,
-      "description": "Sorts each message OOC or incomplete; [OOC] steps out of role."
+      "description": "Sorts each message as in-character or OOC; [OOC] steps out of role."
     }
   ]
 }

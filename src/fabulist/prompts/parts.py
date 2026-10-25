@@ -272,7 +272,7 @@ DEFAULT_DIRECTIVES: tuple[Directive, ...] = (
     Directive(
         id=ENGINE_CONTEXT_DIRECTIVE_ID,
         name="Engine context",
-        description="The provenance contract: how engine context blocks are read, once.",
+        description="The engine's own notes for this turn, and how the narrator reads them.",
         tier=0,
         priority=100,
         protected=True,
@@ -301,7 +301,7 @@ DEFAULT_DIRECTIVES: tuple[Directive, ...] = (
     Directive(
         id="engine_is_not",
         name="What the Content Engine is NOT",
-        description="Owner-binding limits: not a predictable AI; not responsible for the user.",
+        description="Hard limits: never a predictable AI, never answerable for the player.",
         tier=1,
         priority=100,
         core=True,
@@ -334,7 +334,7 @@ DEFAULT_DIRECTIVES: tuple[Directive, ...] = (
     Directive(
         id="npc_cognition",
         name="NPC autonomy and knowledge bounds",
-        description="NPCs run high autonomy on persona, knowing only what they could.",
+        description="Characters follow their own persona and only what they could know.",
         tier=1,
         priority=55,
         content=(
@@ -465,7 +465,7 @@ DEFAULT_DIRECTIVES: tuple[Directive, ...] = (
     Directive(
         id="world_facts",
         name="World facts",
-        description="Treats injected state facts as ground truth for the scene.",
+        description="Treats the tracked facts as ground truth for the scene.",
         tier=0,
         priority=70,
         content=_WORLD_FACTS,
@@ -473,7 +473,7 @@ DEFAULT_DIRECTIVES: tuple[Directive, ...] = (
     Directive(
         id="scene_images",
         name="Scene images",
-        description="Treats inline images as the visible scene, folding their content into narration.",
+        description="Treats images in the chat as part of the scene and describes them.",
         tier=0,
         priority=68,
         content="""The transcript may carry an inline image or clip on your past turns. Each is a canon
@@ -487,7 +487,7 @@ needs no recitation unless the scene turns toward it.""",
     Directive(
         id="visual_panels",
         name="Visual panels",
-        description="Drafts novel components interwoven with prose; Custom for raw HTML/CSS.",
+        description="Adds visual panels between paragraphs; Custom allows raw HTML/CSS.",
         tier=4,
         priority=40,
         content=_VISUAL_PANELS,
@@ -495,7 +495,7 @@ needs no recitation unless the scene turns toward it.""",
     Directive(
         id="panel_placement",
         name="Panel placement",
-        description="Declares panels inline at their anchor, never top or tail.",
+        description="Puts each panel where it belongs in the prose, never top or tail.",
         tier=4,
         priority=95,
         protected=True,
@@ -512,7 +512,7 @@ needs no recitation unless the scene turns toward it.""",
     Directive(
         id="ooc",
         name="Out of character (OOC)",
-        description="Sorts each message OOC or incomplete; [OOC] steps out of role.",
+        description="Sorts each message as in-character or OOC; [OOC] steps out of role.",
         tier=0,
         priority=65,
         content=_OOC,

@@ -78,11 +78,11 @@
 
 	/** Directive editor placeholder (literal: `{{...}}` inside a Svelte attribute
 	 * is parsed as an expression). */
-	const DIRECTIVE_CONTENT_PLACEHOLDER = 'Directive content — type {{name}} to insert a variable';
+	const DIRECTIVE_CONTENT_PLACEHOLDER = 'Rule text — type {{name}} to insert a variable';
 
 	/** One-line description shown under the title (never rendered into the prompt). */
 	function rowDescription(row: PromptDirective): string {
-		return row.description?.trim() || 'No description.';
+		return row.description?.trim() || 'No description yet.';
 	}
 </script>
 
@@ -90,11 +90,11 @@
 	<div class="section-head">
 		<button type="button" class="back" onclick={onBack}>← Steps</button>
 		<h3>Rules</h3>
-		<button type="button" class="btn" onclick={onAdd}>+ add directive</button>
+		<button type="button" class="btn" onclick={onAdd}>+ add rule</button>
 	</div>
 	<p class="sub">
-		Ordered narrator directive rows. This list is render order; the preset's own list replaces
-		the factory catalog wholesale.
+		The rules the narrator is given, in the order it reads them. Edit a row to change what the
+		narrator is told.
 	</p>
 
 	<!-- Issue #39: the Anti Injection product setting. It is NOT a directive row:
@@ -114,24 +114,24 @@
 			<span class="badge ai-state">{antiInjection ? 'on' : 'off'}</span>
 		</label>
 		<p class="hint" id="anti-injection-hint">
-			Tells the narrator that the engine's tagged context blocks are the engine's words, not
-			the player's. Off: that clause is left out of the prompt entirely.
+			Reminds the narrator that the engine's notes are the engine's words, not the player's.
+			Off: that line is left out of the prompt entirely.
 		</p>
 		{#if antiInjectionError}
 			<p class="error" role="alert">{antiInjectionError}</p>
 		{/if}
 	</div>
 	{#if inherited}
-		<p class="inherited-note">Inherited from the factory default — edit to customize.</p>
+		<p class="inherited-note">Inherited from the shipped defaults — edit to make them yours.</p>
 		{#if factoryError}
 			<p class="error" role="alert">{factoryError}</p>
 			{#if catalog.length}
 				<p class="hint">
-					Known factory directives: {catalog.map((d) => d.label).join(', ')}
+					Known default rules: {catalog.map((d) => d.label).join(', ')}
 				</p>
 			{/if}
 		{:else if factoryCount === 0}
-			<p class="hint">Loading the factory catalog…</p>
+			<p class="hint">Loading the built-in rules…</p>
 		{/if}
 	{/if}
 
@@ -157,20 +157,20 @@
 				<input
 					type="checkbox"
 					checked={row.enabled}
-					aria-label="Enable directive"
+					aria-label="Enable rule"
 					onchange={() => onToggle(row.id)}
 				/>
 				<span class="rule-title">
 					<span class="mod-name">{row.name}</span>
 					{#if row.id === 'engine_context' && !antiInjection}
 						<span class="rule-desc gated">
-							Not in the prompt while Anti Injection is off
+							Left out of the prompt while Anti Injection is off
 						</span>
 					{:else}
 						<span class="rule-desc">{rowDescription(row)}</span>
 					{/if}
 				</span>
-				<span class="badge tier-badge" title="Priority {row.priority}{row.core ? ' · core' : ''}">
+				<span class="badge tier-badge" title="Trim order {row.priority}{row.core ? ' · core' : ''}">
 					tier {row.tier}
 				</span>
 				<div class="row-actions">
@@ -197,8 +197,8 @@
 					<button
 						type="button"
 						class="icon"
-						title="Edit directive"
-						aria-label="Edit directive"
+						title="Edit rule"
+						aria-label="Edit rule"
 						aria-expanded={editingId === row.id}
 						onclick={() => onToggleEdit(row.id)}
 					>
@@ -207,8 +207,8 @@
 					<button
 						type="button"
 						class="icon danger"
-						title="Delete directive"
-						aria-label="Delete directive"
+						title="Delete rule"
+						aria-label="Delete rule"
 						onclick={() => onDelete(row.id)}
 					>
 						×
@@ -223,7 +223,7 @@
 								<input
 									type="text"
 									class="surface-input"
-									aria-label="Directive name"
+									aria-label="Rule name"
 									value={row.name}
 									oninput={(event) => onPatch(row.id, { name: event.currentTarget.value })}
 								/>
@@ -233,8 +233,8 @@
 								<input
 									type="text"
 									class="surface-input"
-									aria-label="Directive description"
-									placeholder="(never rendered into the prompt)"
+									aria-label="Rule description"
+									placeholder="Shown here in settings, never sent to the narrator"
 									value={row.description}
 									oninput={(event) => onPatch(row.id, { description: event.currentTarget.value })}
 								/>
@@ -244,7 +244,7 @@
 								<input
 									type="number"
 									class="surface-input depth"
-									aria-label="Directive tier"
+									aria-label="Rule group"
 									min="0"
 									max="4"
 									value={row.tier}
@@ -257,8 +257,8 @@
 								<input
 									type="number"
 									class="surface-input depth"
-									aria-label="Directive priority"
-									title="Budget-trim order (lower trims first)"
+									aria-label="Trim order"
+									title="Trim order when the prompt runs long (lower goes first)"
 									value={row.priority}
 									oninput={(event) =>
 										onPatch(row.id, { priority: Number(event.currentTarget.value) || 0 })}
@@ -268,7 +268,7 @@
 						<textarea
 							class="content"
 							rows="6"
-							aria-label="Directive content"
+							aria-label="Rule text"
 							placeholder={DIRECTIVE_CONTENT_PLACEHOLDER}
 							value={row.content}
 							onfocus={(event) =>
@@ -279,14 +279,14 @@
 				{/if}
 			</li>
 		{:else}
-			<li class="empty-row">No directive rows.</li>
+			<li class="empty-row">No rules yet.</li>
 		{/each}
 	</ol>
 
 	{#if unknownVars.length}
-		<p class="hint"><span class="warn">Unknown tokens: {unknownVars.join(', ')}</span></p>
+		<p class="hint"><span class="warn">Unknown placeholders: {unknownVars.join(', ')}</span></p>
 	{/if}
-	<p class="hint">Known variables: {knownNames}. Unknown tokens render literally.</p>
+	<p class="hint">Known variables: {knownNames}. Unknown placeholders are left as written.</p>
 </div>
 
 <style>
