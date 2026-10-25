@@ -1115,7 +1115,7 @@
 						<small>host:port of any OpenAI-compatible server; a bare host:port is treated as http://…/v1 — add a path to override</small>
 						{#if editingName}
 							<small
-								>Changing an endpoint on a live caller is out of scope — new connection.</small
+								>The endpoint is fixed once a connection exists — create a new one to change it.</small
 							>
 						{/if}
 					</label>

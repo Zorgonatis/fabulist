@@ -533,7 +533,7 @@
 			{#if row.promoted_persona_id}
 				<span
 					class="cast-badge cast-badge-promoted"
-					title="A studio actor persona card was minted from this member — the chat keeps the member; the card outlives it"
+					title="This member already has a studio persona card — the chat keeps the member; the card outlives it"
 					>promoted</span
 				>
 			{/if}

@@ -165,9 +165,9 @@
 	</header>
 
 	<p class="hint">
-		The attributes the BTS tracker may set. A meter is a number inside its range; a trait is free
-		text. The tracker receives this list every turn, so a key added here is settable on the very
-		next turn — and a range here is what its <code>set_attr</code> calls are clamped to.
+		The attributes the world tracker may set. A meter is a number inside its range; a trait is free
+		text. The tracker sees this list every turn, so a key you add here can be set from the very
+		next turn — and the range you give is the range it must stay inside.
 	</p>
 	<p class="hint">
 		<strong>relational</strong> is a value one being holds toward another (a subject is

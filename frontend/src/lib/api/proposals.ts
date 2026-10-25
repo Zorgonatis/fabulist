@@ -554,7 +554,7 @@ const SECTION_SPECS: Record<string, readonly SectionSpec[]> = {
 		{ field: 'book_ids', label: 'Books' },
 		{ field: 'image_asset', label: 'Image' },
 		{ field: 'name', label: 'Name' },
-		{ field: 'provenance', label: 'Provenance' }
+		{ field: 'provenance', label: 'Where it came from' }
 	],
 	actor: [
 		// The name leads for an ACTOR: the promotion row mints a persona card and its
@@ -566,12 +566,12 @@ const SECTION_SPECS: Record<string, readonly SectionSpec[]> = {
 		{ field: 'scenario', label: 'Scenario' },
 		{ field: 'book_ids', label: 'Books' },
 		{ field: 'image_asset', label: 'Image' },
-		{ field: 'provenance', label: 'Provenance' }
+		{ field: 'provenance', label: 'Where it came from' }
 	],
 	book: [
 		{ field: 'entries', label: 'Entries' },
 		{ field: 'name', label: 'Name' },
-		{ field: 'provenance', label: 'Provenance' }
+		{ field: 'provenance', label: 'Where it came from' }
 	],
 	cast: []
 };

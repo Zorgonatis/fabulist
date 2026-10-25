@@ -171,7 +171,7 @@
 					{/if}
 				</span>
 				<span class="badge tier-badge" title="Trim order {row.priority}{row.core ? ' · core' : ''}">
-					tier {row.tier}
+					group {row.tier}
 				</span>
 				<div class="row-actions">
 					<button

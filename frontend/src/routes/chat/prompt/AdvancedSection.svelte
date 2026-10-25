@@ -92,7 +92,7 @@
 				type="button"
 				class="btn primary"
 				disabled={actionBusy || saving}
-				title="Save any edits, then write the default to prompts/factory-defaults.json"
+				title="Save your edits, then write them into the shipped defaults"
 				onclick={onCommitToDefault}
 			>
 				{actionBusy ? 'Working…' : 'Commit to default'}
@@ -101,7 +101,7 @@
 				type="button"
 				class="btn danger"
 				disabled={actionBusy || saving}
-				title="Re-seed the default from the factory image (discards edits)"
+				title="Put the shipped defaults back (discards your edits)"
 				onclick={onResetToFactory}
 			>
 				Reset to factory

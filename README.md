@@ -406,6 +406,7 @@ that keep that shape honest.
 - [docs/PERSONA-SPEC.md](docs/PERSONA-SPEC.md) — persona/actor cards and structured canon
 - [docs/PROMPT-SURFACES.md](docs/PROMPT-SURFACES.md) — prompt modules, presets and the compiler
 - [docs/UI-LANGUAGE.md](docs/UI-LANGUAGE.md) — component flavours and panel language
+- [docs/UI-COPY.md](docs/UI-COPY.md) — the register for user-facing hints, labels and descriptions
 - [docs/COMPONENT-PATTERNS.md](docs/COMPONENT-PATTERNS.md) — how to build a component
 - [docs/COMPONENT-SETS.md](docs/COMPONENT-SETS.md) — the frozen `technology` set (v1.0.0) and the reusable component core
 

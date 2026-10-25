@@ -378,14 +378,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						interaction: null,
 						call_site: 'fabulist.graph.nodes.make_pre_turn_node',
 						description:
-							'Classify the action and advance the clock; compile injected facts.'
+							'Reads what you just did, moves the clock on, and gathers the facts the narrator needs.'
 					},
 					agent: null,
 					prompt_surface: { door: 'fixed', reason: 'engine-owned rules clock/classifier' },
 					inspector: { kind: 'fixed_stage', agent_filter: null, events: [] },
 					activation: [],
 					composition: null,
-					meta: { description: 'No stage frame is emitted today; static in wave 1.', notes: [] }
+					meta: { description: 'Engine step — no model call, nothing to edit here.', notes: [] }
 				},
 				{
 					// W9.20: the planner is the plan junction's arm, BEFORE the lanes and
@@ -428,7 +428,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: 'npc',
 						call_site: null,
-						description: "Every active cast member's intent, 4 requests in flight."
+						description: "Every cast member in the scene works out what they want and acts on it — four at a time."
 					},
 					agent: {
 						interaction: 'npc',
@@ -452,7 +452,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 					},
 					meta: {
 						description:
-							'One lane per ACTIVE cast member (intent + narrative), pooled max_parallel at a time, merged by the narrator. Zero lanes with no cast: the turn is byte-identical.',
+							'One lane per cast member in the scene, merged back into the narration. With no cast there are no lanes and the turn runs as usual.',
 						notes: []
 					}
 				},
@@ -467,7 +467,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: 'npc',
 						call_site: null,
-						description: "One ACTIVE cast member's intent, narrative and lines."
+						description: "One cast member's intent, narration and lines."
 					},
 					agent: {
 						interaction: 'npc',
@@ -485,7 +485,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 					fanout: null,
 					meta: {
 						description:
-							'W9.17: the fan-out’s per-member node — ONE model pass per `Send`, bounded by the npc_lanes pool. Its rows are written at the fan-in join in member order, never completion order.',
+							'One lane. Lanes are written down in cast order, not in the order they happen to finish.',
 						notes: []
 					}
 				},
@@ -497,7 +497,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: 'narrate',
 						call_site: null,
-						description: 'Streaming prose + openui DSL.'
+						description: 'Streams the prose and the panel markup.'
 					},
 					agent: {
 						interaction: 'narrate',
@@ -531,14 +531,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 									kind: 'fixed',
 									interaction: null,
 									call_site: null,
-									description: 'Narrator system block.'
+									description: 'The narrator\'s standing instructions — sent identically every turn.'
 								},
 								agent: null,
 								prompt_surface: { door: 'step_editor', step_id: 'narrate' },
 								inspector: { kind: 'fixed_stage', agent_filter: null, events: [] },
 								activation: [],
 								composition: null,
-								meta: { description: 'Region: stable_prefix', notes: [] }
+								meta: { description: 'Fixed start — the same every turn', notes: [] }
 							},
 							{
 								id: 'library',
@@ -548,14 +548,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 									kind: 'fixed',
 									interaction: null,
 									call_site: null,
-									description: 'Generated narrator library doc.'
+									description: 'What the narrator is told about the visual panels it may draw.'
 								},
 								agent: null,
 								prompt_surface: { door: 'step_editor', step_id: 'narrate' },
 								inspector: { kind: 'fixed_stage', agent_filter: null, events: [] },
 								activation: [],
 								composition: null,
-								meta: { description: 'Region: stable_prefix', notes: [] }
+								meta: { description: 'Fixed start — the same every turn', notes: [] }
 							},
 							{
 								id: 'facts',
@@ -565,14 +565,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 									kind: 'fixed',
 									interaction: null,
 									call_site: null,
-									description: 'Per-turn state facts.'
+									description: 'What the world currently records.'
 								},
 								agent: null,
 								prompt_surface: { door: 'fixed', reason: 'engine-injected facts' },
 								inspector: { kind: 'fixed_stage', agent_filter: null, events: [] },
 								activation: [],
 								composition: null,
-								meta: { description: 'Region: dynamic_tail', notes: [] }
+								meta: { description: 'Changes every turn', notes: [] }
 							},
 							{
 								id: 'recalled',
@@ -582,14 +582,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 									kind: 'fixed',
 									interaction: null,
 									call_site: null,
-									description: 'Vector recall block.'
+									description: 'Memories and lore pulled in for this turn.'
 								},
 								agent: null,
 								prompt_surface: { door: 'fixed', reason: 'engine recall seam' },
 								inspector: { kind: 'fixed_stage', agent_filter: null, events: [] },
 								activation: [],
 								composition: null,
-								meta: { description: 'Region: dynamic_tail', notes: [] }
+								meta: { description: 'Changes every turn', notes: [] }
 							},
 							{
 								id: 'assembled_prompt',
@@ -599,7 +599,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 									kind: 'fixed',
 									interaction: null,
 									call_site: null,
-									description: 'Ordered message list the narrator caller receives.'
+									description: 'Everything the narrator receives, in order.'
 								},
 								agent: null,
 								prompt_surface: { door: 'none', reason: 'composition output' },
@@ -607,7 +607,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 								activation: [],
 								composition: null,
 								meta: {
-									description: 'Linear projection of the W6 flow (one source, two editors).',
+									description: 'The same steps, drawn as a plain line.',
 									notes: []
 								}
 							}
@@ -652,7 +652,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						]
 					},
 					meta: {
-						description: 'The in-character streaming pass (graph narrator node).',
+						description: 'The in-character pass: one draft streams, and the checks repair it in place if needed.',
 						notes: []
 					}
 				},
@@ -664,14 +664,14 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'fixed',
 						interaction: null,
 						call_site: 'fabulist.graph.nodes.validate_dsl',
-						description: 'Deterministic DSL gate; re-synthesizes on failure.'
+						description: 'Checks the panel markup and rebuilds it if it is malformed.'
 					},
 					agent: null,
 					prompt_surface: { door: 'fixed', reason: 'deterministic gate + resynthesizer' },
 					inspector: { kind: 'gate', agent_filter: null, events: ['validator_flags'] },
 					activation: ['dsl'],
 					composition: null,
-					meta: { description: "Emitted stage name is 'dsl'.", notes: [] }
+					meta: { description: 'A rule-based check — no model call.', notes: [] }
 				},
 				{
 					id: 'decision_gate',
@@ -681,7 +681,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: null,
 						call_site: 'fabulist.graph.nodes._run_turn_gate',
-						description: 'd1-3b batched advisory call (slop map + movement).'
+						description: 'Asks the yes/no checks — the anti-slop list and the movement question — 30 at a time.'
 					},
 					agent: {
 						interaction: null,
@@ -706,7 +706,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: 'critic',
 						call_site: null,
-						description: 'Quality gate: ok | diffs | fail.'
+						description: 'Reviews the reply: either fine, or the issues it found. The turn is kept either way.'
 					},
 					agent: {
 						interaction: 'critic',
@@ -719,7 +719,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 					activation: ['critic'],
 					composition: null,
 					meta: {
-						description: 'Branches: ok/diffs -> bts. The fail->regenerate arm is retired (W9.24 W3): repairs happen inside the narrate loop; a legacy fail verdict logs and keeps the turn.',
+						description: 'A failing verdict still keeps the turn — repairs happen inside the narrator step, and the verdict is recorded so you can see what it objected to.',
 						notes: []
 					}
 				},
@@ -731,7 +731,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'model_pass',
 						interaction: 'bts',
 						call_site: null,
-						description: 'World-state delta / checkpoint.'
+						description: 'Records what changed in the world.'
 					},
 					agent: {
 						interaction: 'bts',
@@ -747,7 +747,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 					},
 					activation: ['world_state'],
 					composition: null,
-					meta: { description: "Emitted stage name is 'world_state'.", notes: [] }
+					meta: { description: 'The tracker: it writes the state you see in the side panel.', notes: [] }
 				},
 				{
 					id: 'env_hud',
@@ -757,7 +757,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'engine',
 						interaction: null,
 						call_site: 'fabulist.state.env_hud.env_hud_statement',
-						description: 'Engine-emitted EnvTracker HUD statement (D38).'
+						description: 'Writes the scene\'s status strip (weather, time, place).'
 					},
 					agent: null,
 					prompt_surface: { door: 'fixed', reason: 'engine-emitted HUD, never narrator' },
@@ -779,8 +779,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						interaction: null,
 						call_site: 'fabulist.state.attribution.parse_attribution',
 						description:
-							'Colour-markup per-quote attribution: each quoted line resolves from the ' +
-							"speaker's palette colour the narrator wrote — no model call (owner ruling Q2=B, W9.28)."
+							'Works out who says each quoted line from the colour the narrator wrapped it in — no model call.'
 					},
 					agent: null,
 					prompt_surface: {
@@ -804,7 +803,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'engine',
 						interaction: null,
 						call_site: null,
-						description: "Turn complete; post-turn hooks fire after 'done'."
+						description: 'The turn is finished; clean-up runs after this.'
 					},
 					agent: null,
 					prompt_surface: { door: 'none', reason: 'terminal' },
@@ -961,7 +960,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'embedder',
 						interaction: null,
 						call_site: 'fabulist.memory.embedder.embed_texts',
-						description: 'Embed the user message and surface nearest older turns (W3.2).'
+						description: 'Turns your message into a search and pulls the closest earlier turns back in.'
 					},
 					agent: {
 						interaction: null,
@@ -973,7 +972,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 					inspector: { kind: 'fixed_stage', agent_filter: null, events: ['recall_queries'] },
 					activation: [],
 					composition: null,
-					meta: { description: 'No stage frame; off-turn in wave 1.', notes: [] }
+					meta: { description: 'Runs alongside the turn, not inside it.', notes: [] }
 				}
 			],
 			edges: [
@@ -1003,7 +1002,7 @@ export const MOCK_FLOW_MANIFEST: FlowManifest = {
 						kind: 'fixed',
 						interaction: null,
 						call_site: null,
-						description: 'An image-triggering DSL statement in the narrator reply.'
+						description: 'A panel in the narrator\'s reply that asks for an image.'
 					},
 					agent: null,
 					prompt_surface: { door: 'none', reason: 'narrator output, not an authored step' },

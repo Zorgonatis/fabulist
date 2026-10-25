@@ -522,7 +522,7 @@
 		</summary>
 		{#if promotesObject(object)}
 			<p class="hint promotion-origin">
-				promoted from this chat’s cast — accepting mints this actor persona card
+				promoted from this chat’s cast — accepting creates this actor persona card
 			</p>
 		{/if}
 		{#each object.sections as section (section.field)}
