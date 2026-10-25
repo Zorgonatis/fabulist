@@ -130,7 +130,7 @@
 		try {
 			manifest = await getFlowManifest();
 		} catch (err) {
-			manifestError = err instanceof Error ? err.message : 'flow manifest unavailable';
+			manifestError = err instanceof Error ? err.message : 'turn flow unavailable';
 		} finally {
 			manifestLoading = false;
 		}
@@ -352,19 +352,19 @@
 			debug {debug ? 'on' : 'off'}
 		</span>
 		<button type="button" class="panel-reload" onclick={() => void loadManifest()}>
-			Reload manifest
+			Reload
 		</button>
 	</header>
 
 	{#if manifestLoading && !manifest}
-		<p class="panel-note">Loading the flow manifest…</p>
+		<p class="panel-note">Loading the turn flow…</p>
 	{:else if manifestError}
-		<p class="panel-note error" role="alert">Flow manifest unavailable: {manifestError}</p>
+		<p class="panel-note error" role="alert">The turn flow is unavailable: {manifestError}</p>
 	{:else if manifest}
 		{#if laneNode}
 			<div class="lane-config" data-lane-config="true">
 				<span class="lane-title">NPC lanes</span>
-				<label class="lane-switch" title="Switch the lane stage off: the narrator runs one forward pass">
+				<label class="lane-switch" title="Switch lanes off: the narrator writes this scene alone">
 					<input
 						type="checkbox"
 						checked={laneEnabled}
@@ -375,7 +375,7 @@
 					/>
 					<span class="lane-state">{laneEnabled ? 'on' : 'off'}</span>
 				</label>
-				<label class="lane-width" title="How many lanes may run at once (the lane SET is never capped)">
+				<label class="lane-width" title="How many lanes may run at once (every lane still runs)">
 					<span>max in flight</span>
 					<select
 						value={String(laneWidth)}
@@ -413,7 +413,7 @@
 			{onopenstep}
 		/>
 	{:else}
-		<p class="panel-note">No flow manifest.</p>
+		<p class="panel-note">No turn flow to show.</p>
 	{/if}
 </div>
 

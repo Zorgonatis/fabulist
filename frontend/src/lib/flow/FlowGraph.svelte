@@ -630,11 +630,11 @@
 	style="--node-w:{NODE_W}px; --node-h:{NODE_H}px;"
 >
 	{#if editing}
-		<section class="graph" aria-label="Turn topology">
+		<section class="graph" aria-label="Turn order">
 			<header class="graph-head">
-				<h3 class="graph-title">Turn topology</h3>
+				<h3 class="graph-title">Turn order</h3>
 				<span class="graph-kind">executed</span>
-				<span class="graph-attach">topology = execution order; the engine runs this</span>
+				<span class="graph-attach">the steps the engine runs, in order</span>
 			</header>
 
 			{#if editBoard}
@@ -758,7 +758,7 @@
 					{/each}
 				</div>
 			{:else}
-				<p class="empty">No topology loaded.</p>
+				<p class="empty">Nothing to show yet.</p>
 			{/if}
 		</section>
 	{/if}
@@ -828,12 +828,12 @@
 							arm={Boolean((node as { arm?: boolean }).arm)}
 							laneNote={node.fanout && !(node as { arm?: boolean }).arm
 								? !lanesEnabled
-									? 'lanes off — the narrator runs one forward pass'
+									? 'lanes off — the narrator writes this scene alone'
 									: lanes.length > 0
-										? `${lanes.length} lane${lanes.length === 1 ? '' : 's'} · pool ${laneWidth}${
+										? `${lanes.length} lane${lanes.length === 1 ? '' : 's'} · ${laneWidth} at once${
 												inFlight ? ' · in flight' : ''
 											}`
-										: 'no lane data yet — the next turn fans out'
+										: 'no lanes yet — they appear on the next turn'
 								: ''}
 						/>
 					</div>
@@ -842,7 +842,7 @@
 		</section>
 	{:else}
 		{#if !editing}
-			<p class="empty">No flow graphs in the manifest.</p>
+			<p class="empty">No flows to show.</p>
 		{/if}
 	{/each}
 </div>

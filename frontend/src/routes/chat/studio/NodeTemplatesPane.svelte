@@ -313,10 +313,10 @@
 	</header>
 
 	<p class="hint">
-		The palette's library. A topology node instantiated from a template executes the behaviour
-		its <code>implements</code> names — so a template is a label and a config over a runnable
-		node, never new code. Edits here change what the graph editor offers; the engine rebuilds
-		the graph on its next turn.
+		The library behind the graph editor's palette. A step built from a template runs the behaviour
+		named in <code>Implements</code> — a template is a label and some settings on top of a real
+		step, never new code. Edits here change what the editor offers; the engine rebuilds the flow
+		on its next turn.
 	</p>
 
 	{#if error}
@@ -411,7 +411,7 @@
 								list="node-template-implements"
 								placeholder="narrate"
 								spellcheck="false"
-								title="The canonical node whose behaviour a row built from this template runs."
+								title="The built-in step this template runs."
 							/>
 						</label>
 						<datalist id="node-template-implements">

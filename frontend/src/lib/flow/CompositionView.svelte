@@ -77,13 +77,13 @@
 
 	/** Short captions that make each region's meaning legible (R13b/C4). */
 	const REGION_CAPTION: Record<RegionKind, string> = {
-		stable_prefix: 'cache contract: must not change turn-to-turn',
+		stable_prefix: 'sent identically every turn',
 		neutral: 'conversation',
 		dynamic_tail: 'changes every turn'
 	};
 
 	/** Shown for a module the manifest leaves outside every declared region. */
-	const UNPLACED_CAPTION = 'no region declared in the manifest';
+	const UNPLACED_CAPTION = 'not part of any named block';
 
 	/** Fan-edge tones. A composition edge is a plain `flow`; `attach` is the dim
 	 * dashed variant `FlowGraph` uses (here: an edge the manifest leaves implied). */
@@ -276,7 +276,7 @@
 	}
 </script>
 
-<section class="composition" bind:this={frame} aria-label={`${composition.title} — composition`}>
+<section class="composition" bind:this={frame} aria-label={`${composition.title} — what it is made of`}>
 	<header class="comp-head">
 		<span class="comp-title">{composition.title}</span>
 		<span class="comp-chip">composition</span>
@@ -373,7 +373,7 @@
 			{/if}
 		</div>
 	{:else}
-		<p class="empty">This composition declares no modules.</p>
+		<p class="empty">Nothing inside this step.</p>
 	{/if}
 </section>
 

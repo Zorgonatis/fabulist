@@ -135,9 +135,9 @@
 		<button
 			type="button"
 			class="dsl-flow-btn"
-			aria-label="Flow — turn graph and node inspector"
+			aria-label="Flow — this turn's steps and their inputs"
 			aria-expanded={flowOpen}
-			title="Show the turn's flow graph and inspect a node"
+			title="Show the steps this turn ran and what each one received"
 			onclick={() => {
 				open = false; // one drop-down at a time
 				flowOpen = !flowOpen;

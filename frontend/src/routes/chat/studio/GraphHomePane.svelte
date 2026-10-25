@@ -176,7 +176,7 @@
 			manifest = await getFlowManifest();
 			lanes = await getLanes(sessionId);
 		} catch (err) {
-			manifestError = err instanceof Error ? err.message : 'flow manifest unavailable';
+			manifestError = err instanceof Error ? err.message : 'turn flow unavailable';
 		} finally {
 			manifestLoading = false;
 		}
@@ -251,7 +251,7 @@
 			draft = cloneTopology(response.topology);
 			canonical = response.canonical;
 			serverViolations = response.violations;
-			saveNote = 'Saved. The engine builds the graph from this topology on its next turn.';
+			saveNote = 'Saved. The engine builds the flow from this order on its next turn.';
 		} catch (err) {
 			saveError = errorMessage(err);
 			serverViolations = violationsFromError(err);
@@ -371,7 +371,7 @@
 				title={localViolations.length
 					? 'Fix the violations below first'
 					: dirty
-						? 'Store the topology'
+						? 'Save the order'
 						: 'Nothing to save'}
 				onclick={() => void save()}
 			>
@@ -393,25 +393,25 @@
 				type="button"
 				class="home-action"
 				disabled={topologyBusy}
-				title="Edit the executable topology"
+				title="Edit the order the engine runs"
 				onclick={() => void enterEdit()}
 			>
 				{topologyBusy ? 'Loading…' : 'Edit'}
 			</button>
 			<button type="button" class="home-reload" onclick={() => void loadManifest()}>
-				Reload manifest
+				Reload
 			</button>
 		{/if}
 	</header>
 
 	{#if topologyError}
-		<p class="home-note error" role="alert">Topology unavailable: {topologyError}</p>
+		<p class="home-note error" role="alert">The flow is unavailable: {topologyError}</p>
 	{/if}
 
 	{#if editing && draft}
 		<p class="home-note">
-			<strong>topology = execution order</strong> — the engine builds and runs this graph; the
-			manifest (the descriptive view with prompt doors and agents) is what you see with editing off.
+			You are editing the order the engine runs. With editing off you see the same flow with its
+			prompt doors and agents.
 		</p>
 
 		<div class="palette">
@@ -420,7 +420,7 @@
 				<button
 					type="button"
 					class="palette-btn"
-					title={`Re-add the canonical "${node.id}" node`}
+					title={`Put the built-in "${node.id}" step back`}
 					onclick={() => addById(node.id, node.kind)}
 				>
 					+ {node.id}<span class="palette-kind">{node.kind}</span>
@@ -513,9 +513,9 @@
 			{onopenstep}
 		/>
 	{:else if manifestLoading && !manifest}
-		<p class="home-note">Loading the flow manifest…</p>
+		<p class="home-note">Loading the turn flow…</p>
 	{:else if manifestError}
-		<p class="home-note error" role="alert">Flow manifest unavailable: {manifestError}</p>
+		<p class="home-note error" role="alert">The turn flow is unavailable: {manifestError}</p>
 	{:else if manifest}
 		{#if selectedNode}
 			<p class="home-note">
@@ -524,8 +524,8 @@
 			</p>
 		{/if}
 		<p class="home-note">
-			This is the <strong>manifest</strong> — what the engine describes and runs. Edit turns the
-			pane into the <strong>topology</strong> editor (execution order; the engine runs that).
+			This is the turn flow as the engine runs it. <strong>Edit</strong> switches the pane to the
+			order editor, where you can rewire the steps.
 		</p>
 		<NodeInspector node={selectedNode} debug={false} />
 		<FlowGraph
@@ -539,7 +539,7 @@
 			{onopenstep}
 		/>
 	{:else}
-		<p class="home-note">No flow manifest.</p>
+		<p class="home-note">No turn flow to show.</p>
 	{/if}
 </div>
 

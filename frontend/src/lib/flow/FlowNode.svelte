@@ -92,7 +92,7 @@
 		{/if}
 		<span class="badges">
 			{#if agentName}
-				<span class="badge agent" title={agentBound ? 'Active preset binding' : 'Default agent'}>
+				<span class="badge agent" title={agentBound ? 'Set by the active preset' : 'Default agent'}>
 					{agentBound ? 'bound' : 'agent'}: {agentName}
 				</span>
 			{/if}
@@ -102,7 +102,7 @@
 				</span>
 			{/each}
 			{#if node.composition}
-				<span class="badge nested" title="Composition — expanded in W9.8">nested</span>
+				<span class="badge nested" title="Composition — opens as its own graph">nested</span>
 			{/if}
 			{#if debug && node.inspector.kind === 'model_pass'}
 				<span class="badge capturable" title="Captured calls available with debug on">captures</span>
