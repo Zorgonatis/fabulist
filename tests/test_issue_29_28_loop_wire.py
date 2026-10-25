@@ -1,15 +1,16 @@
 """Issues #29 and #28 on the agent loop's streaming wire (``agents/loop.py``).
 
-#29 — the reasoning echo ACCUMULATED. Every iteration's ``reasoning_content`` was
-carried onto its assistant ``tool_calls`` message and left there, so iteration N's
-request re-sent the reasoning of iterations 1..N-1 as prompt tokens. A measured
-four-retry turn grew 7,536 -> 30,107 prompt tokens across six calls. The vendor's
-constraint is ONE turn deep (the assistant turn the request continues from must
-carry its reasoning with its ``tool_calls``; an absent field is a 400), so the
-echo is now RE-STAMPED: the newest assistant turn carries it, older ones carry
-none. Pinned here: exactly one reasoning field per request, holding the
-immediately-previous iteration's value, and a prompt that grows by one round per
-round instead of by every round that ever ran.
+#29 — the reasoning echo's BOUNDARY (owner ruling, re-cut here). The current round
+is carried VERBATIM: every iteration's ``reasoning_content`` stays on its own
+assistant message, one block per iteration, and every one of them is paid for as
+prompt tokens. That is deliberate — a repair round must see its own deliberation.
+The cost trim belongs at the ROUND boundary, not the iteration boundary: prior
+graph executions are re-attached by history assembly with the field PRESENT but
+EMPTY (``wiring.history_from_log``), so a past turn's thinking is never re-sent as
+text. Pinned here: a three-iteration round's final request carries ALL THREE
+blocks with their original text, the vendor's per-assistant FIELD presence rule
+still holds, and an iteration that reasoned nothing adds no field without erasing
+an earlier block.
 
 #28 — the narrator stream reader only found ``finish_reason`` inside an ``error``
 frame, so ``completion.finish_reason`` was ``None`` on every call and ADR-021's
@@ -133,22 +134,6 @@ def reasoning_fields(messages: list[dict]) -> list[tuple[int, dict]]:
     ]
 
 
-def prompt_chars(messages: list[dict]) -> int:
-    """What a provider bills as prompt text: content, reasoning and tool calls.
-
-    ``estimate_prompt_tokens`` (compaction) counts ``content`` only; the echo rides
-    ``reasoning_content``, so a size proxy that ignored it would be blind to the
-    very growth issue #29 is about.
-    """
-    total = 0
-    for message in messages:
-        total += len(str(message.get("content") or ""))
-        total += len(str(message.get("reasoning_content") or ""))
-        for call in message.get("tool_calls") or ():
-            total += len(json.dumps(call, sort_keys=True))
-    return total
-
-
 def run_loop(caller, log: EventLog, **kwargs):
     return asyncio.run(
         run_agent_loop(
@@ -164,10 +149,11 @@ def run_loop(caller, log: EventLog, **kwargs):
     )
 
 
-# -- #29: only the immediately-previous iteration's reasoning travels ---------
+# -- #29: the CURRENT round travels verbatim, in full ------------------------
 
-#: Four rounds of CONSTANT-SIZE reasoning: under the old accumulate-everything
-#: echo, request N carried N-1 blocks and the prompt grew by an ever-larger step.
+#: Four rounds of CONSTANT-SIZE reasoning: the whole round is carried, so request
+#: N carries N-1 blocks and the prompt grows by one block per round — the
+#: deliberate cost of a round seeing its own deliberation.
 REASONING_UNIT = "Weighed the lantern against the tide; " * 40
 
 
@@ -186,67 +172,76 @@ def _four_round_caller() -> WireCaller:
     )
 
 
-def test_only_the_newest_block_of_reasoning_text_rides_each_request(tmp_path):
-    """Presence per turn, ONE block of paid text per run (the live-probed shape).
+def test_every_iterations_reasoning_text_rides_the_final_request_verbatim(tmp_path):
+    """Three tool iterations: ALL THREE blocks are present with their text.
 
-    A probe against DeepSeek's thinking mode showed the field is validated on
-    EVERY assistant ``tool_calls`` turn (dropping it from an older turn is a
-    400), while the TEXT of an older turn is never read back. So the older turns
-    keep the field with the vendor's own empty value and the newest one carries
-    the provider's words verbatim.
+    Owner ruling: the current round keeps its reasoning verbatim. A repair round
+    must see its own deliberation, so nothing is blanked as the next iteration is
+    stamped — the final request carries one block per iteration, exactly as the
+    provider sent it.
     """
-    caller = _four_round_caller()
+    blocks = [
+        "Weighed the lantern against the tide.",
+        "The note is not recorded yet.",
+        "Record it, then answer in prose.",
+    ]
+    caller = WireCaller(
+        [
+            reasoning_round(blocks[0], "A"),
+            reasoning_round(blocks[1], "B"),
+            reasoning_round(blocks[2], "C"),
+            [
+                {"type": "reasoning", "delta": "The lantern is lit."},
+                {"type": "content", "delta": "The lantern is lit."},
+                {"type": "finish", "finish_reason": "stop"},
+            ],
+        ]
+    )
     result = run_loop(caller, EventLog(tmp_path / "loop.db"))
 
     assert len(caller.requests) == 4
     assert caller.requests[0] == PREFIX  # the first request is untouched
-    for request_number, request in enumerate(caller.requests[1:], start=2):
-        carried = reasoning_fields(request)
-        newest_index = len(PREFIX) + 2 * (request_number - 2)
-        # One field per assistant tool_calls turn — the vendor's presence rule.
-        assert [index for index, _ in carried] == list(
-            range(len(PREFIX), newest_index + 1, 2)
-        ), f"request {request_number} carries an unexpected field set"
-        # The newest turn is the ONE place the provider's text survives.
-        for index, message in carried:
-            assert message["role"] == "assistant"
-            assert message["tool_calls"], "the echo belongs on a tool_calls turn"
-            expected = REASONING_UNIT if index == newest_index else ""
-            assert message["reasoning_content"] == expected
-
-    # The trace still records EVERY iteration's reasoning: the retirement is a
-    # wire rule, not a loss of what the model said.
-    assert [iteration.reasoning for iteration in result.iterations] == [REASONING_UNIT] * 4
+    final_request = caller.requests[-1]
+    carried = reasoning_fields(final_request)
+    # One FIELD per assistant tool_calls turn, each with ITS OWN verbatim text.
+    assert [message["reasoning_content"] for _, message in carried] == blocks
+    for _, message in carried:
+        assert message["role"] == "assistant"
+        assert message["tool_calls"], "the echo belongs on a tool_calls turn"
+    # The trace records every iteration's reasoning too.
+    assert [iteration.reasoning for iteration in result.iterations] == [
+        *blocks,
+        "The lantern is lit.",
+    ]
 
 
-def test_the_prompt_grows_by_one_round_per_round_not_by_every_round(tmp_path):
-    """Issue #29's number: monotonic prompt growth that compounds is the defect."""
+def test_the_current_round_pays_for_every_block_it_has_reasoned(tmp_path):
+    """The full-round echo is DELIBERATE: request N carries N-1 paid blocks.
+
+    The cost trim lives at the ROUND boundary (history assembly re-attaches past
+    executions present-but-empty), so within one round the prompt grows by one
+    reasoning block per iteration — the intentional price of a round seeing its
+    own deliberation. There is no per-iteration retirement left to hide it.
+    """
     caller = _four_round_caller()
     run_loop(caller, EventLog(tmp_path / "loop.db"))
 
-    sizes = [prompt_chars(request) for request in caller.requests]
-    steps = [later - earlier for earlier, later in zip(sizes, sizes[1:])]
-    # Rounds 2..4 each append one assistant turn + one tool result and NO new
-    # reasoning block (the previous block replaced the one before it): a CONSTANT
-    # step. Under the accumulate-everything echo every step would instead grow by
-    # another reasoning block — the 7,536 -> 30,107 curve the issue measured.
-    assert len(set(steps[1:])) == 1, f"prompt growth is not linear: sizes={sizes} steps={steps}"
-    assert steps[0] > steps[1] > 0
-    # Restated on the billing surface itself: the reasoning a request carries is
-    # ONE block, never the sum of the blocks before it.
     carried = [
         sum(len(str(m.get("reasoning_content") or "")) for m in request)
         for request in caller.requests
     ]
-    # One block of paid text at every round — the older turns carry "".
-    assert carried == [0, len(REASONING_UNIT), len(REASONING_UNIT), len(REASONING_UNIT)]
-    # Counterfactual, in the issue's own terms: three rounds of echo would have
-    # cost three reasoning blocks of prompt text. The wire now pays for ONE.
-    assert sizes[-1] - sizes[0] < 3 * len(REASONING_UNIT)
+    # Round N pays for the N-1 blocks already reasoned inside THIS round (the
+    # fourth request carries rounds 1..3); nothing predates the round.
+    assert carried == [
+        0,
+        len(REASONING_UNIT),
+        2 * len(REASONING_UNIT),
+        3 * len(REASONING_UNIT),
+    ]
 
 
-def test_an_iteration_that_reasons_nothing_retires_the_stale_text(tmp_path):
-    """A later round with no field must not resurrect (or keep) an earlier block."""
+def test_an_iteration_that_reasons_nothing_adds_no_field_and_erases_nothing(tmp_path):
+    """Round 2 sent no field: no field appears, and round 1's block stays."""
     caller = WireCaller(
         [
             [{"type": "reasoning", "delta": REASONING_UNIT},
@@ -262,10 +257,12 @@ def test_an_iteration_that_reasons_nothing_retires_the_stale_text(tmp_path):
     assert [m["reasoning_content"] for _, m in reasoning_fields(caller.requests[1])] == [
         REASONING_UNIT
     ]
-    # Request 3 continues from round 2, which reasoned nothing (no field): the
-    # round-1 block is retired to the vendor's empty value, and the runtime never
-    # invents reasoning for the turn that sent none.
-    assert [m["reasoning_content"] for _, m in reasoning_fields(caller.requests[2])] == [""]
+    # Request 3 continues from round 2, which reasoned nothing: that turn carries
+    # NO field (the runtime never invents reasoning), and round 1's block is still
+    # there verbatim — nothing is blanked.
+    carried = reasoning_fields(caller.requests[2])
+    assert len(carried) == 1
+    assert carried[0][1]["reasoning_content"] == REASONING_UNIT
     assert [iteration.reasoning for iteration in result.iterations] == [
         REASONING_UNIT,
         None,
@@ -273,14 +270,15 @@ def test_an_iteration_that_reasons_nothing_retires_the_stale_text(tmp_path):
     ]
 
 
-def test_the_injected_flags_pair_is_the_one_paid_echo_and_retires_the_last(tmp_path):
-    """The engine-authored pair obeys the same rule: newest TEXT wins, once.
+def test_the_injected_flags_pair_keeps_every_rounds_block_verbatim(tmp_path):
+    """The engine-authored pair obeys the same full-round rule.
 
     ISSUE #42 (live DeepSeek-V4.1-Flash): once the request carries ``tools``,
     the vendor validates ``reasoning_content`` on EVERY assistant message — the
     flagged draft included — so the draft carries the FIELD with the vendor's
-    empty value while only the synthetic ``tool_calls`` turn carries the paid
-    block. Presence per assistant turn, one block of text per round (#29).
+    empty value while the synthetic ``tool_calls`` turn carries that iteration's
+    block verbatim. Issue #29's owner ruling: earlier pairs keep THEIR blocks too;
+    nothing is retired inside the round.
     """
     first_reasoning = "The draft needs the flags applied."
     second_reasoning = "The flags came back clean this time."
@@ -317,8 +315,8 @@ def test_the_injected_flags_pair_is_the_one_paid_echo_and_retires_the_last(tmp_p
     assert carried[0][1]["reasoning_content"] == ""
     assert carried[1][1]["reasoning_content"] == first_reasoning
 
-    # Request 3: round 2's pair carries the paid text; round 1's is retired to the
-    # vendor's empty value — the field stays, the block does not.
+    # Request 3: BOTH pairs carry their iteration's block verbatim — round 1's
+    # text was not blanked when round 2's pair was stamped.
     carried = reasoning_fields(caller.requests[2])
     # The pair is [draft?, calls, result]: pair 1's draft+calls, then pair 2's.
     assert [index for index, _ in carried] == [
@@ -329,7 +327,7 @@ def test_the_injected_flags_pair_is_the_one_paid_echo_and_retires_the_last(tmp_p
     ]
     assert [message["reasoning_content"] for _, message in carried] == [
         "",
-        "",
+        first_reasoning,
         "",
         second_reasoning,
     ]

@@ -2909,11 +2909,12 @@ def _commit_narrative(log: LogPort, snapshot: dict, state: TurnState) -> dict:
         # Inspector I2: per-region prompt sizes.
         turn_snapshot["regions"] = state["regions"]
     payload: dict[str, Any] = {"prose": prose, "dsl": dsl, "segments": segments}
-    # Issue #42: persist the reasoning that PRODUCED this narrative so the next
-    # turn's history passback can carry it (DeepSeek thinking mode 400s when an
-    # assistant turn that produced ``reasoning_content`` comes back without it).
-    # Presence is the fact: ``""`` means the provider sent an empty field and
-    # must still be replayed; a turn with no stored field stays content-only.
+    # Issue #42: persist the reasoning that PRODUCED this narrative so the row is
+    # DIAGNOSABLE. It is not a prompt-cost passback: history assembly re-emits the
+    # field PRESENT but EMPTY for a prior execution (owner ruling on #29), so the
+    # stored text is never billed again. Presence is the fact: ``""`` means the
+    # provider sent an empty field; a turn with no stored field stays
+    # content-only.
     if state.get("reasoning") is not None:
         payload["reasoning"] = state["reasoning"]
     narrative_event = log.append_event(

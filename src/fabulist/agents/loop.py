@@ -105,19 +105,19 @@ Owner rulings this module implements (do not reintroduce the retired patterns)
   thinking mode has engaged, every later assistant turn of a tools request must
   carry it.
 
-  **Only the NEWEST iteration's reasoning TEXT travels (issue #29).**
-  Re-sending every iteration's thinking is the cost defect: a measured
-  four-retry turn grew its prompt from 7,536 to 30,107 tokens across six calls,
-  with one 20,733-char reasoning block re-billed on four requests. The vendor
-  will not let the field go: a live DeepSeek probe showed an older ``tool_calls``
-  turn WITHOUT ``reasoning_content`` 400s ("must be passed back to the API")
-  even while the newest turn carried its own. But the TEXT of an older turn is
-  never read back — the request is stateless about reasoning it does not need to
-  continue from — so the loop retires the TEXT and keeps the field
-  (:func:`_retire_reasoning_echo`): the previous block becomes ``""`` (the
-  provider's own "nothing reasoned" value) as the new one is stamped verbatim,
-  in both the model-issued and the engine-injected pair shape. Presence per turn,
-  one paid block per run.
+  **The CURRENT round is carried VERBATIM, in full (owner ruling).** Every
+  iteration of the running round keeps its own ``reasoning_content`` on its
+  assistant message, exactly as the provider sent it, one block per iteration —
+  nothing is blanked as the next iteration is stamped, and every one of those
+  blocks is PAID FOR as prompt tokens. That is deliberate: a repair round must
+  see its own deliberation, so the model asked to fix its draft sees the thinking
+  that produced it. The trim that saves the unbounded cost is at the ROUND
+  boundary, not the iteration boundary: prior graph executions (past turns) are
+  re-attached by history assembly with the field PRESENT but EMPTY (``""``) — a
+  past turn's reasoning is stored for diagnosis and is never re-sent as text
+  (``wiring.history_from_log``). The vendor's presence rule still holds per
+  assistant message: the FIELD travels on every stamped turn, and a provider
+  that never sent it keeps a byte-identical message list.
 
 Deviations (grounded in the code as read, per the "be faithful" instruction)
 ---------------------------------------------------------------------------
@@ -337,65 +337,16 @@ def should_echo_reasoning(return_thinking: bool | None, reasoning: str | None) -
     reasoned nothing returns exactly that, and omitting it is the 400). Emptiness
     is therefore never a reason to drop the field; absence is the only one.
 
-    The answer is per assistant message, and the loop keeps only ONE such message
-    carrying the provider's TEXT: :func:`_retire_reasoning_echo` retires the
-    previous iteration's block as the next is appended (issue #29), because
-    re-sending an older block only re-bills it as prompt tokens while the vendor
-    keeps validating the FIELD everywhere (live probe: dropping it from an older
-    turn is a 400).
+    The answer is per assistant message, and EVERY message the loop stamps inside
+    the current round carries the provider's value verbatim (owner ruling: a
+    repair round must see its own deliberation). The text stops at the ROUND
+    boundary, not between iterations: history assembly re-attaches a prior
+    execution's field PRESENT but EMPTY, so older turns contribute no reasoning
+    text to the prompt.
     """
     if reasoning is None:
         return False
     return return_thinking is not False
-
-
-def _retire_reasoning_echo(
-    conversation: list[dict[str, Any]],
-    previous_index: int | None,
-    message_index: int,
-) -> int | None:
-    """Retire the loop's PREVIOUS reasoning block onto ``message_index`` (#29).
-
-    Two provider facts, both measured live against DeepSeek's thinking mode in a
-    tool loop (``deepseek-flash``, probe 2026-10-23, real transport):
-
-    1. The FIELD is validated on EVERY assistant message of a request carrying
-       ``tools`` — not just tool_calls turns and not just the turn the request
-       continues from (a content-only draft turn is validated too, measured live
-       on DeepSeek-V4.1-Flash, issue #42). Removing ``reasoning_content`` from an
-       earlier iteration's turn 400s with "The ``reasoning_content`` in the
-       thinking mode must be passed back to the API" — the naive trim (drop the
-       old field) is REFUSED even though the newest turn still carries its own.
-    2. The TEXT of an older turn is never read back — the request is stateless
-       with respect to reasoning it did not need to continue from.
-
-    So what is retired is the TEXT, not the field: the block on
-    ``previous_index`` (the message this loop stamped last, ``None`` when it has
-    stamped nothing yet) is replaced by ``""`` — the provider's OWN encoding of
-    "this turn reasoned nothing", the value a continuation turn returns for
-    itself — while the newest turn keeps the provider's value verbatim as the
-    only block that is paid for. Presence per turn, one block of text per run:
-    that is what stops a retry loop from re-billing every earlier block (issue
-    #29: a four-retry turn grew 7,536 -> 30,107 prompt tokens over six calls).
-
-    Indices are safe because the loop only ever appends. The caller's PREFIX is
-    never in the set of messages the loop stamped, which is the point: reasoning a
-    caller supplies as history is the caller's business, not the loop's to touch.
-
-    Returns ``message_index`` when that message carries the field (so the next
-    iteration can retire it), else ``None`` — an iteration that returned no
-    reasoning leaves nothing to retire, and a provider that never sends the field
-    keeps a byte-identical message list.
-    """
-    if previous_index is not None and previous_index != message_index:
-        previous = conversation[previous_index]
-        if "reasoning_content" in previous:
-            previous["reasoning_content"] = ""
-    return (
-        message_index
-        if "reasoning_content" in conversation[message_index]
-        else None
-    )
 
 
 def _echoed_reasoning(return_thinking: bool | None, reasoning: str | None) -> str | None:
@@ -470,11 +421,12 @@ async def run_agent_loop(
     an empty one: a continuation turn that reasoned nothing returns
     ``reasoning_content: ""``, and that empty string travels back verbatim.
 
-    Only the NEWEST text rides (issue #29): :func:`_retire_reasoning_echo`
-    replaces the previous iteration's block with the vendor's own empty value as
-    the next one is stamped, so the conversation keeps one FIELD per assistant
-    ``tool_calls`` turn (what the provider validates) and one BLOCK of text per
-    run (what the owner pays for).
+    EVERY iteration of the current round keeps its own reasoning text verbatim
+    (owner ruling: a repair round must see its own deliberation), so the
+    conversation carries one FIELD and one paid BLOCK per stamped assistant turn
+    of the running round. The round boundary is where the text stops: history
+    assembly re-attaches a PRIOR execution's field present-but-empty, never its
+    text.
 
     Only a transport TIMEOUT is recovered (the owner's per-connection doctrine);
     every other failure raises through to the caller's own error handling.
@@ -487,9 +439,6 @@ async def run_agent_loop(
     iterations: list[LoopIteration] = []
     answer = ""
     last_tool_args: str | None = None
-    #: The conversation index carrying the loop's reasoning echo right now
-    #: (issue #29): exactly ONE message at a time, retired on the next append.
-    echoed_index: int | None = None
     timed_out = False
     iteration = 0
     headroom: int | None = None
@@ -579,17 +528,13 @@ async def run_agent_loop(
             }
             # The reasoning a thinking model returned rides back on THIS message
             # (its tool_calls turn): DeepSeek's thinking mode 400s when the field
-            # is dropped, and every other provider simply never returns any. Only
-            # THIS block is paid for: the previous iteration's is retired to the
-            # vendor's empty value, while its FIELD stays (a live probe showed the
-            # vendor validates presence on every tool turn — issue #29).
+            # is dropped, and every other provider simply never returns any. Every
+            # iteration of the round keeps its own block verbatim (owner ruling: a
+            # repair round must see its own deliberation).
             echoed = _echoed_reasoning(return_thinking, completion.reasoning)
             if echoed is not None:
                 assistant_message["reasoning_content"] = echoed
             conversation.append(assistant_message)
-            echoed_index = _retire_reasoning_echo(
-                conversation, echoed_index, len(conversation) - 1
-            )
             last_tool_args = calls[-1].args
             for call_id, call, call_name in zip(call_ids, calls, names):
                 parsed_args, args_error = _parse_tool_arguments(call.args)
@@ -690,19 +635,15 @@ async def run_agent_loop(
         if injection is not None:
             # The synthetic pair closes a text completion; when that completion's
             # provider also returned reasoning it rides its ``tool_calls`` message
-            # by the same rule as a model-issued call (see _injection_messages) —
-            # and that block is now the ONE paid echo, the previous one retired
-            # (issue #29). The pair is always [draft?] + tool_calls + tool result,
-            # so the stamped message is second-to-last.
+            # by the same rule as a model-issued call (see _injection_messages),
+            # verbatim, like every other iteration of the round. The pair is always
+            # [draft?] + tool_calls + tool result.
             pair = _injection_messages(
                 completion.text,
                 injection,
                 reasoning=_echoed_reasoning(return_thinking, completion.reasoning),
             )
             conversation.extend(pair)
-            echoed_index = _retire_reasoning_echo(
-                conversation, echoed_index, len(conversation) - 2
-            )
             _append_row(
                 log,
                 session_id,
@@ -970,8 +911,10 @@ def _injection_messages(
     (``None`` = the provider never sent the field, or the connection's
     ``return_thinking: false`` suppresses it). It is stamped on BOTH assistant
     messages for a tools request — the synthetic ``tool_calls`` turn carries the
-    TEXT (the one block #29 pays for), while the flagged DRAFT turn carries the
-    vendor's empty value: measured live on DeepSeek-V4.1-Flash (2026-10-24), the
+    completion's TEXT verbatim (the engine is continuing that assistant turn),
+    while the flagged DRAFT turn carries the vendor's empty value, so the same
+    block is never billed twice inside one iteration: measured live on
+    DeepSeek-V4.1-Flash (2026-10-24), the
     API validates the FIELD on every assistant message of a request that carries
     ``tools`` — including a turn that performed no tool call — and 400s with
     "The `reasoning_content` in the thinking mode must be passed back to the API"

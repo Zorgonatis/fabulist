@@ -13,14 +13,17 @@ Pinned here, end to end:
 
 * the narrator commit persists the draft completion's reasoning on the narrative
   row (PRESENCE is the fact: ``""`` is a real provider value, no field is ``None``);
-* ``history_from_log`` stamps ``reasoning_content`` on exactly the assistant
-  turns that stored it, and the compiler's history projection preserves it;
+* ``history_from_log`` stamps the field **PRESENT but EMPTY** (``""``) on exactly
+  the assistant turns that stored it, and the compiler's history projection
+  preserves that presence: a PRIOR execution's reasoning is stored for diagnosis
+  and never re-sent as text (owner ruling on #29 — the current round keeps its
+  reasoning verbatim; the round boundary is where the text stops);
 * the REQUEST BUILDER is the gate: a thinking-active connection sends the field
   back, while a non-thinking connection (``thinking: false``), a
   ``return_thinking: false`` owner switch, and every reasoning-less turn stay
   content-only — byte-identical to the pre-#42 body;
 * mixed-model history (a thinking turn followed by a non-thinking turn) carries
-  reasoning only on the turn that produced it.
+  the field only on the turn that produced it.
 
 The transport assertions use a real ``openai`` SDK client serializing through a
 fake ``httpx2`` transport, so what is asserted is the actual JSON body.
@@ -116,7 +119,8 @@ def _seed_mixed_history(log: EventLog, sid: str = SESSION_ID) -> list[dict]:
 # -- persistence + history assembly ------------------------------------------
 
 
-def test_history_carries_stored_reasoning_only_on_its_own_assistant_turn(tmp_path):
+def test_history_carries_the_field_empty_and_never_a_prior_turns_text(tmp_path):
+    """The round boundary trims TEXT, not the field (owner ruling on #29)."""
     log = EventLog(tmp_path / "events.db")
     try:
         history = _seed_mixed_history(log)
@@ -129,8 +133,10 @@ def test_history_carries_stored_reasoning_only_on_its_own_assistant_turn(tmp_pat
         "user",
         "assistant",
     ]
-    # The thinking turn: field present with the provider's own text.
-    assert history[1]["reasoning_content"] == "thinking one"
+    # The thinking turn: the field is PRESENT (the vendor 400s on its absence in a
+    # tools request) but its text is gone — a prior execution is not re-billed.
+    assert history[1]["reasoning_content"] == ""
+    assert history[1]["content"] == "The lantern flares."
     # The turn that stored none: no key at all (content-only, byte-identical).
     assert "reasoning_content" not in history[3]
 
@@ -203,7 +209,7 @@ def test_narrator_commit_omits_reasoning_when_provider_sent_none(tmp_path):
 # -- the request body (real SDK serialization) -------------------------------
 
 
-def test_thinking_connection_sends_reasoning_content_back(tmp_path):
+def test_thinking_connection_sends_the_field_empty_not_the_stored_text(tmp_path):
     log = EventLog(tmp_path / "events.db")
     try:
         history = _seed_mixed_history(log)
@@ -213,9 +219,11 @@ def test_thinking_connection_sends_reasoning_content_back(tmp_path):
     body = _capturing_send(_registry(), history)
     messages = body["messages"]
 
-    # Issue #42's failing shape: the prior thinking turn carries its trace back.
+    # Issue #42's presence rule: the prior thinking turn still carries the FIELD.
     assert messages[1]["role"] == "assistant"
-    assert messages[1]["reasoning_content"] == "thinking one"
+    assert messages[1]["reasoning_content"] == ""
+    # Issue #29's round boundary: its TEXT is not re-sent anywhere in the body.
+    assert "thinking one" not in json.dumps(body)
     # Mixed history: the non-thinking turn stays content-only.
     assert messages[3]["role"] == "assistant"
     assert "reasoning_content" not in messages[3]
@@ -378,7 +386,7 @@ def test_tools_request_carries_reasoning_on_every_assistant_turn(tmp_path):
     assert assistant_turns, repair_request
     assert all("reasoning_content" in m for m in assistant_turns), assistant_turns
     # The draft is the real producer: field present (empty value, not invented
-    # text). The synthetic tool_calls turn carries the one paid block.
+    # text). The synthetic tool_calls turn carries that iteration's block verbatim.
     draft = next(m for m in assistant_turns if not m.get("tool_calls"))
     nudged_turn = next(m for m in assistant_turns if m.get("tool_calls"))
     assert draft["reasoning_content"] == ""

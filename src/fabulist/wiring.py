@@ -953,15 +953,20 @@ def history_from_log(
             )
             if prose:
                 message = {"role": "assistant", "content": prose}
-                # Issue #42: a turn whose completion produced ``reasoning_content``
-                # must bring it back on the next request (DeepSeek thinking mode
-                # 400s otherwise). Presence, not truthiness: an empty stored
-                # string is still the provider's field. Turns with no stored
-                # reasoning (older sessions, non-thinking models) stay
-                # content-only — their history is byte-identical to before.
+                # Issue #42: a turn that PRODUCED ``reasoning_content`` must bring
+                # the field back on the next request — a request carrying
+                # ``tools`` 400s when an assistant message omits it (measured live
+                # on DeepSeek-V4.1-Flash). Issue #29's owner ruling puts the trim
+                # at the ROUND boundary: a PRIOR execution's reasoning is stored
+                # for diagnosis, never re-sent as text. So the field is emitted
+                # PRESENT but EMPTY (``""``, the vendor's own "nothing reasoned"
+                # value): the presence rule is satisfied without re-billing every
+                # past block. Presence, not truthiness — turns with no stored
+                # reasoning (older sessions, non-thinking models) emit no field at
+                # all and stay byte-identical.
                 reasoning = payload.get("reasoning")
                 if isinstance(reasoning, str):
-                    message["reasoning_content"] = reasoning
+                    message["reasoning_content"] = ""
                 history.append(message)
                 message_seqs.append(item["seq"])
     history = history[-limit:]

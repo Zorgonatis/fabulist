@@ -282,9 +282,11 @@ class TurnState(TypedDict):
     segments: list[dict]
     #: The draft completion's ``reasoning_content`` (issue #42): the narrator's
     #: thinking trace, carried to the commit node so the narrative row can store
-    #: it for the next turn's history passback. ``None`` = the provider returned
-    #: no such field; ``""`` = it returned an empty one (PRESENCE is the fact —
-    #: the vendor requires the field itself back, not non-empty text).
+    #: it for DIAGNOSIS. It is NOT re-sent as text — history assembly re-emits the
+    #: field PRESENT but EMPTY for a prior execution (owner ruling on #29).
+    #: ``None`` = the provider returned no such field; ``""`` = it returned an
+    #: empty one (PRESENCE is the fact — the vendor requires the field itself back,
+    #: not non-empty text).
     reasoning: str | None
     validation_errors: list[dict]
     image_url: str

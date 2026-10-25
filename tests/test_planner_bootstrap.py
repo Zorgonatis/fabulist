@@ -646,8 +646,9 @@ class SeedReasoningCaller:
     ``tool_calls`` ("The `reasoning_content` in the thinking mode must be passed
     back to the API"), which is the 400 the planner's seed phase hit on its third
     request — the turn being call 2's, whose reasoning is the EMPTY string. The
-    requirement is one turn deep (issue #29): the older turn's block is retired
-    rather than re-sent, which is why this test asserts exactly one echo.
+    CURRENT round is carried in full (owner ruling on #29), so the older turn's
+    block stays verbatim too; only a PRIOR execution's text is trimmed (history
+    assembly emits the field empty).
 
     ``findings`` is the recorded reasoning the provider sent per call (``None`` =
     the field never arrived).
@@ -717,14 +718,13 @@ def test_the_seed_loop_echoes_the_providers_empty_reasoning_verbatim(log):
         if message.get("role") == "assistant" and message.get("tool_calls")
     ]
     assert len(second_echo) == 2
-    # Issue #29: only the NEWEST turn's block of text rides — call 1's is retired
-    # to the vendor's own empty value as call 2's is stamped, so a retry round
-    # never re-bills the earlier reasoning. The FIELD stays on both: the vendor
-    # validates presence on every ``tool_calls`` turn (a live probe 400s when an
-    # older turn drops it).
-    assert "reasoning_content" in second_echo[0]
-    assert second_echo[0]["reasoning_content"] == ""
-    assert "reasoning_content" in second_echo[1]
+    # Issue #29's owner ruling: the CURRENT round is carried verbatim, so call 1's
+    # block is still there in full when call 2's empty value is stamped. Nothing
+    # is retired inside a round; the trim sits at the ROUND boundary (prior
+    # executions' history re-attaches the field present-but-empty).
+    assert second_echo[0]["reasoning_content"] == (
+        "The checklist: reads first, then top-level places."
+    )
     assert second_echo[1]["reasoning_content"] == ""
     # The seed completed (no PlannerBootstrapError) and the places landed.
     assert [row["result"]["ok"] for row in _tool_results(log)] == [True, True]

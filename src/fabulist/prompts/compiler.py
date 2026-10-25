@@ -489,12 +489,13 @@ def stripped_history(
         item_strip = False if (not strip or i in keep) else True
         projected = _project_history_item(item, strip=item_strip)
         if projected is not None:
-            # Issue #42: the reasoning a prior assistant turn PRODUCED rides the
-            # history message (``history_from_log`` stamps it), so the request
-            # builder can pass it back for thinking-active connections. Carried
-            # through projection unconditionally: WHICH connection may send it
-            # is the client seam's decision, not history assembly's. Absent on
-            # turns that never stored reasoning — those stay content-only.
+            # Issue #42: a prior assistant turn's reasoning FIELD rides the history
+            # message (``history_from_log`` emits it PRESENT but EMPTY — owner
+            # ruling on #29: the text is never re-sent), so the request builder can
+            # pass the field back for thinking-active connections. Carried through
+            # projection unconditionally: WHICH connection may send it is the
+            # client seam's decision, not history assembly's. Absent on turns that
+            # never stored reasoning — those stay content-only.
             if (
                 isinstance(item, Mapping)
                 and projected.get("role") == "assistant"

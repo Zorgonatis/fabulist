@@ -414,14 +414,16 @@ def _with_reasoning_history(
 
     Issue #42: ``history_from_log`` stamps ``reasoning_content`` on every
     assistant history message whose turn PRODUCED reasoning (the narrative row
-    carries it). Whether that field may ride the wire is a property of the
-    CONNECTION, so the decision lives here, at the one request-building seam:
+    carries it) — PRESENT but EMPTY (owner ruling on #29: a prior execution's
+    text is stored for diagnosis, never re-sent). Whether that field may ride the
+    wire is a property of the CONNECTION, so the decision lives here, at the one
+    request-building seam:
 
     * ``thinking is False`` — thinking mode is off, where the field is noise;
     * ``return_thinking is False`` — the owner's "Return thinking" switch says
       never send it;
-    * otherwise AUTO/ON — a stored field travels back verbatim, including the
-      empty string the provider itself returned for a no-reasoning turn
+    * otherwise AUTO/ON — the field travels as history assembled it, including
+      the empty string the provider itself returns for a no-reasoning turn
       (presence is the fact; DeepSeek 400s on a MISSING field).
 
     Turns with no stored reasoning have no key and stay content-only, so a
@@ -499,7 +501,8 @@ def build_request(
     provider that has never heard of the field keeps a byte-identical request.
 
     Issue #42: assistant history messages may arrive carrying ``reasoning_content``
-    (the turn's own stored trace). :func:`_with_reasoning_history` keeps that field
+    (a prior turn stored the field — history assembly emits it PRESENT but EMPTY
+    per the owner's #29 ruling). :func:`_with_reasoning_history` keeps that field
     only for a thinking-active connection whose ``return_thinking`` allows it, and
     strips it everywhere else — so a non-thinking provider's body is unchanged.
     """
