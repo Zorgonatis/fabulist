@@ -369,10 +369,15 @@ narrative payload — empty prose, empty DSL — and the turn is kept.
 ### Exposure
 
 There is **no authentication** on any route. The image starts the engine with `--host 0.0.0.0`
-and the default compose file publishes `2727:2727`, so the app listens on every host interface.
-On a machine with a public interface, either publish loopback only (`"127.0.0.1:2727:2727"`) or
-put a reverse proxy with its own authentication in front of it. `scripts/serve.py` run from
-source defaults to `127.0.0.1:2727`.
+and the default compose file publishes `2727:2727`, so the app listens on every host interface
+(the host-network variant in `docker-compose.host.yml` binds the host's `2727` directly, same
+result). On a machine with a public interface, either publish loopback only
+(`"127.0.0.1:2727:2727"`) or put a reverse proxy with its own authentication in front of it.
+`scripts/serve.py` run from source defaults to `127.0.0.1:2727` — that is the only shipped path
+that does.
+
+This posture is stated in exactly two places: here and [SECURITY.md](SECURITY.md) (§2, *There is
+no authentication — by design*). Change both or neither.
 
 ## Architecture
 
@@ -393,6 +398,7 @@ that keep that shape honest.
 ## Docs
 
 - [docs/decisions/README.md](docs/decisions/README.md) — the design rulings, one entry each
+- [SECURITY.md](SECURITY.md) — threat model, the no-authentication posture and the bind truth
 - [AGENTS.md](AGENTS.md) — how to work in this repo (conventions, verification rules)
 - [.env.example](.env.example) — the sidecar and API-key environment variables
 - [docs/PERSONA-SPEC.md](docs/PERSONA-SPEC.md) — persona/actor cards and structured canon

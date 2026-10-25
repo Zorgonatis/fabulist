@@ -1,9 +1,11 @@
 # Security Policy
 
-Fabulist is a **personal, localhost-only** narrative engine. It has no accounts, no
-multi-tenancy and no network hardening to speak of — that is a design choice, not an
-oversight, and it shapes everything below. Read this before pointing it at anything you
-would not hand your shell to.
+Fabulist is a **personal narrative engine meant to be run on localhost**. That is the intent,
+not a shipped guarantee: a source run binds loopback, but the image and the default compose
+file listen on every host interface (§2, and the [README's Exposure section](README.md#exposure)
+— the two must change together). It has no accounts, no multi-tenancy and no network hardening
+to speak of — that is a design choice, not an oversight, and it shapes everything below. Read
+this before pointing it at anything you would not hand your shell to.
 
 ## Reporting a vulnerability
 
@@ -56,8 +58,14 @@ worlds, prompt presets, assistant definitions, connection routing, `.env` keys.
 
 Therefore:
 
-- **Never expose `:2727` to a network** — not with `--host 0.0.0.0`, not behind a reverse
-  proxy, not through a tunnel, not "just for a minute". The default is `127.0.0.1`.
+- **Never expose `:2727` to a network** — not by binding `--host 0.0.0.0` yourself, not behind a
+  reverse proxy without authentication of its own, not through a tunnel, not "just for a minute".
+  Do not read a loopback default as protection: `scripts/serve.py` binds `127.0.0.1:2727`, but the
+  image starts the engine as `--host 0.0.0.0` (container-local — required for any published port
+  to work) and the shipped compose files publish `2727:2727` on **every host interface**.
+  `"127.0.0.1:2727:2727"` is the setting that makes the sentence above true, and it is the one to
+  apply on any machine with a public interface. The [README's Exposure section](README.md#exposure)
+  is the single other place this posture is stated: change both or neither.
 - CORS accepts the local dev frontend origins (plus whatever you add explicitly through
   `FABULIST_DEV_ORIGINS`). That restricts browsers, not attackers with `curl`.
 - Anything else running as your user on that machine can drive the engine, including writing
