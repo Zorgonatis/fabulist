@@ -2532,6 +2532,16 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	}
 	.side-dock {
 		position: relative;
+		/* Issue #66: the docked state pane must scroll INSIDE the shell, never grow
+		 * it. `.chat` is the 100vh row, so the dock is already the shell's height —
+		 * but the pane inside it is a block whose auto height is its CONTENT, so
+		 * `overflow-y: auto` had no box to scroll against: a long state tab pushed
+		 * the pane past the shell and the DOCUMENT grew a second scrollbar beside
+		 * the transcript's. A column here plus `min-height: 0` (the flex shrink
+		 * floor) hands the pane a real height to scroll inside instead. */
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
 	}
 	.undock-btn {
 		position: absolute;

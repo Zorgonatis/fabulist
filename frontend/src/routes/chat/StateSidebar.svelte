@@ -1267,7 +1267,13 @@
 <style>
 	.sidebar {
 		width: 15rem;
-		flex: none;
+		/* Issue #66: the dock is a column of the 100vh shell, so the pane FILLS its
+		   height (flex-grow) and can shrink into it (`min-height: 0` — the flex
+		   item's default floor is its content, which is what let a long state tab
+		   grow the document instead of scrolling in here). `overflow-y: auto` above
+		   then has a real box to scroll. */
+		flex: 1 1 auto;
+		min-height: 0;
 		border-right: 1px solid var(--line);
 		padding: 0.85rem 0.75rem;
 		overflow-y: auto;
