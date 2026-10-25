@@ -1185,14 +1185,25 @@ export interface TopologyResponse {
 	violations: TopologyViolation[];
 }
 
+/**
+ * An edge plus the one extra wire key this client must not lose.
+ *
+ * `fanout: true` marks a `Send` edge (the NPC-lane fan-out). It is not in the
+ * typed edge shape (`#lib/flow/types`) because the editor does not draw it, but
+ * it IS topology data: the engine's off switch
+ * (`fabulist.graph.contracts.prune_disabled_fanout`) can only remove a stage
+ * whose fan-out edge still says so. A read/save round trip that dropped the
+ * marker therefore made every later "lanes off" save refused — so the marker
+ * rides through this client untouched (issue #56).
+ */
+type WireTopologyEdge = TopologyEdge & { fanout?: boolean };
+
 /** One edge as the wire spells it (`kind`/`condition`/`cap` are optional). */
-const wireEdge = (from: string, to: string): TopologyEdge => ({
-	from,
-	to,
-	kind: 'flow',
-	condition: null,
-	cap: null
-});
+const wireEdge = (from: string, to: string, fanout = false): TopologyEdge => {
+	const edge = { from, to, kind: 'flow', condition: null, cap: null } as WireTopologyEdge;
+	if (fanout) edge.fanout = true;
+	return edge;
+};
 
 const wireBranch = (from: string, to: string, condition: string, cap: number | null = null): TopologyEdge => ({
 	from,
@@ -1232,7 +1243,7 @@ export const MOCK_TOPOLOGY: Topology = {
 		wireBranch('pre_turn', 'planner', 'plan'),
 		wireBranch('pre_turn', 'npc_lanes', 'skip'),
 		wireEdge('planner', 'npc_lanes'),
-		wireEdge('npc_lanes', 'npc_lane'),
+		wireEdge('npc_lanes', 'npc_lane', true),
 		wireEdge('npc_lanes', 'narrate'),
 		wireEdge('npc_lane', 'narrate'),
 		wireEdge('narrate', 'commit'),
@@ -1274,13 +1285,17 @@ function normalizeTopologyEdge(raw: unknown): TopologyEdge | null {
 	const from = str(o.from);
 	const to = str(o.to);
 	if (!from || !to) return null;
-	return {
+	const edge: WireTopologyEdge = {
 		from,
 		to,
 		kind: oneOf(o.kind, EDGE_KINDS, 'flow'),
 		condition: nullableStr(o.condition),
 		cap: typeof o.cap === 'number' && Number.isFinite(o.cap) ? o.cap : null
 	};
+	// The fan-out marker is data the editor never edits but the engine reads
+	// (see `WireTopologyEdge`): keep it on the round trip.
+	if (o.fanout === true) edge.fanout = true;
+	return edge;
 }
 
 /** Coerce an endpoint payload into a `Topology`; malformed entries are dropped. */
@@ -1338,7 +1353,8 @@ function wireTopology(topology: Topology): Record<string, unknown> {
 			to: edge.to,
 			kind: edge.kind,
 			...(edge.condition ? { condition: edge.condition } : {}),
-			...(typeof edge.cap === 'number' ? { cap: edge.cap } : {})
+			...(typeof edge.cap === 'number' ? { cap: edge.cap } : {}),
+			...(edge as WireTopologyEdge).fanout ? { fanout: true } : {}
 		}))
 	};
 }

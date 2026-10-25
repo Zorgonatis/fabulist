@@ -32,7 +32,8 @@ export type StudioKind =
 	| 'queries'
 	| 'catalog'
 	| 'templates'
-	| 'planner';
+	| 'planner'
+	| 'lanes';
 
 /** One kind: its id, its two labels and the group it renders under. */
 export interface StudioKindSpec {
@@ -63,7 +64,11 @@ export const STUDIO_KINDS: readonly StudioKindSpec[] = [
 	{ kind: 'queries', tab: 'Queries', pane: 'Queries', group: 'engine' },
 	{ kind: 'catalog', tab: 'Catalog', pane: 'Catalog', group: 'engine' },
 	{ kind: 'templates', tab: 'Templates', pane: 'Templates', group: 'engine' },
-	{ kind: 'planner', tab: 'Planner', pane: 'Planner', group: 'engine' }
+	{ kind: 'planner', tab: 'Planner', pane: 'Planner', group: 'engine' },
+	// Issue #56: lanes are configured where NPCs are managed, so their controls
+	// get a page here too — next to the other turn-step settings, after the
+	// planner (the turn's order: the plan, then the lanes, then the narration).
+	{ kind: 'lanes', tab: 'NPC lanes', pane: 'NPC lanes', group: 'engine' }
 ];
 
 /** The kinds of one group, in registry order. */

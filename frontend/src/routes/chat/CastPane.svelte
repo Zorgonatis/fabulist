@@ -56,6 +56,16 @@
 	// row is a cost knob for the owner: `decision` costs one d1-3b ask instead of
 	// guessing, and a bound is the only way to say "fewer lane calls".
 	//
+	// Issue #56 (owner ruling): the ONE thing missing here was lanes themselves —
+	// on/off and how many run at once. Those two are NOT session settings: they
+	// are topology data on the turn flow's fan-out row (`data.enabled`,
+	// `data.max_lanes`), because the running graph is compiled from that row. So
+	// they sit beside the dispatch row as quick options and write through the
+	// validated topology door (`#lib/api/npcLanes`, shared with the studio's NPC
+	// lanes page), which either keeps the edit or refuses it and names why. The
+	// same register as the row above: disabled with a reason when the read found
+	// no engine (and when the flow has no lane step to configure at all).
+	//
 	// W9.30 §5.3 — the cast ladder's manual door. A member on the `actor`
 	// provenance rung (admitted by an accepted cast proposal, the D79 door) can be
 	// PROMOTED to a real studio actor persona card that outlives the chat. The
@@ -98,6 +108,16 @@
 		type PlayerTreeNode
 	} from '#lib/api/hud';
 	import { setNpcDispatch, setUserAsActor, type NpcStrategy } from '#lib/api/personas';
+	// Issue #56: the lane quick options write the turn flow's lane step, not a
+	// session setting — the same door the studio's NPC lanes page uses.
+	import {
+		LANE_WIDTHS,
+		laneConfigStore,
+		laneRefusal,
+		readLaneConfig,
+		writeLaneConfig,
+		type LaneConfig
+	} from '#lib/api/npcLanes';
 	import type { SpeakerColor } from '#lib/api';
 	import { bumpSpeakerColors, type RegistryRow } from '#lib/speakerColorStore';
 
@@ -136,6 +156,20 @@
 	//: per keystroke, and an empty field must not write 0 behind the owner's back.
 	let maxDispatchDraft = $state('0');
 
+	//: Issue #56 lane quick options. `laneState` is this pane's own read of the
+	//: stored flow ('no-step' = the flow has no lane step, so there is nothing to
+	//: configure); `laneConfig` is the stored value both controls show.
+	let laneState = $state<'loading' | 'ready' | 'unreachable' | 'no-step'>('loading');
+	let laneConfig = $state<LaneConfig | null>(null);
+	let savingLane = $state(false);
+	let laneError = $state('');
+	let laneNote = $state('');
+	/** The two controls' own state — see `applyLaneConfig` for why it is not derived. */
+	let lanesOn = $state(true);
+	let laneWidth = $state('4');
+	/** A stored config's identity — the guard that keeps the shared store quiet. */
+	let laneAppliedKey = '';
+
 	//: W9.30 §5.3 — the manual promotion door. `promoteFor` is the member whose
 	//: inline form is open (one at a time); the dialog's name draft is seeded from
 	//: the GET's suggestion, which is why opening it is a read, not a guess.
@@ -167,6 +201,26 @@
 	const maxDispatchTitle =
 		'Most lanes one turn may run (0 = no bound). Orthogonal to the concurrency pool: this bounds the SET, that bounds how many run at once.';
 
+	//: Issue #56: the lane quick options' reasons, in the same voice as the two
+	//: titles above. A control this pane cannot write must not look editable.
+	const lanesReachable = $derived(laneState === 'ready' && laneConfig !== null);
+	const laneSwitchTitle = $derived(
+		laneState === 'loading'
+			? 'Reading the turn flow’s lane settings…'
+			: laneState === 'unreachable'
+				? 'Engine unreachable — the lane settings cannot be changed'
+				: laneState === 'no-step'
+					? 'This flow has no NPC lane step to switch on or off'
+					: 'Switch lanes off: the narrator writes this scene alone'
+	);
+	const laneWidthTitle = $derived(
+		laneState !== 'ready'
+			? laneSwitchTitle
+			: laneConfig && !laneConfig.enabled
+				? 'Lanes are off — switch them on to choose how many run at once'
+				: 'How many lanes may run at once (every lane still runs)'
+	);
+
 	const actorRows = $derived(cast.filter((row) => row.tier === 'actor'));
 	const presenceRows = $derived(cast.filter((row) => row.tier !== 'actor'));
 	//: `member_id` -> tree node: the ONE join all three layers share.
@@ -195,6 +249,14 @@
 		maxDispatchDraft = '0';
 		savingDispatch = false;
 		dispatchError = '';
+		laneState = 'loading';
+		laneConfig = null;
+		laneAppliedKey = '';
+		lanesOn = true;
+		laneWidth = '4';
+		savingLane = false;
+		laneError = '';
+		laneNote = '';
 		promoteFor = null;
 		promoteName = '';
 		promoteReason = '';
@@ -203,6 +265,10 @@
 		promoteSaving = false;
 		promoteError = '';
 		promoteNotice = '';
+		// Issue #56: the lane quick options are the turn flow's settings, not this
+		// chat's, so they are read on mount and on every session switch alike —
+		// an open session is not a precondition for showing or changing them.
+		void loadLaneConfig();
 		if (!id) return;
 		void load(id);
 	});
@@ -265,6 +331,93 @@
 		} catch {
 			configState = 'unreachable';
 		}
+	}
+
+	// --- Issue #56: the NPC lane quick options (on/off, how many at once) -----
+	//
+	// Both write the fan-out row of the stored topology through the validated
+	// door (`#lib/api/npcLanes`), then show what the door says it kept: the
+	// read-back is the save's own echo, so the control can never display an edit
+	// the engine refused. The studio's NPC lanes page writes the same value, and both
+	// render the shared `laneConfigStore`, so the two surfaces agree while both
+	// are open.
+	async function loadLaneConfig(): Promise<void> {
+		laneState = 'loading';
+		laneError = '';
+		try {
+			applyLaneConfig(await readLaneConfig());
+		} catch {
+			// Not a refusal, just no engine: the row says so in its own words and
+			// the two controls render disabled — no error line to repeat it.
+			laneState = 'unreachable';
+		}
+	}
+
+	/** Set the two controls from a stored value (a read, or a save's echo). */
+	function applyLaneConfig(next: LaneConfig | null): void {
+		laneConfig = next;
+		laneAppliedKey = next ? `${next.enabled}:${next.maxLanes}` : '';
+		laneState = next ? 'ready' : 'no-step';
+		// The controls keep their own state (below) so a REFUSED edit can be undone
+		// on screen: a `checked={...}` bound straight to the stored value would be
+		// "unchanged" from Svelte's point of view and leave the clicked box ticked.
+		lanesOn = next?.enabled ?? true;
+		laneWidth = String(next?.maxLanes ?? 4);
+	}
+
+	// Svelte 5: read the `$store` directly (`get(store)` inside an effect does not
+	// track). The key guard drops the echo of this pane's own write.
+	$effect(() => {
+		const published = $laneConfigStore;
+		if (!published || savingLane) return;
+		const key = `${published.enabled}:${published.maxLanes}`;
+		if (key === laneAppliedKey) return;
+		applyLaneConfig(published);
+		if (laneState !== 'unreachable') laneState = 'ready';
+		laneNote = '';
+	});
+
+	// The lane settings belong to the turn flow, not to one chat: the session
+	// effect above reads them on mount and on every session switch.
+
+	/**
+	 * Write one lane setting and read it back.
+	 *
+	 * The whole topology goes back (that is what the door takes), so a refused
+	 * edit leaves the stored, compilable flow untouched — and the pane re-reads
+	 * so the controls show the stored value rather than the edit that did not
+	 * land. A violation is shown in the door's own words.
+	 */
+	async function saveLaneConfig(patch: { enabled?: boolean; maxLanes?: number }): Promise<void> {
+		if (savingLane || laneState !== 'ready') return;
+		savingLane = true;
+		laneError = '';
+		laneNote = '';
+		try {
+			applyLaneConfig(await writeLaneConfig(patch));
+			laneNote = 'saved — applies to the next turn';
+		} catch (err) {
+			const refused = laneRefusal(err);
+			// The refusal changed nothing: re-read so the controls show the stored
+			// values, then keep the door's own words on screen.
+			await loadLaneConfig();
+			laneError = refused;
+		} finally {
+			savingLane = false;
+		}
+	}
+
+	function toggleLanes(next: boolean): void {
+		lanesOn = next;
+		void saveLaneConfig({ enabled: next });
+	}
+
+	function chooseLaneWidth(raw: string): void {
+		laneWidth = raw;
+		const width = Number(raw);
+		if (!Number.isFinite(width)) return;
+		if (laneConfig && width === laneConfig.maxLanes) return;
+		void saveLaneConfig({ maxLanes: width });
 	}
 
 	// The registry the transcript colours quotes from: the merged cast rows that
@@ -674,6 +827,49 @@
 		<span class="cast-policy-hint">0 = no bound</span>
 	</div>
 
+	<!-- Issue #56: lanes themselves, beside the dispatch row — on/off and how
+	     many run at once. These are the turn flow's own settings (not this
+	     chat's), so the copy says so; a control the pane cannot write (no engine,
+	     or a flow with no lane step) renders disabled with the reason in its
+	     tooltip. -->
+	<div class="cast-policy cast-lane-policy" class:cast-policy-off={!lanesReachable}>
+		<label class="cast-policy-field" title={laneSwitchTitle}>
+			<input
+				type="checkbox"
+				checked={lanesOn}
+				disabled={!lanesReachable || savingLane}
+				aria-label="NPC lanes on or off"
+				data-lane-enabled={lanesOn ? 'on' : 'off'}
+				onchange={(e) => toggleLanes(e.currentTarget.checked)}
+			/>
+			<span>NPC lanes</span>
+		</label>
+		<label class="cast-policy-field" title={laneWidthTitle}>
+			<select
+				value={laneWidth}
+				disabled={!lanesReachable || savingLane || !lanesOn}
+				aria-label="Lanes running at once"
+				onchange={(e) => chooseLaneWidth(e.currentTarget.value)}
+			>
+				{#each LANE_WIDTHS as width (width)}
+					<option value={String(width)}>{width}</option>
+				{/each}
+			</select>
+			<span>at once</span>
+		</label>
+		{#if laneState === 'loading'}
+			<span class="cast-policy-hint">reading…</span>
+		{:else if laneState === 'no-step'}
+			<span class="cast-policy-hint">no lane step in this flow</span>
+		{:else if laneState === 'unreachable'}
+			<span class="cast-policy-hint">engine unreachable</span>
+		{:else if !lanesOn}
+			<span class="cast-policy-hint">the narrator writes this scene alone</span>
+		{:else if laneNote}
+			<span class="cast-policy-hint">{laneNote}</span>
+		{/if}
+	</div>
+
 	{#if error}
 		<p class="hud-note hud-note-error">{error}</p>
 	{:else if loading}
@@ -735,6 +931,7 @@
 		{#if saveError}<p class="hud-note hud-note-error">{saveError}</p>{/if}
 		{#if actorError}<p class="hud-note hud-note-error">{actorError}</p>{/if}
 		{#if dispatchError}<p class="hud-note hud-note-error">{dispatchError}</p>{/if}
+		{#if laneError}<p class="hud-note hud-note-error">{laneError}</p>{/if}
 		<p class="hud-note">
 			Actors get their own lanes and colours. “In scene” is worked out from where everyone is in
 			the story — a tracked member is never given a lane. Colours you pick here win over the
@@ -816,6 +1013,14 @@
 	.cast-policy-hint {
 		color: var(--text-dim);
 		opacity: 0.8;
+	}
+	/* Issue #56: the lane quick options read quieter than the dispatch row while
+	   they are not writable (no engine, no lane step in the flow). */
+	.cast-policy-off {
+		opacity: 0.6;
+	}
+	.cast-lane-policy {
+		flex-wrap: wrap;
 	}
 	.cast-list {
 		list-style: none;

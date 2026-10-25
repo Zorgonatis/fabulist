@@ -102,6 +102,8 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	import GraphHomePane from './studio/GraphHomePane.svelte';
 	import NodeTemplatesPane from './studio/NodeTemplatesPane.svelte';
 	import PlannerPane from './studio/PlannerPane.svelte';
+	// Issue #56: the NPC lane settings get a page where NPCs are managed.
+	import LanesPane from './studio/LanesPane.svelte';
 	// W9.22 §4: the review home's studio half — the cross-session proposal inbox.
 	import ProposalsHome from './studio/ProposalsHome.svelte';
 	// Wave 4b player HUD panes + transcript overlays.
@@ -2385,7 +2387,8 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 			queries: DecisionQueriesPane,
 			catalog: EntityCatalogPane,
 			templates: NodeTemplatesPane,
-			planner: PlannerPane
+			planner: PlannerPane,
+			lanes: LanesPane
 		}}
 		focusId={studioFocusId}
 		startNew={studioStartNew}
