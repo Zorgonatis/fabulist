@@ -145,7 +145,9 @@ DEFAULT_REPS = 5
 
 #: Per-request ceiling. The first request to a sleeping router child pays that
 #: child's model load (``scripts/spike/d1_systemone.py`` notes this), so the
-#: spike is deliberately more generous than a turn's 5s gate timeout.
+#: spike is deliberately more generous than a turn's 30s gate timeout
+#: (``fabulist.decision.DEFAULT_TIMEOUT``, raised from 5s because a first call
+#: after a sidecar restart timed out at 5.0039s paying that model load).
 DEFAULT_TIMEOUT = 120.0
 
 #: The class name whose probability IS the ``actor_assessed.signal`` float. It

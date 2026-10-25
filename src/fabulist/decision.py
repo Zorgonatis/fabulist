@@ -135,10 +135,16 @@ def turn_gate_state(user_msg: str, prose: str, scene_line: str = "") -> str:
     return prose
 
 
-#: Per-request timeout (seconds). The decision route answers in one forward pass
-#: (~10-17ms in the spike); 5s is a generous ceiling that still bounds a hung
-#: router so the gate cannot stall a turn.
-DEFAULT_TIMEOUT = 5.0
+#: Per-request timeout (seconds). A WARM decision route answers in one forward
+#: pass (~10-17ms in the spike), and 30s is NOT about that: the sidecar's compose
+#: healthcheck proves the ROUTER listens, not that a model is LOADED, so the
+#: first call after a sidecar (re)start pays the on-disk model load. Measured on
+#: a freshly booted deploy: the first call raised ``ReadTimeout`` at 5.0039s under
+#: the old 5s bound and the immediately following call succeeded in 1.55s. 30s
+#: absorbs a cold load while still bounding a genuinely hung call (an accepted
+#: trade: a hung decision call may block a turn for up to 30s, after which it
+#: returns ``None`` like every other failure).
+DEFAULT_TIMEOUT = 30.0
 
 #: The route path (relative to the connection's ``/v1`` base).
 _ROUTE = "/systemone"

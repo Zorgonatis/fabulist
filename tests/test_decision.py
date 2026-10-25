@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from fabulist.decision import DecisionCaller
+from fabulist.decision import DEFAULT_TIMEOUT, DecisionCaller
 
 
 def run(coro):
@@ -86,6 +86,18 @@ def test_connection_without_base_url_or_model_disables_caller():
 def test_binding_resolves_to_enabled_caller():
     caller = DecisionCaller(FakeRegistry({"decision": _connection()}))
     assert caller.enabled is True
+
+
+def test_default_timeout_absorbs_a_cold_model_load():
+    """The default must survive a sidecar restart's on-disk model load.
+
+    The compose healthcheck proves the ROUTER listens, not that a model is
+    LOADED, so the first decision call after a restart pays the model load: a
+    live deploy raised ``ReadTimeout`` at 5.0039s under the old 5s bound and the
+    next call took 1.55s. 30s covers that load and still bounds a hung call.
+    """
+    assert DEFAULT_TIMEOUT == 30.0
+    assert DecisionCaller(FakeRegistry({"decision": _connection()}))._timeout == 30.0
 
 
 # --- request shape + noul parse ---------------------------------------------
