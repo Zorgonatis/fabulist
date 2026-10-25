@@ -645,58 +645,64 @@
 	{:else if ledger.length === 0}
 		<p class="empty">No context ledger yet.</p>
 	{:else}
-		<table class="context">
-			<thead>
-				<tr>
-					<th>task</th>
-					<th>connection</th>
-					<th title="owner-declared Context Size">window</th>
-					<th title="effective response length (max_tokens)">resp</th>
-					<th title="usable prompt budget: window − resp − reserve">budget</th>
-					<th title="last measured prompt tokens (usage rows)">prompt</th>
-					<th title="prompt ÷ budget — warns at 80%, compacts at 90%">ratio</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each ledger as row (row.task)}
-					<tr class:undeclared={!row.window_declared}>
-						<td class="ctx-task" title={`interaction: ${row.interaction} · agent: ${row.agent}`}
-							>{row.task}</td
-						>
-						<td class="ctx-conn" title={row.model ?? 'no usage row yet'}
-							>{#if row.connection}<span class="ctx-model">{row.model ?? '—'}</span> · {row.connection}{:else}<span class="muted">unbound</span>{/if}</td
-						>
-						<td class="num" title={row.note ?? ''}
-							>{#if row.window_declared}{fmtTokens(row.context_window)}{:else}<span class="muted"
-									>{row.note ?? 'window undeclared'}</span
-								>{/if}</td
-						>
-						<td class="num">{fmtTokens(row.response_length)}</td>
-						<td class="num">{fmtTokens(row.budget_tokens)}</td>
-						<td class="num">{fmtTokens(row.prompt_tokens)}</td>
-						<td class="ratio-cell">
-							{#if row.ratio == null}
-								<span class="muted">—</span>
-							{:else}
-								<span class="ratio" title={`${fmtTokens(row.prompt_tokens)} of ${fmtTokens(
-									row.budget_tokens
-								)} usable`}
-									><span class="bar-track"
-										><span
-											class="bar-fill"
-											class:warn={ratioTone(row.ratio) === 'warn'}
-											class:hot={ratioTone(row.ratio) === 'hot'}
-											style={`width:${ratioPct(row.ratio)}%`}
-										></span
-									></span
-								><span class="ratio-value">{fmtRatio(row.ratio)}</span></span
-								>
-							{/if}
-						</td>
+		<!-- Issue #49: the ledger is a READOUT, not prose — every cell is one
+			logical line, so cells never wrap and the table scrolls sideways when
+			the pane is narrower than the columns. Every column keeps its `title`
+			for the full value, so clipping is never information loss. -->
+		<div class="ctx-scroll">
+			<table class="context">
+				<thead>
+					<tr>
+						<th>task</th>
+						<th>connection</th>
+						<th title="owner-declared Context Size">window</th>
+						<th title="effective response length (max_tokens)">resp</th>
+						<th title="usable prompt budget: window − resp − reserve">budget</th>
+						<th title="last measured prompt tokens (usage rows)">prompt</th>
+						<th title="prompt ÷ budget — warns at 80%, compacts at 90%">ratio</th>
 					</tr>
-				{/each}
-			</tbody>
-		</table>
+				</thead>
+				<tbody>
+					{#each ledger as row (row.task)}
+						<tr class:undeclared={!row.window_declared}>
+							<td class="ctx-task" title={`interaction: ${row.interaction} · agent: ${row.agent}`}
+								>{row.task}</td
+							>
+							<td class="ctx-conn" title={row.model ?? 'no usage row yet'}
+								>{#if row.connection}<span class="ctx-model">{row.model ?? '—'}</span> · {row.connection}{:else}<span class="muted">unbound</span>{/if}</td
+							>
+							<td class="num" title={row.note ?? ''}
+								>{#if row.window_declared}{fmtTokens(row.context_window)}{:else}<span class="muted"
+										>{row.note ?? 'window undeclared'}</span
+									>{/if}</td
+							>
+							<td class="num">{fmtTokens(row.response_length)}</td>
+							<td class="num">{fmtTokens(row.budget_tokens)}</td>
+							<td class="num">{fmtTokens(row.prompt_tokens)}</td>
+							<td class="ratio-cell">
+								{#if row.ratio == null}
+									<span class="muted">—</span>
+								{:else}
+									<span class="ratio" title={`${fmtTokens(row.prompt_tokens)} of ${fmtTokens(
+										row.budget_tokens
+									)} usable`}
+										><span class="bar-track"
+											><span
+												class="bar-fill"
+												class:warn={ratioTone(row.ratio) === 'warn'}
+												class:hot={ratioTone(row.ratio) === 'hot'}
+												style={`width:${ratioPct(row.ratio)}%`}
+											></span
+										></span
+									><span class="ratio-value">{fmtRatio(row.ratio)}</span></span
+									>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
 	{/if}
 
 	{#if turns.length === 0 && !loadError}
@@ -1152,6 +1158,8 @@
 	td.num {
 		text-align: right;
 		font-variant-numeric: tabular-nums;
+		/* Issue #49: a number is one token — never let it break across lines. */
+		white-space: nowrap;
 	}
 
 	td.hash {
@@ -1239,6 +1247,12 @@
 	.totals {
 		margin: 0.15rem 0;
 		color: var(--text-muted);
+		/* Issue #49: the per-call token readout is ONE line — it wraps between the
+		   label and its number otherwise, which reads as broken. Scroll instead. */
+		white-space: nowrap;
+		overflow-x: auto;
+		overflow-y: hidden;
+		font-variant-numeric: tabular-nums;
 	}
 
 	table.mini {
@@ -1297,8 +1311,37 @@
 
 	/* W9.26 §2.7: the per-task context ledger. Quiet by construction — it is a
 	   read of the engine's own numbers, never a control. */
+	/* Issue #49: horizontal scroll, not ellipsis, for the ledger. These cells ARE
+	   the value the inspector was opened to read; truncating "200,000" to "20…"
+	   would be worse than a scrollbar, and the pane is now resizable so the
+	   common case is that nothing overflows at all. */
+	.ctx-scroll {
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: thin;
+		scrollbar-color: var(--line-strong, #3b3850) transparent;
+	}
+
+	table.context {
+		width: max-content;
+		min-width: 100%;
+	}
+
+	/* One logical line per cell: a readout never breaks mid-number. */
+	table.context th,
+	table.context td {
+		white-space: nowrap;
+	}
+
 	table.context td {
 		font-size: 0.72rem;
+	}
+
+	/* Tabular numerals + monospace so digits line up column-wise and never reflow
+	   as a value's width changes (the ugly-wrap half of issue #49). */
+	table.context td.num {
+		font-family: monospace;
+		font-variant-numeric: tabular-nums;
 	}
 
 	td.ctx-task {
@@ -1308,6 +1351,12 @@
 	td.ctx-conn {
 		color: var(--text-muted);
 		white-space: nowrap;
+		/* The one DESCRIPTIVE readout (model id · connection name): ellipsis it
+		   rather than let a long model id widen the table — the `title` carries
+		   the full string. */
+		max-width: 12rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.ctx-model {

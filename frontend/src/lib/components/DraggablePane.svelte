@@ -17,15 +17,32 @@
 		zCounter = zCounter >= Z_PANE_MAX ? Z_PANE_MIN + 1 : zCounter + 1;
 		return zCounter;
 	}
+
+	/** localStorage prefix for a pane's remembered size (issue #49). */
+	const SIZE_KEY_PREFIX = 'fabulist.pane.size.';
+
+	/** Title -> stable storage key (`Memories (Used this turn)` -> `memories-used-this-turn`). */
+	function paneSlug(name: string): string {
+		return name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+	}
 </script>
 
 <script lang="ts">
 	// Floating draggable/resizable pane shell (SURFACE #12 / R13).
 	//
 	// A self-contained absolutely-positioned card: its header is a drag handle
-	// (`role="toolbar"`), the corner grip resizes it, and a close button fires
-	// `onclose`. `x/y/w/h` seed the uncontrolled position/size once on mount and
-	// are otherwise owned by the component — callers do not get live updates back.
+	// (`role="toolbar"`), the right/bottom edges and the corner grip resize it
+	// (issue #49 — previously the grip only existed when the caller passed `h`,
+	// which no caller did), and a close button fires `onclose`. `x/y/w/h` seed the
+	// uncontrolled position/size once on mount and are otherwise owned by the
+	// component — callers do not get live updates back.
+	//
+	// A size the user dragged is remembered per panel in localStorage (keyed by
+	// `id`, else the title slug). A pane size is browser-local user state, not
+	// narrative history, so it never goes through the engine API.
 	//
 	// Dragging uses pointer events + setPointerCapture so the gesture keeps
 	// tracking even when the cursor races ahead of the element (no window-level
@@ -42,20 +59,26 @@
 		y?: number;
 		w?: number;
 		h?: number;
+		/** Stable per-panel storage key for the remembered size; defaults to the title slug. */
+		id?: string;
 		onclose?: () => void;
 		children: Snippet;
 	};
 
-	let { title, x = 24, y = 24, w = 340, h, onclose, children }: Props = $props();
+	let { title, x = 24, y = 24, w = 340, h, id, onclose, children }: Props = $props();
 
 	// W9.16: every floating pane joins the Escape stack (D51 §2.4). The
 	// drawers already do; these panes did not, so Escape left them open over
 	// the header and blocked clicks on the controls beneath.
-	onMount(() => register('pane', () => onclose?.()));
+	onMount(() => {
+		// Client-only work: the remembered size (if any), then the Escape-stack slot.
+		restoreSize();
+		return register('pane', () => onclose?.());
+	});
 
 	// Props are INITIAL values only: snapshot them once (untrack marks that we
 	// deliberately do not follow later prop changes) and own the state ourselves.
-	const seed = untrack(() => ({ x, y, w, h }));
+	const seed = untrack(() => ({ x, y, w, h, sizeKey: SIZE_KEY_PREFIX + (id ?? paneSlug(title)) }));
 	let posX = $state(seed.x);
 	let posY = $state(seed.y);
 	let width = $state(seed.w);
@@ -69,8 +92,11 @@
 	const MIN_VISIBLE = 80;
 	const MIN_W = 260;
 	const MIN_H = 140;
+	// Leave a gap at the viewport edge so a resize handle stays grabbable.
+	const VIEWPORT_INSET = 8;
 
 	let headerEl = $state<HTMLElement | undefined>(undefined);
+	let sectionEl = $state<HTMLElement | undefined>(undefined);
 
 	type DragState = {
 		pointerId: number;
@@ -79,8 +105,11 @@
 		originX: number;
 		originY: number;
 	};
+	/** Which axes a resize gesture drives; the edge handles each drive one. */
+	type ResizeAxis = 'x' | 'y' | 'both';
 	type ResizeState = {
 		pointerId: number;
+		axis: ResizeAxis;
 		startX: number;
 		startY: number;
 		originW: number;
@@ -145,29 +174,45 @@
 		drag = null;
 	}
 
-	/** Double-clicking the header snaps the pane back to its initial position. */
-	function resetPosition(): void {
+	/**
+	 * Double-clicking the header snaps the pane back to its SEED geometry —
+	 * position and size both, so a pane can never get stuck at a size the user
+	 * has no way to undo.
+	 */
+	function resetGeometry(): void {
 		posX = clampX(initial.x);
 		posY = clampY(initial.y);
+		width = clampW(seed.w);
+		height = seed.h === undefined ? undefined : clampH(seed.h);
+		forgetSize();
 	}
 
-	function onResizePointerDown(event: PointerEvent): void {
-		if (event.button !== 0 || height === undefined) return;
+	function onResizePointerDown(event: PointerEvent, axis: ResizeAxis): void {
+		if (event.button !== 0) return;
+		// An auto-height pane has no baseline to add deltas to: pin its rendered
+		// height at grab time, so the first vertical nudge converts auto-height
+		// into an explicit height instead of snapping to MIN_H.
+		let originH = height;
+		if (axis !== 'x' && originH === undefined) {
+			originH = clampH(sectionEl?.getBoundingClientRect().height ?? MIN_H);
+			height = originH;
+		}
 		const el = event.currentTarget as HTMLElement;
 		el.setPointerCapture(event.pointerId);
 		resize = {
 			pointerId: event.pointerId,
+			axis,
 			startX: event.clientX,
 			startY: event.clientY,
 			originW: width,
-			originH: height
+			originH: originH ?? MIN_H
 		};
 	}
 
 	function onResizePointerMove(event: PointerEvent): void {
 		if (!resize || resize.pointerId !== event.pointerId) return;
-		width = Math.max(MIN_W, resize.originW + (event.clientX - resize.startX));
-		height = Math.max(MIN_H, resize.originH + (event.clientY - resize.startY));
+		if (resize.axis !== 'y') width = clampW(resize.originW + (event.clientX - resize.startX));
+		if (resize.axis !== 'x') height = clampH(resize.originH + (event.clientY - resize.startY));
 		posX = clampX(posX);
 	}
 
@@ -176,6 +221,65 @@
 		const el = event.currentTarget as HTMLElement;
 		if (el.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId);
 		resize = null;
+		// Remember the size the user settled on (issue #49).
+		persistSize();
+	}
+
+	/** Never narrower than MIN_W, never wider than the viewport (minus an inset). */
+	function clampW(value: number): number {
+		if (typeof window === 'undefined') return Math.max(MIN_W, value);
+		return Math.min(Math.max(value, MIN_W), Math.max(MIN_W, window.innerWidth - VIEWPORT_INSET));
+	}
+
+	/** Never shorter than MIN_H, never taller than the viewport (minus an inset). */
+	function clampH(value: number): number {
+		if (typeof window === 'undefined') return Math.max(MIN_H, value);
+		return Math.min(Math.max(value, MIN_H), Math.max(MIN_H, window.innerHeight - VIEWPORT_INSET));
+	}
+
+	/**
+	 * Remember the dragged size (issue #49). Written on gesture END, not on every
+	 * pointermove: one storage write per resize, never one per pixel. A pane size
+	 * is browser-local user state — it must never reach the engine API.
+	 */
+	function persistSize(): void {
+		// Guarded: no localStorage during SSR, and private mode / quota can throw.
+		if (typeof localStorage === 'undefined') return;
+		try {
+			localStorage.setItem(
+				seed.sizeKey,
+				JSON.stringify({
+					w: Math.round(width),
+					h: height === undefined ? null : Math.round(height)
+				})
+			);
+		} catch {
+			// A remembered size is a nicety — never worth breaking the pane over.
+		}
+	}
+
+	/** Apply a remembered size, if any. Client-only (called from onMount). */
+	function restoreSize(): void {
+		if (typeof localStorage === 'undefined') return;
+		try {
+			const raw = localStorage.getItem(seed.sizeKey);
+			if (!raw) return;
+			const saved: { w?: unknown; h?: unknown } | null = JSON.parse(raw);
+			if (typeof saved?.w === 'number' && Number.isFinite(saved.w)) width = clampW(saved.w);
+			if (typeof saved?.h === 'number' && Number.isFinite(saved.h)) height = clampH(saved.h);
+		} catch {
+			// Unreadable/corrupt entry: keep the caller's seed rather than a guess.
+		}
+	}
+
+	/** Forget the remembered size (the double-click reset restores seed geometry). */
+	function forgetSize(): void {
+		if (typeof localStorage === 'undefined') return;
+		try {
+			localStorage.removeItem(seed.sizeKey);
+		} catch {
+			// see persistSize
+		}
 	}
 </script>
 
@@ -183,6 +287,7 @@
 	class="pane"
 	role="group"
 	aria-label={title}
+	bind:this={sectionEl}
 	style="left: {posX}px; top: {posY}px; width: {width}px;{height !== undefined
 		? ` height: ${height}px;`
 		: ''} z-index: {z};"
@@ -198,7 +303,7 @@
 		onpointermove={onHeaderPointerMove}
 		onpointerup={onHeaderPointerEnd}
 		onpointercancel={onHeaderPointerEnd}
-		ondblclick={resetPosition}
+		ondblclick={resetGeometry}
 	>
 		<span class="pane-title">{title}</span>
 		<button type="button" class="pane-close" aria-label="close pane" onclick={onclose}>×</button>
@@ -208,17 +313,38 @@
 		{@render children()}
 	</div>
 
-	{#if height !== undefined}
-		<div
-			class="pane-resize"
-			role="separator"
-			aria-label="resize pane"
-			onpointerdown={onResizePointerDown}
-			onpointermove={onResizePointerMove}
-			onpointerup={onResizePointerEnd}
-			onpointercancel={onResizePointerEnd}
-		></div>
-	{/if}
+	<!-- Issue #49: every pane is resizable on BOTH axes. The right and bottom
+	     edges are thin grab strips (so a width-only or height-only drag is
+	     possible); the corner keeps the classic grip and drives both at once. -->
+	<div
+		class="pane-resize pane-resize-x"
+		role="separator"
+		aria-orientation="vertical"
+		aria-label="resize pane width"
+		onpointerdown={(event) => onResizePointerDown(event, 'x')}
+		onpointermove={onResizePointerMove}
+		onpointerup={onResizePointerEnd}
+		onpointercancel={onResizePointerEnd}
+	></div>
+	<div
+		class="pane-resize pane-resize-y"
+		role="separator"
+		aria-orientation="horizontal"
+		aria-label="resize pane height"
+		onpointerdown={(event) => onResizePointerDown(event, 'y')}
+		onpointermove={onResizePointerMove}
+		onpointerup={onResizePointerEnd}
+		onpointercancel={onResizePointerEnd}
+	></div>
+	<div
+		class="pane-resize pane-resize-corner"
+		role="separator"
+		aria-label="resize pane"
+		onpointerdown={(event) => onResizePointerDown(event, 'both')}
+		onpointermove={onResizePointerMove}
+		onpointerup={onResizePointerEnd}
+		onpointercancel={onResizePointerEnd}
+	></div>
 </section>
 
 <style>
@@ -295,12 +421,46 @@
 
 	.pane-resize {
 		position: absolute;
+		touch-action: none;
+		z-index: 1;
+	}
+
+	/* Thin grab strips: 5px keeps the pane body's own scrollbar usable while
+	   still being easy to hit, and they highlight on hover so the affordance is
+	   discoverable without adding chrome. */
+	.pane-resize-x,
+	.pane-resize-y {
+		background: transparent;
+	}
+
+	.pane-resize-x:hover,
+	.pane-resize-y:hover {
+		background: var(--accent, #6b8afd);
+		opacity: 0.25;
+	}
+
+	.pane-resize-x {
+		top: 0;
+		right: 0;
+		bottom: 14px;
+		width: 5px;
+		cursor: ew-resize;
+	}
+
+	.pane-resize-y {
+		left: 0;
+		right: 14px;
+		bottom: 0;
+		height: 5px;
+		cursor: ns-resize;
+	}
+
+	.pane-resize-corner {
 		right: 0;
 		bottom: 0;
 		width: 14px;
 		height: 14px;
 		cursor: nwse-resize;
-		touch-action: none;
 		background: linear-gradient(
 			135deg,
 			transparent 0 55%,
