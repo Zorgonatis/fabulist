@@ -44,12 +44,20 @@ export interface ConnectionEntry {
  * One slot row of the engine-derived org chart (W9.25 §3.7): a type, a task, or
  * a per-item slot, with the connection it RESOLVES to and how it got there.
  *
+ * There is ONE row per resolved ROLE, never one per authored spelling: a legacy
+ * twin (`narrator`) and an item slot that serves a task-less type (`embedder` ->
+ * the `embedding` row) are aliases of the row (issue #48). `connection` is the
+ * EFFECTIVE binding — the connection the engine's own call path resolves — and
+ * `write_slot` is the declared spelling a rebind writes (for `embedding` that is
+ * `embedder`: the embedding call sites ask for the item name, and a name's own
+ * key is tried before its type).
+ *
  * Rows arrive already ordered (type row, its task rows, its per-item rows) and
  * already grouped by `type`; the drawer renders them, it never re-derives the
  * hierarchy (that lives in `fabulist/connections/taxonomy.py`).
  */
 export interface ConnectionSlot {
-	/** The canonical `agents` key a rebind writes (e.g. `completion.narration`). */
+	/** The role's canonical `agents` key (e.g. `completion.narration`, `embedding`). */
 	slot: string;
 	/** Owning type (`completion`/`embedding`/`decision`); null for custom keys. */
 	type: string | null;
@@ -57,12 +65,27 @@ export interface ConnectionSlot {
 	task: string | null;
 	label: string;
 	canonical: string;
-	/** Legacy key spellings that alias this slot (never rendered as their own row). */
+	/** Other spellings of THIS role (legacy twins, the item slot serving a type). */
 	aliases: string[];
-	/** Resolved connection name, or null when nothing in the map covers the slot. */
+	/** Effective connection name, or null when nothing in the map covers the role. */
 	connection: string | null;
-	/** `authored` | `legacy:<key>` | `type:<key>` | null (unresolved). */
+	/** `authored` | `legacy:<key>` | `type:<key>` | `item:<slot>` | null (unresolved). */
 	via: string | null;
+	/**
+	 * The `agents` key a rebind of this row writes. Almost always `slot`; for a
+	 * role served by an item slot of a task-less type it is that item key
+	 * (`embedding` -> `embedder`) — writing the type key there would be shadowed
+	 * and silently lose.
+	 */
+	write_slot: string;
+	/** Authored spellings of this role that LOST precedence (conflict, not hidden). */
+	inert: SlotInertBinding[];
+}
+
+/** One authored-but-ineffective spelling of a role, with the connection it names. */
+export interface SlotInertBinding {
+	slot: string;
+	connection: string;
 }
 
 
@@ -202,6 +225,18 @@ function normalizeAgentMap(raw: unknown): Record<string, string> {
 }
 
 
+/** Coerce one inert-binding entry (a raw row is never trusted). */
+function normalizeInertBindings(raw: unknown): SlotInertBinding[] {
+	if (!Array.isArray(raw)) return [];
+	return (raw as unknown[]).flatMap((item) => {
+		if (!item || typeof item !== 'object') return [];
+		const obj = item as Record<string, unknown>;
+		const slot = str(obj.slot);
+		if (!slot) return [];
+		return [{ slot, connection: str(obj.connection) }];
+	});
+}
+
 /** Coerce one raw slot row; null when it is not a usable row. */
 function normalizeSlotRow(raw: unknown): ConnectionSlot | null {
 	if (!raw || typeof raw !== 'object') return null;
@@ -218,7 +253,11 @@ function normalizeSlotRow(raw: unknown): ConnectionSlot | null {
 			? (obj.aliases as unknown[]).filter((alias): alias is string => typeof alias === 'string')
 			: [],
 		connection: str(obj.connection) || null,
-		via: str(obj.via) || null
+		via: str(obj.via) || null,
+		// Absent on an older engine: fall back to the row's own key (the pre-#48
+		// behaviour, where every row's slot WAS its writable spelling).
+		write_slot: str(obj.write_slot) || slot,
+		inert: normalizeInertBindings(obj.inert)
 	};
 }
 
@@ -510,9 +549,17 @@ interface MockSlotSeed {
 	type: string | null;
 	task: string | null;
 	label: string;
+	/** Other spellings of THIS role (legacy twins, the item slot serving a type). */
 	aliases: string[];
-	/** `agents` keys the engine's resolver would consult, highest precedence first. */
+	/**
+	 * `agents` keys the engine's resolver consults for this ROLE, highest
+	 * precedence first — for a role served by an item slot of a task-less type
+	 * that is the ITEM key first (`embedding` -> `embedder`), because that is the
+	 * spelling the engine's call sites ask for (§`taxonomy.binding_key`).
+	 */
 	candidates: string[];
+	/** The key a rebind writes; defaults to `slot` (see `taxonomy.binding_key`). */
+	write_slot?: string;
 }
 
 /**
@@ -558,14 +605,26 @@ const MOCK_SLOT_SEEDS: MockSlotSeed[] = [
 		candidates: ['captioner', 'completion.extraction', 'extractor', 'completion']
 	},
 	{ slot: 'imagegen', type: 'completion', task: null, label: 'Imagegen', aliases: [], candidates: ['imagegen', 'completion'] },
-	{ slot: 'embedding', type: 'embedding', task: null, label: 'Embedding', aliases: [], candidates: ['embedding'] },
-	{ slot: 'embedder', type: 'embedding', task: null, label: 'Embedder', aliases: [], candidates: ['embedder', 'embedding'] },
+	// ONE row per role (issue #48): `embedder` is the item slot that SERVES the
+	// embedding type, so it is an alias of this row, never a row of its own. The
+	// call-path order (`embedder` before `embedding`) is the engine's own, and the
+	// rebind key is therefore `embedder` — writing `embedding` would be shadowed.
+	{
+		slot: 'embedding',
+		type: 'embedding',
+		task: null,
+		label: 'Embedding',
+		aliases: ['embedder'],
+		candidates: ['embedder', 'embedding'],
+		write_slot: 'embedder'
+	},
 	{ slot: 'decision', type: 'decision', task: null, label: 'Decision', aliases: [], candidates: ['decision'] }
 ];
 
 /** Every slot spelling the mock accepts as a rebind target (upsert, like the engine). */
 const MOCK_DECLARED_SLOTS = new Set<string>([
 	...MOCK_SLOT_SEEDS.map((seed) => seed.slot),
+	...MOCK_SLOT_SEEDS.flatMap((seed) => seed.aliases),
 	...Object.keys(MOCK_LEGACY_TWINS)
 ]);
 
@@ -573,6 +632,16 @@ const MOCK_DECLARED_SLOTS = new Set<string>([
 function mockSlotView(): ConnectionSlot[] {
 	return MOCK_SLOT_SEEDS.map((seed) => {
 		const matched = seed.candidates.find((key) => key in mockAgentMap) ?? null;
+		const via =
+			matched === null
+				? null
+				: matched === seed.slot
+					? 'authored'
+					: matched in MOCK_LEGACY_TWINS
+						? `legacy:${matched}`
+						: seed.aliases.includes(matched)
+							? `item:${matched}`
+							: `type:${matched}`;
 		return {
 			slot: seed.slot,
 			type: seed.type,
@@ -581,14 +650,12 @@ function mockSlotView(): ConnectionSlot[] {
 			canonical: seed.slot,
 			aliases: seed.aliases,
 			connection: matched ? mockAgentMap[matched] : null,
-			via:
-				matched === null
-					? null
-					: matched === seed.slot
-						? 'authored'
-						: matched in MOCK_LEGACY_TWINS
-							? `legacy:${matched}`
-							: `type:${matched}`
+			via,
+			write_slot: seed.write_slot ?? seed.slot,
+			// Authored spellings of this role that lose precedence (§ `inert`).
+			inert: [seed.slot, ...seed.aliases]
+				.filter((key) => key in mockAgentMap && key !== matched)
+				.map((key) => ({ slot: key, connection: mockAgentMap[key] }))
 		};
 	});
 }

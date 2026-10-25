@@ -27,8 +27,12 @@
 	// (checked = no instruction at all, so a checked box writes `null`, NEVER
 	// `true`; unchecking writes `false`), the standard sampler vocabulary, and
 	// the agents section rendered as TYPE/TASK groups from the engine's `slots`
-	// payload with its resolution provenance. No llama.cpp-specific knob appears
-	// here — `extra_body` stays the escape hatch for server-specific params.
+	// payload with its resolution provenance — ONE row per resolved ROLE (issue
+	// #48): a legacy twin or the item slot serving a task-less type is an alias
+	// on that row, never a second row, and an alias that loses precedence is
+	// marked inert by the ENGINE (`row.inert`), not re-derived here. No
+	// llama.cpp-specific knob appears here — `extra_body` stays the escape hatch
+	// for server-specific params.
 	//
 	// "Reasoning effort" (issue #26 R5) is the provider's own top-level
 	// `reasoning_effort` body field. It is a per-connection SELECT: the wire value
@@ -51,7 +55,7 @@
 	} from '#lib/api';
 	// One entry of the connections client module is imported directly because the
 	// `#lib/api` barrel is outside this lane (same pattern as `#lib/api/hud`).
-	import type { ConnectionSlot } from '#lib/api/connections';
+	import type { ConnectionSlot, SlotInertBinding } from '#lib/api/connections';
 	import { register } from '#lib/uiLayers';
 	import ImageGenPane from './studio/ImageGenPane.svelte';
 
@@ -271,6 +275,26 @@
 			.sort();
 	}
 
+	/**
+	 * Display label for a raw `agents` key: its resolved ROLE's label when known.
+	 *
+	 * The registry map keeps the authored spelling (``embedder``), while the slot
+	 * view carries ONE row per role (``Embedding``). Printing the raw key here
+	 * would reintroduce the alias on the connection card — the other half of the
+	 * issue #48 confusion — so the card names the role.
+	 */
+	function slotDisplayLabel(agent: string): string {
+		const row = slotRows.find(
+			(candidate) => candidate.slot === agent || candidate.aliases.includes(agent)
+		);
+		return row?.label ?? agent;
+	}
+
+	/** The roles bound to one connection, deduped and display-named. */
+	function boundRoleLabels(name: string): string[] {
+		return [...new Set(boundAgents(name).map(slotDisplayLabel))];
+	}
+
 	function sortedEntries(): ConnectionEntry[] {
 		return connectionNames.map((name) => catalog!.connections[name]);
 	}
@@ -281,9 +305,12 @@
 	 * Slice the engine's ordered slot rows into type-headed groups.
 	 *
 	 * The payload is ALREADY ordered and grouped (type row, its task rows, its
-	 * per-item rows), so this only inserts headers: the hierarchy keeps living in
-	 * `connections/taxonomy.py`. Authored custom keys arrive with `type: null`
-	 * ("per item as today") and collect under one trailing group.
+	 * per-item rows) and already carries ONE row per resolved ROLE — a legacy
+	 * twin (`narrator`) or the item slot serving a task-less type (`embedder`) is
+	 * an alias on that row, never a second row (issue #48). So this only inserts
+	 * headers: the hierarchy keeps living in `connections/taxonomy.py`.
+	 * Authored custom keys arrive with `type: null` ("per item as today") and
+	 * collect under one trailing group.
 	 */
 	function groupSlots(rows: ConnectionSlot[]): SlotGroup[] {
 		const groups: SlotGroup[] = [];
@@ -316,8 +343,11 @@
 	}
 
 	/** The row's label inside its group; a type row reads as the group default. */
-	function rowLabel(row: ConnectionSlot): string {
-		return row.type === row.slot ? 'Type default' : row.label;
+	function rowLabel(row: ConnectionSlot, group: SlotGroup): string {
+		// Only a type with rows DEPENDING on it is a "default"; a single-row group
+		// (`Embedding`, whose row IS the embedder role) keeps its own name.
+		if (row.type === row.slot && group.rows.length > 1) return 'Type default';
+		return row.label;
 	}
 
 	/** Human form of the payload's resolution provenance. */
@@ -333,13 +363,19 @@
 	}
 
 	/**
-	 * Legacy keys still present in the file that this slot's canonical key shadows
-	 * (typed beats twin, so the legacy key is inert). Surfaced so an inert alias is
-	 * never a mystery — the precedence rule made visible.
+	 * Authored spellings of this role that LOST precedence (engine-computed).
+	 *
+	 * Precedence lives in `taxonomy.py`, so the drawer never re-derives it: the
+	 * payload's `inert` list is rendered as-is. Marking these is what keeps a
+	 * conflicting pair visible instead of silently disappearing (issue #48).
 	 */
-	function inertAliases(row: ConnectionSlot): string[] {
-		if (!catalog || row.via !== 'authored') return [];
-		return row.aliases.filter((alias) => alias in catalog!.agents);
+	function inertBindings(row: ConnectionSlot): SlotInertBinding[] {
+		return row.inert;
+	}
+
+	/** True when an inert spelling points at a DIFFERENT connection (a conflict). */
+	function isConflict(row: ConnectionSlot, entry: SlotInertBinding): boolean {
+		return row.connection !== null && entry.connection !== row.connection;
 	}
 
 	// --- draft <-> wire conversions -----------------------------------------
@@ -749,9 +785,12 @@
 	/**
 	 * Rebind one slot row to another existing connection (hot-reload PATCH).
 	 *
-	 * The row's `slot` IS the canonical spelling (`narrator` only ever appears as
-	 * an alias), so a rebind writes the canonical key. On failure the DOM control
-	 * is restored from `row.connection` — the catalog is the source of truth.
+	 * The row's `write_slot` is the spelling the engine's own call sites resolve
+	 * (`embedding` -> `embedder`; every other row is already canonical), so a
+	 * rebind writes exactly that key and always takes effect — writing the
+	 * canonical spelling where an alias outranks it would report success and
+	 * change nothing. On failure the DOM control is restored from
+	 * `row.connection` — the catalog is the source of truth.
 	 */
 	async function rebindSlot(connection: string, row: ConnectionSlot): Promise<void> {
 		if (!catalog || busy) return;
@@ -759,7 +798,7 @@
 		error = '';
 		status = '';
 		try {
-			await setAgentConnection(row.slot, connection);
+			await setAgentConnection(row.write_slot, connection);
 			await refresh();
 			status = `Rebound “${row.label}” → “${connection}”.`;
 		} catch (err) {
@@ -773,14 +812,12 @@
 	 * Does rebinding `row` move the EMBEDDER's resolved connection?
 	 *
 	 * The memory index is dimensionality-bound, so a new embedder must wipe it.
-	 * The `embedder` item row always moves it; the `embedding` TYPE row only does
-	 * while the item key is unauthored — the type key is the embedder's fallback.
+	 * There is ONE embedding row (issue #48: `embedder` is its alias, not a row of
+	 * its own) and its `write_slot` is the embedder key, so a rebind of it always
+	 * moves the embedder.
 	 */
 	function embedderImpact(row: ConnectionSlot): boolean {
-		if (row.slot === 'embedder') return true;
-		if (row.slot !== 'embedding') return false;
-		const item = slotRows.find((candidate) => candidate.slot === 'embedder');
-		return !item || item.via !== 'authored';
+		return row.type === 'embedding';
 	}
 
 	/**
@@ -805,7 +842,9 @@
 		select.value = row.connection ?? ''; // hold: the modal applies (or cancels) it
 		error = '';
 		status = '';
-		memoryGate = { slot: row.slot, connection, previous: row.connection ?? '' };
+		// The WRITE key, not the row's display key: `embedding` rebinds through
+		// `embedder` (the spelling the embedding call path resolves).
+		memoryGate = { slot: row.write_slot, connection, previous: row.connection ?? '' };
 	}
 
 	/** Cancel the embedder-switch gate: no rebind, no reset. */
@@ -1315,7 +1354,9 @@
 								<p class="conn-note">{entry.note}</p>
 							{/if}
 							<p class="conn-agents">
-								{bound.length ? `used by: ${bound.join(', ')}` : 'not bound to any agent'}
+								{bound.length
+									? `used by: ${boundRoleLabels(entry.name).join(', ')}`
+									: 'not bound to any agent'}
 							</p>
 							<div class="conn-actions">
 								<button type="button" class="ghost" onclick={() => startEdit(entry)}>Edit</button>
@@ -1344,7 +1385,7 @@
 										data-slot={row.slot}
 									>
 										<span class="slot-main">
-											<span class="agent-name" title={rowLabel(row)}>{rowLabel(row)}</span>
+											<span class="agent-name" title={rowLabel(row, group)}>{rowLabel(row, group)}</span>
 											<span class="arrow">→</span>
 											<select
 												class="agent-conn-select"
@@ -1362,10 +1403,18 @@
 											</select>
 										</span>
 										<span class="slot-via" class:unresolved={!row.via}>{viaLabel(row)}</span>
-										{#if inertAliases(row).length}
-											<span class="slot-inert">legacy {inertAliases(row).join(', ')} inert</span>
-										{/if}
-										{#if row.slot === 'embedder'}
+										{#each inertBindings(row) as entry (entry.slot)}
+											<span
+												class="slot-inert"
+												class:conflict={isConflict(row, entry)}
+												title={isConflict(row, entry)
+													? `The ${entry.slot} key is inert: this role resolves through the effective binding above, which names a different connection (“${entry.connection}” vs “${row.connection}”).`
+													: `The ${entry.slot} key is inert — this role resolves through the binding above.`}
+											>
+												{isConflict(row, entry) ? '⚠ ' : ''}{entry.slot} key inert → {entry.connection}
+											</span>
+										{/each}
+										{#if row.type === 'embedding'}
 											<div class="memory-controls">
 												{#if reembedLabel()}
 													<span class="reembed-status" role="status">{reembedLabel()}</span>
@@ -1386,10 +1435,12 @@
 						</div>
 					{/each}
 					<p class="hint">
-						Each row shows the connection it resolves to and how it got there (its own key, a
-						legacy alias, the task, the type default, or the item slot that serves the type).
-						Rebinding saves immediately — callers
-						pick it up on the next turn (no restart).
+						ONE row per resolved role. A row shows the connection the engine actually uses and
+						how it got there (its own key, a legacy alias, the task, the type default, or the
+						item slot that serves the type — <code>embedding</code> renders as one row
+						resolved <em>via embedder</em>). An authored spelling that loses precedence is
+						marked inert instead of being hidden or listed twice. Rebinding saves immediately
+						— callers pick it up on the next turn (no restart).
 					</p>
 				{/if}
 			</section>
@@ -1639,6 +1690,11 @@
 	.slot-inert {
 		font-style: italic;
 		color: var(--text-muted);
+	}
+	/* an inert spelling that names a DIFFERENT connection than the effective one:
+	   a real conflict, not merely dead weight (issue #48) */
+	.slot-inert.conflict {
+		color: var(--danger-text);
 	}
 	.slot-via.unresolved {
 		color: var(--danger-text);

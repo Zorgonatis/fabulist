@@ -1105,6 +1105,9 @@ def test_get_connections_carries_the_slot_view(build_app):
 
     body = run(scenario()).json()
     slots = body["slots"]
+    # ONE row per resolved ROLE (issue #48): ``embedder`` folds into ``embedding``
+    # and the legacy keys fold into their typed twins, so every spelling has
+    # exactly one row and no role is listed twice.
     assert [row["slot"] for row in slots] == [
         "completion",
         "completion.narration",
@@ -1114,7 +1117,6 @@ def test_get_connections_carries_the_slot_view(build_app):
         "captioner",
         "imagegen",
         "embedding",
-        "embedder",
         "decision",
     ]
     rows = {row["slot"]: row for row in slots}
@@ -1122,8 +1124,14 @@ def test_get_connections_carries_the_slot_view(build_app):
     assert rows["completion.narration"]["connection"] == "your-model-id"
     assert rows["completion.narration"]["via"] == "legacy:narrator"
     assert rows["completion.narration"]["aliases"] == ["narrator"]
+    # a rebind of that row writes the canonical key
+    assert rows["completion.narration"]["write_slot"] == "completion.narration"
     assert rows["completion"]["connection"] is None
-    assert rows["embedder"]["type"] == "embedding"
+    # the embedding role owns the item spelling as its alias and writes it back
+    assert rows["embedding"]["type"] == "embedding"
+    assert rows["embedding"]["aliases"] == ["embedder"]
+    assert rows["embedding"]["write_slot"] == "embedder"
+    assert rows["embedding"]["inert"] == []
     # the raw map stays verbatim for compatibility
     assert body["agents"] == {"narrator": "your-model-id", "extractor": "your-model-id"}
 
@@ -1284,6 +1292,35 @@ def test_patch_agent_normalizes_a_legacy_twin_address(build_app):
     assert written["agents"]["completion.narration"] == "alt"
     assert written["agents"]["narrator"] == "your-model-id"  # never rewritten
     assert store.connection_for("narrator").name == "alt"
+
+
+def test_patch_agent_accepts_the_embedder_spelling(build_app):
+    """Write path unchanged (#48): ``embedder`` is still a first-class address.
+
+    The read side folds it into the ``embedding`` row and names it as that row's
+    ``write_slot`` — so the drawer's rebind of the embedding role keeps landing
+    on the key the embedding call path actually resolves.
+    """
+    build, store, config_path = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            await create_alt(client)
+            return await client.patch(
+                "/api/connections/agents/embedder", json={"connection": "alt"}
+            )
+
+    resp = run(scenario())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["agent"] == "embedder"
+    assert body["agents"]["embedder"] == "alt"
+    # the embedding role resolves the new embedder on the next lookup
+    assert store.connection_for("embedder").name == "alt"
+    assert store.connection_for("embedding").name == "alt"
+    written = json.loads(config_path.read_text(encoding="utf-8"))
+    assert written["agents"]["embedder"] == "alt"
 
 
 def test_patch_agent_creates_a_declared_item_slot(build_app):

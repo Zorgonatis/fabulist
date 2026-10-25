@@ -387,7 +387,11 @@ def test_pinned_entries_and_slots_are_drawer_visible(tmp_path):
     assert body["agents"]["narrator"] == "local"
 
     slots = {row["slot"]: row for row in body["slots"]}
-    assert slots["embedder"]["connection"] == "sidecar-embed"
+    # Issue #48: ONE row per resolved role — the pinned ``embedder`` key is the
+    # embedding role's alias, so the drawer row is ``embedding`` (resolved via it).
+    assert "embedder" not in slots
+    assert slots["embedding"]["connection"] == "sidecar-embed"
+    assert slots["embedding"]["via"] == "item:embedder"
     assert slots["reranker"]["connection"] == "sidecar-rerank"
     assert slots["decision"]["connection"] == "sidecar-decision"
 

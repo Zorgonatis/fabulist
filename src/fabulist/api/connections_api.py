@@ -20,9 +20,19 @@ door.
 W9.25 adds the taxonomy read side and the typed connection fields:
 
 * ``GET`` carries ``slots`` — :func:`fabulist.connections.taxonomy.slot_view`'s
-  ordered rows (slot/type/task/label/canonical/aliases/connection/via) so the
-  drawer groups type/task rows and shows resolution provenance. The raw
-  ``agents`` map stays verbatim for compatibility.
+  ordered rows (slot/type/task/label/canonical/aliases/connection/via plus
+  ``write_slot``/``inert``) so the drawer groups type/task rows and shows
+  resolution provenance. There is ONE row per resolved ROLE: a legacy twin
+  (``narrator``) and an item slot that serves a task-less type (``embedder`` ->
+  the ``embedding`` row) are aliases of that row, never rows of their own — a
+  role bound under an alias can never render as a separate unbound row while the
+  engine uses the other spelling (issue #48). ``connection`` is the effective
+  binding (what the engine's call path resolves), ``write_slot`` is the declared
+  spelling a rebind must write to take effect (``embedding`` -> ``embedder``,
+  because the embedding call sites ask for that name and a name's own key is
+  tried before its type), and ``inert`` lists the authored spellings that lost
+  precedence with their own connections, so a conflicting pair is surfaced
+  rather than hidden. The raw ``agents`` map stays verbatim for compatibility.
 * ``PATCH /api/connections/{name}`` accepts ``context_window`` (int >= 1 | null),
   ``thinking``, ``streaming`` and ``return_thinking`` (bool | null) with strict
   validation — a truthy string or ``true`` for a window is a 422, never a

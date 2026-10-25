@@ -57,6 +57,25 @@ only ``narrator`` still resolves the typed spelling. A dotted key outside the
 declared vocabulary is rejected at load by the registry (typo protection);
 undotted keys stay free-form per-item slots.
 
+Read side — ONE row per ROLE
+The drawer does not render one row per authored spelling; it renders one row per
+RESOLVED ROLE, under the role's canonical spelling. Two spellings are aliases of
+one role, never two rows:
+
+* a **legacy twin** (``narrator`` -> ``completion.narration``), and
+* the **item slot that serves a task-less type** (``embedder`` -> the
+  ``embedding`` role). Its key never gets a row of its own: it IS what the
+  embedding call sites ask for, so folding it in is what keeps a bound role from
+  *showing* unbound under its alias while the engine happily uses the other
+  spelling (the sandbox evidence: ``embedder`` -> ``sidecar-embed`` with usage
+  rows while ``embedding`` displayed unset).
+
+Each row therefore carries the EFFECTIVE binding — the connection the engine
+resolves when it does that work — plus ``write_slot`` (the call-path spelling a
+rebind writes, so writing it always takes effect, see :func:`binding_key`) and
+``inert``: every authored spelling of the role that LOST precedence, with its
+own connection. A conflict is surfaced, never hidden.
+
 Pure: no I/O, no environment, no registry import (callers pass the raw
 ``agents`` mapping). :func:`slot_view` is the read-side payload the connections
 API serves and the drawer groups.
@@ -77,11 +96,14 @@ __all__ = [
     "TASKS",
     "TYPED_SLOTS",
     "TYPES",
+    "binding_key",
     "candidate_slots",
     "canonical",
     "declared_spellings",
+    "folded_item_slots",
     "resolve_interaction_agent",
     "resolve_slot",
+    "role_spellings",
     "serving_item_slots",
     "slot_view",
 ]
@@ -222,6 +244,62 @@ def serving_item_slots(type_name: str) -> tuple[str, ...]:
         for item, (item_type, affinity) in ITEM_SLOTS.items()
         if item_type == type_name and affinity is None
     )
+
+
+def folded_item_slots(type_name: str) -> tuple[str, ...]:
+    """Item slots that ARE their type's row — folded into it, never a row.
+
+    Only a TASK-LESS type has them (``embedding`` -> ``embedder``): that item is
+    what serves the type, so the two spellings are ONE role and the drawer must
+    render one row, not two. A type WITH a task layer keeps its affinity-``None``
+    items as separate roles on purpose (``imagegen`` is an optional extra, not
+    the ``completion`` type) — the same gate :func:`candidate_slots` uses for the
+    downward leg.
+    """
+    return () if TASKS.get(type_name) else serving_item_slots(type_name)
+
+
+def binding_key(name: str) -> str:
+    """The ``agents`` key that binds ROLE ``name`` where the engine looks.
+
+    Almost always the canonical spelling: a twin resolves typed-first, so writing
+    the typed key takes effect and shadows an authored legacy key. The exception
+    is a role served by an item slot of a TASK-LESS type: its call sites ask for
+    THAT name (``connection_for("embedder")``) and a name's own key is tried
+    before its type, so ``embedder`` is the spelling that wins there. Writing
+    ``embedding`` instead would be shadowed by an authored ``embedder`` and
+    silently lose — a rebind that reports success and changes nothing.
+
+    Always a declared spelling (so ``PATCH /api/connections/agents/{key}``
+    accepts it) and one whose write the registry resolves exactly as today.
+    """
+    base = canonical(name)
+    if base in TYPES and not TASKS.get(base):
+        serving = serving_item_slots(base)
+        if serving:
+            return serving[0]
+    return base
+
+
+def role_spellings(name: str) -> tuple[str, ...]:
+    """Every declared ``agents`` spelling that binds the role ``name``.
+
+    Canonical spelling first, then its legacy twin(s), then the item slots folded
+    into a task-less type. This is the set :func:`slot_view` diffs against the
+    effective one to report ``inert`` spellings — an authored alias that loses
+    precedence stays visible instead of silently disappearing.
+    """
+    base = canonical(name)
+    spellings: list[str] = [base]
+    spellings.extend(legacy for legacy, twin in LEGACY_TWINS.items() if twin == base)
+    spellings.extend(folded_item_slots(base))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for spelling in spellings:
+        if spelling not in seen:
+            seen.add(spelling)
+            ordered.append(spelling)
+    return tuple(ordered)
 
 
 def candidate_slots(name: str) -> tuple[str, ...]:
@@ -373,43 +451,74 @@ def resolve_interaction_agent(
 
 
 def _slot_row(agents: Mapping[str, str], slot: str) -> dict[str, Any]:
-    """One declared slot's row: resolved connection + resolution provenance."""
-    resolved = _resolved_slot(agents, slot)
+    """One ROLE's row: the effective binding, its provenance, its inert spellings.
+
+    The role is resolved through :func:`binding_key` — the spelling the engine's
+    own call sites use — so the row's ``connection`` is the connection the work
+    ACTUALLY runs on, not the one a type-first reading would prefer. ``inert``
+    lists the authored spellings of the role that lost precedence (each with its
+    own connection), which is how a conflict stays visible.
+    """
+    call_slot = binding_key(slot)
+    resolved = _resolved_slot(agents, call_slot)
+    matched = resolved[0] if resolved is not None else None
     type_name = _type_of(slot)
     task = slot.split(".", 1)[1] if "." in canonical(slot) else None
+    legacy = [legacy for legacy, twin in LEGACY_TWINS.items() if twin == canonical(slot)]
     return {
         "slot": slot,
         "type": type_name,
         "task": task,
         "label": SLOT_LABELS.get(slot, slot),
         "canonical": canonical(slot),
-        "aliases": [legacy for legacy, twin in LEGACY_TWINS.items() if twin == canonical(slot)],
+        # Legacy twins + the item slots folded into a task-less type: the other
+        # spellings of THIS role (never rows of their own).
+        "aliases": [*legacy, *folded_item_slots(canonical(slot))],
         "connection": resolved[1] if resolved is not None else None,
-        "via": _via(slot, resolved[0]) if resolved is not None else None,
+        "via": _via(slot, matched) if matched is not None else None,
+        # The `agents` key a rebind of this row writes (declared spelling, always
+        # effective — see ``binding_key``).
+        "write_slot": call_slot,
+        # Authored spellings of this role that lose precedence. Unlike ``via`` (a
+        # single provenance string), this names the LOSER and the connection it
+        # was pointed at, so the drawer can show the conflict instead of hiding it.
+        "inert": [
+            {"slot": spelling, "connection": agents[spelling]}
+            for spelling in role_spellings(slot)
+            if spelling != matched and spelling in agents
+        ],
     }
 
 
 def slot_view(agents: Mapping[str, str]) -> list[dict[str, Any]]:
-    """The drawer/API slot payload: ordered rows over the SAME resolution rule.
+    """The drawer/API slot payload: ONE row per resolved ROLE, ordered by type.
 
     Rows are grouped by type in :data:`TYPES` order — the type row, then its
     task rows, then the per-item rows belonging to it — so the drawer renders
     Completion / Embedding / Decision headers without re-deriving the
     hierarchy. Authored-but-undeclared custom keys follow as per-item rows
     (``type``/``task`` ``None``): "per item as today" stays first-class and
-    visible. ``via`` is ``authored`` (the slot's own key), ``legacy:<key>`` (its
-    legacy twin), ``type:<key>`` (an ancestor slot key — a task or type key),
-    ``item:<slot>`` (a task-less TYPE served by the item slot declared under it,
-    e.g. ``embedding`` -> ``item:embedder``), or ``None`` (unresolved). Legacy
-    keys never get their own row; they appear in the typed slot's ``aliases``.
+    visible.
+
+    Exactly one row per role: a legacy key never gets a row (it rides the typed
+    row's ``aliases``), and neither does an item slot that SERVES its task-less
+    type (``embedder`` folds into the ``embedding`` row — that row then reports
+    ``via: item:embedder``). ``via`` is ``authored`` (the role's own key),
+    ``legacy:<key>`` (its legacy twin), ``type:<key>`` (an ancestor slot key — a
+    task or type key), ``item:<slot>`` (a task-less TYPE served by the item slot
+    declared under it, e.g. ``embedding`` -> ``item:embedder``), or ``None``
+    (unresolved). ``connection`` is the EFFECTIVE binding (what the engine's own
+    call path resolves), ``write_slot`` the key a rebind writes, and ``inert``
+    the authored spellings that lost precedence.
     """
     rows: list[dict[str, Any]] = []
     for type_name in TYPES:
         rows.append(_slot_row(agents, type_name))
         for task_name in TASKS.get(type_name, ()):
             rows.append(_slot_row(agents, f"{type_name}.{task_name}"))
+        folded = folded_item_slots(type_name)
         for item, (item_type, _affinity) in ITEM_SLOTS.items():
-            if item_type == type_name:
+            if item_type == type_name and item not in folded:
                 rows.append(_slot_row(agents, item))
 
     declared = declared_spellings()
@@ -424,6 +533,8 @@ def slot_view(agents: Mapping[str, str]) -> list[dict[str, Any]]:
                 "aliases": [],
                 "connection": agents[name],
                 "via": "authored",
+                "write_slot": name,
+                "inert": [],
             }
         )
     return rows

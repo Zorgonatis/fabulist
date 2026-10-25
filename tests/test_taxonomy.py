@@ -16,7 +16,12 @@ The load-bearing pins live here:
 * an authored typed key still wins over the item fallback;
 * authored-but-undeclared custom keys resolve as per-item slots and render;
 * ``slot_view`` (the drawer/API payload) reports the SAME resolution the registry
-  performs, with provenance.
+  performs, with provenance — and renders ONE row per resolved ROLE: a legacy
+  twin or the item slot serving a task-less type is an alias on that row, never a
+  second row (issue #48);
+* the row's ``connection`` is the EFFECTIVE binding (the connection the engine's
+  own call path resolves), ``write_slot`` is the spelling a rebind writes, and
+  ``inert`` names every authored spelling that lost precedence.
 """
 
 from __future__ import annotations
@@ -234,9 +239,10 @@ def test_slot_view_type_row_reports_the_item_slot_that_serves_it():
 
     assert rows["embedding"]["connection"] == "sidecar-embed"
     assert rows["embedding"]["via"] == "item:embedder"
-    # the item row itself stays authored, and its provenance is unchanged
-    assert rows["embedder"]["connection"] == "sidecar-embed"
-    assert rows["embedder"]["via"] == "authored"
+    # ... and the item spelling is an ALIAS of that row, never a row of its own
+    assert rows["embedding"]["aliases"] == ["embedder"]
+    assert rows["embedding"]["write_slot"] == "embedder"
+    assert "embedder" not in rows
     # custom per-item keys and the decision type are untouched by the fallback
     assert rows["reranker"]["via"] == "authored"
     assert rows["decision"]["connection"] == "d"
@@ -266,15 +272,25 @@ def test_completion_never_resolves_through_its_optional_item_slots():
 
 
 def test_an_authored_typed_key_beats_the_item_slot():
+    """``resolve_slot`` precedence is name-relative and stays exactly as it was.
+
+    The row, however, reports the EFFECTIVE binding of the ROLE — and every
+    embedding call site asks for the item name (``connection_for("embedder")``),
+    where the item key is tried first. So the two authored spellings are a
+    CONFLICT: the item key wins for real work and the typed key is the inert one.
+    """
     agents = {"embedding": "typed-emb", "embedder": "item-emb"}
     assert taxonomy.candidate_slots("embedding")[0] == "embedding"
     assert taxonomy.resolve_slot(agents, "embedding") == "typed-emb"
-
-    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
-    assert rows["embedding"]["connection"] == "typed-emb"
-    assert rows["embedding"]["via"] == "authored"
     # the item slot keeps its own item-then-type order (unchanged)
     assert taxonomy.resolve_slot(agents, "embedder") == "item-emb"
+
+    rows = {row["slot"]: row for row in taxonomy.slot_view(agents)}
+    assert rows["embedding"]["connection"] == "item-emb"
+    assert rows["embedding"]["via"] == "item:embedder"
+    assert rows["embedding"]["write_slot"] == "embedder"
+    # the losing spelling is surfaced, never silently dropped
+    assert rows["embedding"]["inert"] == [{"slot": "embedding", "connection": "typed-emb"}]
 
 
 def test_the_type_row_and_the_registry_agree_after_the_fallback():
@@ -395,6 +411,8 @@ def test_every_default_binding_is_a_declared_or_legacy_spelling():
 
 def test_slot_view_orders_types_tasks_then_items():
     rows = taxonomy.slot_view(LEGACY_CONFIG | {"my-own-slot": "custom-conn"})
+    # ONE row per ROLE (issue #48): ``embedder`` is the item slot that SERVES the
+    # embedding type, so it never gets a row of its own.
     assert [row["slot"] for row in rows] == [
         "completion",
         "completion.narration",
@@ -404,7 +422,6 @@ def test_slot_view_orders_types_tasks_then_items():
         "captioner",
         "imagegen",
         "embedding",
-        "embedder",
         "decision",
         "my-own-slot",
     ]
@@ -423,6 +440,8 @@ def test_slot_view_reports_resolution_and_provenance():
         "aliases": ["narrator"],
         "connection": "your-model-id",
         "via": "legacy:narrator",
+        "write_slot": "completion.narration",
+        "inert": [],
     }
     assert rows["completion"]["connection"] is None  # no type key authored
     assert rows["completion"]["via"] is None
@@ -430,15 +449,19 @@ def test_slot_view_reports_resolution_and_provenance():
     assert rows["summarizer"]["connection"] == "qwen35-4b"
     assert rows["captioner"]["via"] == "authored"
     assert rows["captioner"]["connection"] == "your-model-id"
-    assert rows["embedder"] == {
-        "slot": "embedder",
+    # the authored ``embedder`` key is THIS row's binding — one row, its alias
+    assert "embedder" not in rows
+    assert rows["embedding"] == {
+        "slot": "embedding",
         "type": "embedding",
         "task": None,
-        "label": "Embedder",
-        "canonical": "embedder",
-        "aliases": [],
+        "label": "Embedding",
+        "canonical": "embedding",
+        "aliases": ["embedder"],
         "connection": "embedder",
-        "via": "authored",
+        "via": "item:embedder",
+        "write_slot": "embedder",
+        "inert": [],
     }
     assert rows["decision"]["type"] == "decision"
     assert rows["decision"]["task"] is None
@@ -466,12 +489,19 @@ def test_slot_view_renders_authored_custom_keys_as_per_item_rows():
             "aliases": [],
             "connection": "custom-conn",
             "via": "authored",
+            "write_slot": "my-own-slot",
+            "inert": [],
         }
     ]
 
 
 def test_slot_view_agrees_with_registry_resolution():
-    """The payload can never claim a resolution the registry would not perform."""
+    """The payload can never claim a resolution the registry would not perform.
+
+    Checked through ``write_slot`` — the key a rebind of the row writes — because
+    that is the key whose resolution the row is describing (and for the embedding
+    role it is the item spelling the call sites use, not the type spelling).
+    """
     agents = {
         "extractor": "e",
         "completion.narration": "typed-n",
@@ -482,6 +512,6 @@ def test_slot_view_agrees_with_registry_resolution():
     for row in taxonomy.slot_view(agents):
         if row["connection"] is None:
             with pytest.raises(ConnectionConfigError):
-                registry.connection_for(row["slot"])
+                registry.connection_for(row["write_slot"])
         else:
-            assert registry.connection_for(row["slot"]).name == row["connection"]
+            assert registry.connection_for(row["write_slot"]).name == row["connection"]
