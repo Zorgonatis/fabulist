@@ -184,6 +184,7 @@
 		posY = clampY(initial.y);
 		width = clampW(seed.w);
 		height = seed.h === undefined ? undefined : clampH(seed.h);
+		keepInViewport();
 		forgetSize();
 	}
 
@@ -213,6 +214,7 @@
 		if (!resize || resize.pointerId !== event.pointerId) return;
 		if (resize.axis !== 'y') width = clampW(resize.originW + (event.clientX - resize.startX));
 		if (resize.axis !== 'x') height = clampH(resize.originH + (event.clientY - resize.startY));
+		keepInViewport();
 		posX = clampX(posX);
 	}
 
@@ -235,6 +237,22 @@
 	function clampH(value: number): number {
 		if (typeof window === 'undefined') return Math.max(MIN_H, value);
 		return Math.min(Math.max(value, MIN_H), Math.max(MIN_H, window.innerHeight - VIEWPORT_INSET));
+	}
+
+	/**
+	 * Growing a pane must never push its own right/bottom edge (the handle the
+	 * user is dragging, and the content they are widening for) off screen: the
+	 * pane slides back instead, so the dragged edge stays under the cursor.
+	 * Without this a right-docked pane could only ever grow 30px.
+	 */
+	function keepInViewport(): void {
+		if (typeof window === 'undefined') return;
+		const maxX = window.innerWidth - VIEWPORT_INSET - width;
+		if (posX > maxX) posX = maxX;
+		if (height !== undefined) {
+			const maxY = window.innerHeight - VIEWPORT_INSET - height;
+			if (posY > maxY) posY = maxY;
+		}
 	}
 
 	/**
@@ -267,6 +285,8 @@
 			const saved: { w?: unknown; h?: unknown } | null = JSON.parse(raw);
 			if (typeof saved?.w === 'number' && Number.isFinite(saved.w)) width = clampW(saved.w);
 			if (typeof saved?.h === 'number' && Number.isFinite(saved.h)) height = clampH(saved.h);
+			// A remembered size from a wider window must not hang off this one.
+			keepInViewport();
 		} catch {
 			// Unreadable/corrupt entry: keep the caller's seed rather than a guess.
 		}
