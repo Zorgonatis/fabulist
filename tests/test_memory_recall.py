@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
 
 import httpx
 import pytest
@@ -24,8 +23,8 @@ from fabulist.memory.recall import (
     layer_labels,
     queries_for,
     recall_block,
-    recall_window_floor,
     scene_query_from_parts,
+    visible_turn_seqs,
 )
 from fabulist.memory.store import MemoryStore
 
@@ -118,17 +117,21 @@ def test_bullet_text_truncated_to_limit():
     assert len(bullet) - len("- [narrative] ") == 601
 
 
-def test_recall_window_floor_mixed_seqs():
-    assert recall_window_floor([]) == 0
-    assert recall_window_floor([row(9, "user", "a"), row(3, "narrative", "b")]) == 3
+def test_visible_turn_seqs_covers_only_the_trailing_turns():
+    projection = {
+        "user_messages": [{"seq": seq} for seq in (1, 3, 5, 7)],
+        "narratives": [{"seq": seq} for seq in (2, 4, 6, 8)],
+    }
+    # The last two narrative turns (6, 8); older turns (2, 4) stay recallable.
+    assert visible_turn_seqs(projection) == {6, 8}
 
 
-def test_recall_window_floor_accepts_attribute_rows():
-    @dataclass
-    class H:
-        seq: int
-
-    assert recall_window_floor([H(12), H(5), H(8)]) == 5
+def test_visible_turn_seqs_empty_when_nothing_is_visible():
+    assert visible_turn_seqs({}) == set()
+    assert visible_turn_seqs({"user_messages": [{"seq": 1}]}) == set()
+    assert visible_turn_seqs({"narratives": [{"seq": 2}]}, turns=0) == set()
+    # A chat's single committed turn is the whole visible window.
+    assert visible_turn_seqs({"narratives": [{"seq": 2}]}) == {2}
 
 
 # -- D25 C2: RecallConfig coercion -----------------------------------------
@@ -356,6 +359,42 @@ def test_recall_block_query_mode_message_plus_scene_embeds_both(tmp_path, monkey
     )
     assert calls == [2]  # both queries embedded in ONE request
     assert result.queries == ("one", "scene with Alice | at market")
+    store.close()
+
+
+def test_recall_block_trim_skips_visible_turns_and_keeps_older_rows(tmp_path, monkeypatch):
+    """#84: the wired exclusion drops the visible tail; older rows still return."""
+    store = MemoryStore(tmp_path / "m.db")
+    for seq in range(1, 9):
+        store.upsert(
+            "c_s", seq, "narrative", f"turn-{seq}", [1.0, 0.0, 0.0, 0.0],
+            session_id="chatA",
+        )
+    # Another chat's row collides with a visible seq: session scoping keeps it.
+    store.upsert(
+        "c_s", 6, "narrative", "other-chat-6", [1.0, 0.0, 0.0, 0.0],
+        session_id="chatB",
+    )
+    _embed_stub(monkeypatch, {0: [1.0, 0.0, 0.0, 0.0]})
+    # The narrator already carries the last two turns (narratives 6 and 8).
+    projection = {
+        "user_messages": [{"seq": seq} for seq in (5, 7)],
+        "narratives": [{"seq": seq} for seq in (6, 8)],
+    }
+    result = run(
+        recall_block(
+            store, "http://e", "m", "c_s", "anything",
+            config=RecallConfig(k=10, rerank_enabled=False),
+            exclude_seqs=visible_turn_seqs(projection),
+            exclude_session_id="chatA",
+        )
+    )
+    texts = " | ".join(str(row["text"]) for row in result.rows)
+    for seq in (6, 8):
+        assert f"turn-{seq}" not in texts  # prose already visible in the prompt
+    for seq in (1, 2, 3, 4, 5, 7):
+        assert f"turn-{seq}" in texts  # older rows still recallable
+    assert "other-chat-6" in texts  # D53: a shared layer keeps another chat's seq
     store.close()
 
 
