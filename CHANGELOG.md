@@ -12,6 +12,7 @@ detail; this file is an index, not a report. Versioning follows
 
 - A missing event log announces itself at boot instead of silently recreating empty (#72)
 - Regenerate forks the current session at the message acted on, never a stale pivot (#74)
+- A failed preset or context read warns and leaves a `preset_degraded` notice instead of a silent wrong-model turn (#70)
 - A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
 
 ### Changed

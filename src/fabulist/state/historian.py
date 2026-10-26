@@ -535,9 +535,20 @@ class HistorianRunner:
         self.cadence = cadence
 
     # -- the reads --------------------------------------------------------
-    def _cadence(self) -> int:
-        """The cadence RIGHT NOW (a callable reads the active preset live)."""
-        raw = self.cadence() if callable(self.cadence) else self.cadence
+    def _cadence(self, session_id: str = "") -> int:
+        """The cadence RIGHT NOW (a callable reads the active preset live).
+
+        Issue #70: the callable is handed the session explicitly, so a failed
+        preset read leaves its ``preset_degraded`` row on the asking turn.
+        A zero-argument reader (a test stub) keeps working.
+        """
+        if not callable(self.cadence):
+            raw = self.cadence
+        else:
+            try:
+                raw = self.cadence(session_id)
+            except TypeError:
+                raw = self.cadence()
         try:
             value = int(raw)
         except (TypeError, ValueError):
@@ -569,13 +580,15 @@ class HistorianRunner:
         return historian_is_due(
             last_run=self.last_completed_run(session_id),
             committed_turns=self.committed_turns(session_id),
-            cadence=self._cadence(),
+            cadence=self._cadence(session_id),
         )
 
     def due_in(self, session_id: str) -> int:
         """Committed turns until the next automatic run (0 = due now)."""
         last = int((self.last_completed_run(session_id) or {}).get("turn_seq") or 0)
-        return max(0, self._cadence() - (self.committed_turns(session_id) - last))
+        return max(
+            0, self._cadence(session_id) - (self.committed_turns(session_id) - last)
+        )
 
     def inflight(self, session_id: str) -> bool:
         """Is a run for this session in flight in this process?"""

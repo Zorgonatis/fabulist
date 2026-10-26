@@ -23,6 +23,9 @@ appends ONE typed ``system`` variant here:
   it is not in the vector index yet (the ``memory_hook`` post-turn hook).
 * :data:`HOOK_DEGRADED_EVENT` — any other post-turn hook raised (assistant
   consult, historian spawn, context monitor).
+* :data:`PRESET_DEGRADED_EVENT` — a preset/context read raised, so the turn
+  fell back to code defaults (issue #70: a silent wrong-model or
+  missing-context turn reads like a model problem).
 
 Payload shape (the one the Inspector notices tab renders)::
 
@@ -48,9 +51,11 @@ __all__ = [
     "HOOK_DEGRADED_EVENT",
     "INDEX_DEGRADED_EVENT",
     "LANE_DEGRADED_EVENT",
+    "PRESET_DEGRADED_EVENT",
     "RECALL_DEGRADED_EVENT",
     "REASON_LIMIT",
     "append_degradation",
+    "append_preset_degraded",
     "degradation_reason",
     "degradation_text",
 ]
@@ -67,6 +72,9 @@ INDEX_DEGRADED_EVENT = "index_degraded"
 #: A post-turn housekeeping hook failed (assistant / historian / context monitor).
 HOOK_DEGRADED_EVENT = "hook_degraded"
 
+#: A preset/context read failed; the turn fell back to the code defaults (#70).
+PRESET_DEGRADED_EVENT = "preset_degraded"
+
 #: Every name :func:`append_degradation` accepts (the Inspector's read set).
 DEGRADATION_EVENTS = frozenset(
     {
@@ -74,6 +82,7 @@ DEGRADATION_EVENTS = frozenset(
         LANE_DEGRADED_EVENT,
         INDEX_DEGRADED_EVENT,
         HOOK_DEGRADED_EVENT,
+        PRESET_DEGRADED_EVENT,
     }
 )
 
@@ -86,6 +95,7 @@ STAGES: dict[str, str] = {
     LANE_DEGRADED_EVENT: "npc_lane_strategy",
     INDEX_DEGRADED_EVENT: "memory_index",
     HOOK_DEGRADED_EVENT: "post_turn_hook",
+    PRESET_DEGRADED_EVENT: "preset_resolution",
 }
 
 
@@ -163,3 +173,36 @@ def append_degradation(
     except Exception:  # noqa: BLE001 - failure reporting is best-effort
         return False
     return True
+
+
+def append_preset_degraded(
+    log: Any,
+    session_id: str | None,
+    *,
+    stage: str,
+    exc: BaseException | str | None,
+    advice: str = "",
+) -> bool:
+    """Append ONE ``preset_degraded`` row for a swallowed preset/context read.
+
+    Issue #70: a failed preset resolution silently changes which model answers
+    and what context the prompt carries, which reads on screen as a model
+    problem. The caller logs its own warning (one per handler, named for the
+    interaction); this writes the log row the Inspector notices tab renders.
+
+    Two guards live here so no site has to remember them:
+
+    * an empty session id cannot anchor a row;
+    * an ANCHOR session (``__presets__`` / ``__worlds__`` / ``__books__`` …) is
+      definition storage, not a turn — a preset read failure there must never
+      append to it.
+    """
+    if not session_id or str(session_id).startswith("__"):
+        return False
+    return append_degradation(
+        log,
+        str(session_id),
+        PRESET_DEGRADED_EVENT,
+        stage=stage,
+        reason=degradation_reason(exc, advice),
+    )

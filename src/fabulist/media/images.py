@@ -264,11 +264,16 @@ async def caption(
         raise KeyError(f"unknown asset {asset_ref!r} in session {session_id!r}")
     payload = asset.get("payload", {})
     resolved_ref = payload.get("asset_id") or asset_ref
-    messages = (
-        messages_builder(asset)
-        if messages_builder is not None
-        else build_caption_messages(asset)
-    )
+    # Issue #70: the preset flow builder is session-aware, so a swallowed
+    # preset read leaves its ``preset_degraded`` row on the upload's session.
+    # A builder with the historical one-argument shape still works.
+    if messages_builder is not None:
+        try:
+            messages = messages_builder(asset, session_id)
+        except TypeError:
+            messages = messages_builder(asset)
+    else:
+        messages = build_caption_messages(asset)
     text = (await collect_text(captioner, messages)).strip()
     event_payload = {"event": CAPTION_EVENT, "asset": resolved_ref, "text": text}
     return log.append_event(session_id, "system", MEDIA_ACTOR, event_payload)

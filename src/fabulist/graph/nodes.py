@@ -144,6 +144,7 @@ from fabulist.dsl import (
     split_statements,
     statement_re,
 )
+from fabulist.log.degradation import append_preset_degraded
 from fabulist.log.schema_gate import CLOCK_PROPOSAL_EVENT, VALIDATION_NOTICE_EVENT
 
 __all__ = [
@@ -197,6 +198,37 @@ def _seam_value(seam: Any) -> Any:
     the NEXT turn with no graph rebuild — the ``_planner_config`` pattern.
     """
     return seam() if callable(seam) else seam
+
+
+def _seam_accepts_session(seam: Any) -> bool:
+    """Does this post-turn seam declare a ``session_id`` keyword?"""
+    try:
+        params = inspect.signature(seam).parameters
+    except (TypeError, ValueError):  # builtins / opaque callables
+        return False
+    return "session_id" in params
+
+
+def _call_seam_with_session(seam: Any, *args: Any, session_id: str) -> Any:
+    """Call a post-turn seam, passing the session when the seam accepts one.
+
+    Issue #70: the production flow renderers are session-aware so a swallowed
+    preset read leaves its ``preset_degraded`` row on the TURN's session. These
+    seams keep their historical shapes for deterministic oracles and test stubs,
+    so the keyword is passed only to a callable that declares it.
+    """
+    if _seam_accepts_session(seam):
+        return seam(*args, session_id=session_id)
+    return seam(*args)
+
+
+def _call_extractor(
+    extractor: Any, user_msg: str, narrative: str, session_id: str
+) -> Any:
+    """Call the extractor seam with the turn's session (see the helper above)."""
+    return _call_seam_with_session(
+        extractor, user_msg, narrative, session_id=session_id
+    )
 
 
 def _stream_writer() -> Callable[[Any], None] | None:
@@ -2328,11 +2360,25 @@ def _cast_agent_context(log: LogPort, session_id: str) -> str | None:
     the validator, the critic, attribution and the narrator prompt path are
     untouched — so the narrated prompt hash and replay stay byte-faithful.
     """
+    # Issue #70: a failed part is no longer silent — one warning per handler and
+    # ONE ``preset_degraded`` row per block naming every part that failed.
+    failed: list[str] = []
     try:
         from fabulist.prompts.cast import cast_delta_notice
 
         notice = cast_delta_notice(log, session_id)
-    except Exception:  # noqa: BLE001 - the notice is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 - the notice is advisory, never fatal
+        logger.warning(
+            "cast context: cast-delta notice failed", exc_info=True
+        )
+        failed.append(f"cast_delta_notice ({type(exc).__name__})")
+        append_preset_degraded(
+            log,
+            session_id,
+            stage="cast_context",
+            exc=", ".join(failed),
+            advice="the extractor/BTS ran without the cast-change notice",
+        )
         return None
     if not notice:
         return None
@@ -2345,7 +2391,9 @@ def _cast_agent_context(log: LogPort, session_id: str) -> str | None:
         # ``first_mes=[]`` suppresses the opening-scene line(s): the scene is
         # already in the prose; the agents need the actor definitions.
         card_context = persona_block(extract_cards(events), []) or ""
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning("cast context: persona block failed", exc_info=True)
+        failed.append("persona_block")
         card_context = ""
 
     parts = [notice]
@@ -2359,8 +2407,18 @@ def _cast_agent_context(log: LogPort, session_id: str) -> str | None:
         names = [member.display_name for member in roster(log, session_id)]
         if names:
             parts.append("CAST ROSTER:\n" + "\n".join(f"- {name}" for name in names))
-    except Exception:  # noqa: BLE001 - roster context is advisory
-        pass
+    except Exception as exc:  # noqa: BLE001 - roster context is advisory
+        logger.warning("cast context: roster names failed", exc_info=True)
+        failed.append("roster")
+    if failed:
+        append_preset_degraded(
+            log,
+            session_id,
+            stage="cast_context",
+            exc=", ".join(failed),
+            advice="the extractor/BTS ran with a partial cast context — check "
+            "the context sources named",
+        )
     return "\n\n".join(parts)
 
 
@@ -3474,6 +3532,10 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
     phase rests on the skeleton instead of inventing one beside it.
     """
     parts: list[str] = []
+    # Issue #70: a failed source is no longer SILENT — each names itself in the
+    # warning, and the block emits ONE ``preset_degraded`` row naming every part
+    # that failed (one row per block, not per handler).
+    failed: list[str] = []
 
     variables: dict | None
     try:
@@ -3482,7 +3544,11 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
         variables = resolve_variables(
             log, session_id, str(state.get("user_content") or "")
         )
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning(
+            "planner context: variables resolution failed", exc_info=True
+        )
+        failed.append(f"variables ({type(exc).__name__})")
         variables = None
 
     from fabulist.state import entities
@@ -3505,8 +3571,11 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
         )
         if block:
             parts.append("CAST AND WORLD:\n" + block)
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
-        pass
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning(
+            "planner context: CAST AND WORLD block failed", exc_info=True
+        )
+        failed.append("CAST AND WORLD")
 
     try:
         from fabulist.context.facts import session_world_definition_block
@@ -3516,15 +3585,17 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
         )
         if world:
             parts.append("WORLD:\n" + world)
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
-        pass
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning("planner context: WORLD block failed", exc_info=True)
+        failed.append("WORLD")
 
     try:
         objects = _world_objects_block(log, session_id)
         if objects:
             parts.append(objects)
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
-        pass
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning("planner context: WORLD OBJECTS block failed", exc_info=True)
+        failed.append("WORLD OBJECTS")
 
     try:
         tail = _prior_narratives(log, session_id)[-PLANNER_TAIL_TURNS:]
@@ -3535,8 +3606,19 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
         lines = [line for line in lines if line]
         if lines:
             parts.append("RECENT TURNS:\n" + "\n\n".join(lines))
-    except Exception:  # noqa: BLE001 - context is advisory, never fatal
-        pass
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning("planner context: RECENT TURNS block failed", exc_info=True)
+        failed.append("RECENT TURNS")
+
+    if failed:
+        append_preset_degraded(
+            log,
+            session_id,
+            stage="planner_context",
+            exc=", ".join(failed),
+            advice="the planner ran with a partial context block — check the "
+            "context sources named",
+        )
 
     return "\n\n".join(parts)
 
@@ -3686,7 +3768,7 @@ def make_planner_node(
     *,
     log: LogPort,
     caller: Any | None = None,
-    directive: str = DEFAULT_PLANNER_DIRECTIVE,
+    directive: str | Callable[[str], str] = DEFAULT_PLANNER_DIRECTIVE,
     planner_config: Callable[[], Mapping] | None = None,
     request_profile_fn: Callable[[], dict | None] | None = None,
     provider_label_fn: Callable[[], str] | None = None,
@@ -3730,6 +3812,11 @@ def make_planner_node(
     (``{"cadence", "steer", "fields"}``) — a callable, so a Studio edit applies
     on the next run without rebuilding the graph. ``caller`` is the narrator
     binding (§1/11 for now); with no caller the node is inert.
+    ``directive`` is a string or a session-aware reader (issue #70): the wiring
+    passes the preset flow compiler, so a failed preset read warns and leaves
+    its ``preset_degraded`` row for the turn that hit it instead of vanishing
+    at graph-build time.
+
     ``provider_label_fn`` is the live reader of the model the FAILING call was
     bound to (``"glm-4.6"``), read at the failure — never once per run and never
     at build time, so a rebind is named correctly on the very turn it applies.
@@ -3756,6 +3843,9 @@ def make_planner_node(
                 return None
 
         session_id = state["session_id"]
+        # Issue #70: a callable directive resolves per turn WITH the session, so
+        # a failed preset read can name the interaction and leave its row.
+        directive_text = directive(session_id) if callable(directive) else directive
         writer = _stream_writer()
         update: dict = {}
         _emit_stage(writer, "plan", "start")
@@ -3784,7 +3874,7 @@ def make_planner_node(
                     caller=caller,
                     log=log,
                     session_id=session_id,
-                    directive=directive,
+                    directive=directive_text,
                     context=_planner_context(log, session_id, state),
                     turn_seq=committed_turn_count(log, session_id),
                     mode=stage,
@@ -3821,7 +3911,7 @@ def make_planner_node(
             prior = load_last_plan(log, session_id)
             profile = request_profile_fn() if request_profile_fn else None
             messages = _planner_messages(
-                directive=directive,
+                directive=directive_text,
                 context=_planner_context(log, session_id, state),
                 prior=prior,
                 steer=steer,
@@ -3939,7 +4029,9 @@ def make_bts_node(
             # (§11.1). The key stays declared for the historian's window union.
         else:
             try:
-                outcome = extractor(agent_user_msg, prose)
+                outcome = _call_extractor(
+                    extractor, agent_user_msg, prose, session_id
+                )
                 if inspect.isawaitable(outcome):  # sync and async extractors both legal
                     outcome = await outcome
                 if not isinstance(outcome, dict):  # ExtractorResult dataclass et al.
@@ -4566,8 +4658,19 @@ class NpcLaneFanout:
         anti_injection = ANTI_INJECTION_DEFAULT
         try:
             anti_injection = anti_injection_enabled(self.log)
-        except Exception:  # noqa: BLE001 - the setting must never break a turn
-            pass
+        except Exception as exc:  # noqa: BLE001 - the setting must never break a turn
+            logger.warning(
+                "npc lane anti-injection setting read failed; using the default",
+                exc_info=True,
+            )
+            append_preset_degraded(
+                self.log,
+                str(state.get("session_id") or ""),
+                stage="anti_injection",
+                exc=exc,
+                advice="the lane tail used the shipped Anti Injection default — "
+                "check the settings log",
+            )
         self._record_plan(state, rows)
         return [
             Send(
@@ -5209,7 +5312,9 @@ class AssetProposalFanout:
                         "session_id": state["session_id"],
                         "lane": spec.lane,
                         "kind": spec.kind,
-                        "messages": self._messages(blocks),
+                        "messages": self._messages(
+                            blocks, state["session_id"]
+                        ),
                         "judge_question": dict(row.get("judge_question") or {}),
                         "judge_threshold": row.get("judge_threshold"),
                         # The digest is ALSO the write scope: a lane may amend
@@ -5225,7 +5330,7 @@ class AssetProposalFanout:
             )
         return sends
 
-    def _messages(self, blocks: Mapping[str, str]) -> list[dict]:
+    def _messages(self, blocks: Mapping[str, str], session_id: str = "") -> list[dict]:
         """The lane's messages: the preset ``proposals`` flow, else the default.
 
         A broken flow never kills a lane (the ``_npc_flow_messages`` rule): the
@@ -5239,7 +5344,10 @@ class AssetProposalFanout:
         if self.lane_messages is None:
             return default
         try:
-            messages = self.lane_messages(dict(blocks))
+            # Issue #70: the preset flow builder is session-aware.
+            messages = _call_seam_with_session(
+                self.lane_messages, dict(blocks), session_id=session_id
+            )
         except Exception:  # noqa: BLE001 - a broken flow never kills a lane
             logger.warning(
                 "proposals flow fell back to the code default", exc_info=True
@@ -5580,20 +5688,24 @@ async def _run_world_state(
         # append to another chat's log, and that must not be spellable.
         token = _CURRENT_SESSION.set(session_id)
         try:
+            # Issue #70: the preset-flow renderer is session-aware, so a
+            # swallowed preset read leaves its row on THIS turn's session. A
+            # test double with the historical shape simply does not receive it.
+            extra_kwargs: dict[str, Any] = {}
+            if _seam_accepts_session(world_state):
+                extra_kwargs["session_id"] = session_id
+            # W9.32 §3.5: the live tools judge an expiry or a time proposal
+            # against THIS turn's instant. An absent/unreadable clock passes
+            # nothing at all (the ledger falls back to the folded projection),
+            # which is also what keeps a seam without the keyword working.
+            if clock_time and clock_facts.get("date"):
+                extra_kwargs["clock"] = (clock_time, clock_facts["date"])
             result = await world_state(
                 model_user_msg,
                 prose,
                 None,
                 checkpoint=False,
-                # W9.32 §3.5: the live tools judge an expiry or a time proposal
-                # against THIS turn's instant. An absent/unreadable clock passes
-                # nothing at all (the ledger falls back to the folded projection),
-                # which is also what keeps a seam without the keyword working.
-                **(
-                    {"clock": (clock_time, clock_facts["date"])}
-                    if clock_time and clock_facts.get("date")
-                    else {}
-                ),
+                **extra_kwargs,
             )
         finally:
             _CURRENT_SESSION.reset(token)
@@ -5937,7 +6049,10 @@ async def _run_critic_stage(
     _emit_stage(critic_writer, "critic", "start")
 
     try:
-        raw = await critic(evidence)
+        # Issue #70: the critic flow is session-aware, so a swallowed preset
+        # read leaves its row on this turn's session.
+        outcome = _call_seam_with_session(critic, evidence, session_id=session_id)
+        raw = await outcome if inspect.isawaitable(outcome) else outcome
     except Exception as exc:  # a raising critic is non-fatal (D49)
         _emit_stage(critic_writer, "critic", "done")
         _log({"event": "critic_failed", "stage": "call", "error": str(exc)[:800]})

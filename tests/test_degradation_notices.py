@@ -423,3 +423,156 @@ def test_inspector_notices_fold_returns_only_degradations(log):
     assert rows[1]["hook"] == "context_monitor"
     assert rows[0]["turn"] == 1
     assert NOTICE_LIMIT >= len(rows)
+
+
+# -- site 5: preset resolution (issue #70) ----------------------------------
+
+
+def _raising_active_preset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every preset read raise, the class issue #70 makes visible."""
+
+    import fabulist.prompts.preset_store as preset_store
+
+    def boom(log):
+        raise RuntimeError("preset store unreadable")
+
+    monkeypatch.setattr(preset_store, "active_preset", boom)
+
+
+def _preset_rows(log: EventLog, session_id: str = SID) -> list[dict]:
+    from fabulist.log.degradation import PRESET_DEGRADED_EVENT
+
+    return [
+        event.payload
+        for event in log.get_events(session_id)
+        if (event.payload or {}).get("event") == PRESET_DEGRADED_EVENT
+    ]
+
+
+def test_a_raising_preset_on_the_ooc_path_leaves_a_preset_degraded_row(
+    log, monkeypatch, caplog
+):
+    """Issue #70 (1): the OOC turn still builds, and the failure is on the log."""
+    from fabulist.wiring import make_ooc_message_builder
+
+    log.append_event(SID, "user", "user", {"text": "hello"})
+    _raising_active_preset(monkeypatch)
+
+    with caplog.at_level("WARNING", logger="fabulist.wiring"):
+        messages = make_ooc_message_builder(log)(SID, "hello there")
+
+    assert messages and messages[-1]["role"] == "user"
+    rows = _preset_rows(log)
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "ooc"
+    assert "preset store unreadable" in rows[0]["reason"]
+    assert any(
+        "ooc preset read failed" in record.message for record in caplog.records
+    )
+
+
+def test_the_planner_context_block_emits_one_row_naming_the_failed_part(
+    log, monkeypatch, caplog
+):
+    """Issue #70 (2): five handlers, ONE row — the block names every failed part."""
+    import fabulist.prompts.variables as variables_module
+    from fabulist.graph.nodes import _planner_context
+
+    log.append_event(SID, "user", "user", {"text": "hello"})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("variable resolver down")
+
+    monkeypatch.setattr(variables_module, "resolve_variables", boom)
+
+    with caplog.at_level("WARNING", logger="fabulist.graph.nodes"):
+        _planner_context(log, SID, {"session_id": SID, "user_content": "hello", "facts": ""})
+
+    rows = _preset_rows(log)
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "planner_context"
+    assert "variables" in rows[0]["reason"]
+    assert any(
+        "variables resolution failed" in record.message for record in caplog.records
+    )
+
+
+def test_the_legitimate_no_preset_path_leaves_no_row_and_no_warning(
+    log, monkeypatch, caplog
+):
+    """Issue #70 (3): ``active_preset() is None`` is the no-preset state, not a failure."""
+    import fabulist.prompts.preset_store as preset_store
+    from fabulist.wiring import make_ooc_message_builder
+
+    log.append_event(SID, "user", "user", {"text": "hello"})
+    monkeypatch.setattr(preset_store, "active_preset", lambda log: None)
+
+    with caplog.at_level("WARNING", logger="fabulist.wiring"):
+        messages = make_ooc_message_builder(log)(SID, "hello there")
+
+    assert messages
+    assert _preset_rows(log) == []
+    assert [
+        record for record in caplog.records if "preset read failed" in record.message
+    ] == []
+
+
+def test_a_mid_build_degradation_row_does_not_change_the_prompt_bytes(
+    log, monkeypatch
+):
+    """Issue #70 (4) ADR-005 pin: the row consumes a seq, never a prompt byte."""
+    import fabulist.prompts.preset_store as preset_store
+    from fabulist.wiring import make_ooc_message_builder
+
+    monkeypatch.setattr(preset_store, "active_preset", lambda log: None)
+    log.append_event(SID, "user", "user", {"text": "hello"})
+    history = make_ooc_message_builder(log)(SID, "hello there")
+
+    other = EventLog(":memory:")
+    try:
+        other.append_event(SID, "user", "user", {"text": "hello"})
+        # A legitimate no-preset build leaves no row, so the two logs differ
+        # only by the row this pin appends MID-build.
+        with_row = make_ooc_message_builder(other)(SID, "hello there")
+        from fabulist.log.degradation import append_preset_degraded
+
+        assert append_preset_degraded(
+            other, SID, stage="ooc", exc=RuntimeError("boom")
+        )
+        again = make_ooc_message_builder(other)(SID, "hello there")
+
+        # The row consumes a seq; the prompt list is byte-identical either way.
+        assert again == with_row == history
+    finally:
+        other.close()
+
+
+def test_binding_site_failure_warns_and_the_happy_path_is_silent(log, caplog):
+    """Issue #70: the wrong-model class warns; a healthy bindings read is quiet."""
+    from fabulist.prompts.agent_sets import (
+        DEFAULT_BINDINGS,
+        bindings_for,
+        set_bindings_provider,
+    )
+
+    def boom(_log):
+        raise RuntimeError("bindings provider down")
+
+    set_bindings_provider(boom)
+    try:
+        with caplog.at_level("WARNING", logger="fabulist.prompts.agent_sets"):
+            found = bindings_for(log)
+        assert found == dict(DEFAULT_BINDINGS)
+        assert any(
+            "bindings provider failed" in record.message for record in caplog.records
+        )
+        assert _preset_rows(log) == []  # no turn session installed -> warning only
+
+        caplog.clear()
+        set_bindings_provider(lambda _log: {"narrate": {"agent": "narrator"}})
+        with caplog.at_level("WARNING", logger="fabulist.prompts.agent_sets"):
+            healthy = bindings_for(log)
+        assert healthy["narrate"]["agent"] == "narrator"
+        assert caplog.records == []
+    finally:
+        set_bindings_provider(None)

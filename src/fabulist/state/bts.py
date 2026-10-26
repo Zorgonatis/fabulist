@@ -2993,9 +2993,21 @@ class BtsRunner:
         narrative: str,
         prior_state: dict | None,
         checkpoint: bool,
+        session_id: str | None = None,
     ) -> list[dict[str, str]]:
         if self._renderer is not None:
-            return list(self._renderer(user_msg, narrative, prior_state, checkpoint))
+            # Issue #70: the flow builder is session-aware so a failed preset
+            # read can leave its ``preset_degraded`` row on the TURN's session.
+            # A caller that knows no session passes the four-argument shape.
+            if session_id is None:
+                return list(
+                    self._renderer(user_msg, narrative, prior_state, checkpoint)
+                )
+            return list(
+                self._renderer(
+                    user_msg, narrative, prior_state, checkpoint, session_id
+                )
+            )
         return build_bts_messages(user_msg, narrative, prior_state, checkpoint=checkpoint)
 
     def _session_id(self) -> str:
@@ -3036,6 +3048,7 @@ class BtsRunner:
         *,
         checkpoint: bool = False,
         clock: tuple[str, str] | None = None,
+        session_id: str | None = None,
     ) -> BtsResult:
         """Record the turn's world changes through the write-action loop (§6).
 
@@ -3061,7 +3074,9 @@ class BtsRunner:
                 raw="",
                 stage="tier_d",
             )
-        messages = self._messages(user_msg, narrative, prior_state, checkpoint)
+        messages = self._messages(
+            user_msg, narrative, prior_state, checkpoint, session_id
+        )
         return await self._action_call(messages, clock=clock)
 
     async def _action_call(
@@ -3219,7 +3234,7 @@ class BtsRunner:
                 raw="",
             )
         turn = EntityTurn(self._log, session_id, reconcile=True)
-        messages = self._messages(user_msg, narrative, None, False)
+        messages = self._messages(user_msg, narrative, None, False, session_id)
         # The directive IS the tail here: the action protocol and the registry
         # palette would both be wrong for this pass (it offers no write actions,
         # and showing the registry would make every belief a copy of it). Issue
