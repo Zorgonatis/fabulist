@@ -1,4 +1,8 @@
-"""Tests for the World Info v1 engine (PLAN §2: keywords + budget + recursion).
+"""Tests for the World Info v1 engine (PLAN §2: keywords + recursion; uncapped).
+
+The character budget was removed by the owner ruling of 2026-10-26 (issue #83):
+every activated entry renders. The render pins here moved from the cap/break
+behaviour to the uncapped behaviour.
 
 Covers :func:`parse_book`, :func:`activate`, :func:`render_block` and the
 ``WorldInfoError`` contract. Everything here is pure: no I/O, no event log.
@@ -10,7 +14,6 @@ import pytest
 
 from fabulist.context.world_info import (
     BLOCK_HEADER,
-    DEFAULT_BUDGET,
     WorldInfoEntry,
     WorldInfoError,
     activate,
@@ -280,39 +283,39 @@ def test_render_block_none_when_no_entries():
     assert render_block([]) is None
 
 
-def test_render_block_none_when_nothing_fits():
-    entries = [entry([], "a very long piece of content")]
-    assert render_block(entries, budget=5) is None
+def test_render_block_renders_an_entry_larger_than_the_old_budget():
+    # #83: no size filter. The single 1300-char entry used to return None when
+    # it could not fit the 1200-char budget; it now renders whole.
+    content = "x" * 1300
+    rendered = render_block([entry([], content)])
+    assert rendered == f"{BLOCK_HEADER}\n- {content}"
 
 
-def test_render_block_respects_budget_with_whole_entries():
+def test_render_block_renders_every_entry_past_the_old_budget():
+    # #83: the fill loop no longer breaks on the first entry that does not fit,
+    # so entries after the old 1200-char line — including small ones — render.
     entries = [
-        entry([], "one", order=0),
-        entry([], "two", order=1),
-        entry([], "three", order=2),
+        entry([], "a" * 992, order=0),
+        entry([], "b" * 300, order=1),
+        entry([], "c" * 90, order=2),
     ]
-    # header(14) + "- one"(+1)=20; "- two" would reach 26 > 25, so it stops.
-    rendered = render_block(entries, budget=25)
-    assert rendered == f"{BLOCK_HEADER}\n- one"
-    assert len(rendered) <= 25
+    rendered = render_block(entries)
+    assert rendered == f"{BLOCK_HEADER}\n- {'a' * 992}\n- {'b' * 300}\n- {'c' * 90}"
+    # Every activated entry is present, in insertion order, uncapped.
+    assert len(rendered) > 1200
 
 
 def test_render_block_never_truncates_mid_entry():
-    entries = [entry([], "one", order=0), entry([], "two", order=1)]
-    rendered = render_block(entries, budget=25)
-    # The second entry is dropped whole; no partial "- tw" leaks in.
-    assert rendered == f"{BLOCK_HEADER}\n- one"
+    entries = [entry([], "one", order=0), entry([], "x" * 5000, order=1)]
+    rendered = render_block(entries)
+    # Whole entries only: both render in full, no partial content.
+    assert rendered == f"{BLOCK_HEADER}\n- one\n- {'x' * 5000}"
 
 
-def test_render_block_fits_entry_at_exact_budget():
-    entries = [entry([], "one", order=0), entry([], "two", order=1)]
-    rendered = render_block(entries, budget=26)  # 14 + 6 + 6 == 26
-    assert rendered == f"{BLOCK_HEADER}\n- one\n- two"
-    assert len(rendered) == 26
-
-
-def test_render_block_default_budget_constant():
-    assert DEFAULT_BUDGET == 1200
+def test_render_block_has_no_budget_parameter():
+    # #83: the parameter is gone; passing one is a TypeError, not a silent drop.
+    with pytest.raises(TypeError):
+        render_block([], budget=25)  # type: ignore[call-arg]
 
 
 def test_render_block_stable_order_for_ties():
