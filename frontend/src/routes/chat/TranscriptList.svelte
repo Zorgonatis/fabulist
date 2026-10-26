@@ -382,11 +382,55 @@
 		onRetry?.();
 	}
 
+	/**
+	 * Issue #81: a LIVE failed turn leaves an EMPTY narrator placeholder as the
+	 * transcript tail — no prose, no DSL, no segments, only the error line (the
+	 * engine aborts before the commit barrier, so nothing was committed). That is
+	 * the ABSENCE of a reply, not a reply: it must not take a branch affordance,
+	 * because the counts it would carry are the PREVIOUS pivot's.
+	 */
+	function isEmptyFailedReply(row: TranscriptEntryView): boolean {
+		return (
+			row.role === 'narrator' &&
+			!row.streaming &&
+			row.error !== undefined &&
+			row.prose === '' &&
+			row.dsl === '' &&
+			(row.segments?.length ?? 0) === 0
+		);
+	}
+
 	// The reply the swipe controls apply to is always the latest narrative
-	// (v1 scope: last reply only).
-	const lastNarratorIndex = $derived(
-		entries.reduce((acc, entry, i) => (entry.role === 'narrator' && !entry.system ? i : acc), -1)
+	// (v1 scope: last reply only). A turn still streaming into its row counts (it
+	// will be the reply); an empty failed placeholder never does (#81).
+	const lastReplyIndex = $derived(
+		entries.reduce(
+			(acc, entry, i) =>
+				entry.role === 'narrator' && !entry.system && !isEmptyFailedReply(entry) ? i : acc,
+			-1
+		)
 	);
+
+	/**
+	 * Issue #81: WHICH row owns the branch controls — and the only row that has
+	 * them.
+	 *
+	 * A failed turn commits its user row and no narrative, so `lastReplyIndex`
+	 * names the PREVIOUS reply and the ↻ pointed at the wrong turn. Walk back over
+	 * what is not a turn (the tail's system notices, a live failure's empty
+	 * placeholder); if the newest surviving row is a USER row, nothing answers it
+	 * and it is the trailing UNANSWERED turn — the row a failed turn lives on, and
+	 * where the controls belong. Every other tail keeps v1: the last reply only.
+	 * No other unanswered row can match, so the controls never multiply.
+	 */
+	const branchRowIndex = $derived.by(() => {
+		const list = entries;
+		let i = list.length - 1;
+		while (i >= 0 && (list[i].system || isEmptyFailedReply(list[i]))) i -= 1;
+		if (i < 0) return -1;
+		return list[i].role === 'user' ? i : lastReplyIndex;
+	});
+
 	const showBranch = $derived(branch !== null);
 	const hasAlternates = $derived(branch !== null && branch.count > 1);
 
@@ -1494,7 +1538,7 @@
 				</button>
 			{/if}
 			{#if entry.role === 'narrator'}
-				{#if hasAlternates && branch && index === lastNarratorIndex}
+				{#if hasAlternates && branch && index === lastReplyIndex}
 					<span class="branch-chip" title="This reply has alternate branches">
 						<span class="chip-glyph" aria-hidden="true">⑂</span>
 						{branch.index} / {branch.count}
@@ -1694,7 +1738,7 @@
 			{#if entry.error}
 				<p class="error">{entry.error}</p>
 			{/if}
-			{#if showBranch && branch && index === lastNarratorIndex}
+			{#if showBranch && branch && index === branchRowIndex}
 				<BranchControls
 					{branch}
 					busy={branchBusy || entry.streaming}
