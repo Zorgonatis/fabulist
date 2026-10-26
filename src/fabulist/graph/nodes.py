@@ -151,6 +151,7 @@ from fabulist.log.schema_gate import CLOCK_PROPOSAL_EVENT, VALIDATION_NOTICE_EVE
 from fabulist.retry import (
     PARSE,
     PROVIDER,
+    AttemptRecord,
     StructuredParseFailure,
     records_of as retry_records_of,
     run_with_retry,
@@ -4296,15 +4297,13 @@ def validate_lane_payload(payload: Any) -> dict | None:
 LANE_RAW_MAX_CHARS = 800
 
 #: Attempts per lane model call (issue #76): the first try plus up to two
-#: retries of a PROVIDER-class failure, before the lane degrades to a skipped
-#: row and the turn commits. A lane is best-effort by design, so a transient
-#: 400/429/5xx that clears on a retry must not cost the turn.
+#: retries of a PROVIDER-class (or, since issue #82, PARSE-class) failure, before
+#: the lane degrades to a skipped row and the turn commits. A lane is
+#: best-effort by design, so a transient 400/429/5xx that clears on a retry must
+#: not cost the turn. The pause between attempts is the mechanism's
+#: (:data:`fabulist.retry.RETRY_BACKOFF_SECONDS`), and it runs OUTSIDE the lane
+#: pool, so a backing-off lane never holds a slot a healthy sibling wants.
 LANE_MAX_ATTEMPTS = 3
-
-#: Fixed pause between lane attempts (seconds). Deliberately small: the lane
-#: semaphore is re-acquired per attempt, so this backoff never holds a pool slot
-#: and cannot stall healthy siblings sharing the same pool.
-LANE_RETRY_BACKOFF_SECONDS = 0.2
 
 
 class _LaneShapeError(ValueError):
@@ -4845,8 +4844,9 @@ class NpcLaneFanout:
         because retrying it unchanged cannot help.
 
         Issue #82: this loop is no longer its own implementation — it is ONE call
-        to the shared mechanism (``run_structured_call``), which also owns the
-        per-attempt records and the retry classes. A MALFORMED structured reply
+        to the shared mechanism (:func:`fabulist.retry.run_with_retry`), which
+        also owns the per-attempt records and the retry classes. A MALFORMED
+        structured reply
         now retries too (class ``PARSE``): the lane held call+parse together, so a
         JSON reply that clears on a re-send is a recovered lane, not a drop.
         """
@@ -4858,7 +4858,7 @@ class NpcLaneFanout:
             async with _lane_pool(int(payload.get("max_lanes") or self.pool_size)):
                 return await self._request(payload, context)
 
-        def _log_attempt(record, exc: BaseException) -> None:
+        def _log_attempt(record: AttemptRecord, exc: BaseException) -> None:
             # Owner ruling: one WARNING line per failed attempt, carrying the
             # provider status and a body/message excerpt, so the next 400 is
             # diagnosable from the engine log.
