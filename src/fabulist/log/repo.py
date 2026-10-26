@@ -132,6 +132,18 @@ FORK_CONFIG_EVENTS = frozenset(
         # setting (a branch must lane by the owner's chosen strategy/bound, not
         # silently revert to the defaults at a fork).
         "chat_npc_dispatch",
+        # Issue #86: a chat's book attachment is a SELECTION over the catalogue,
+        # the same class as ``world_ref`` -- not content. A book attached after
+        # the swiped turn (regenerate is the common path) must survive onto the
+        # branch, or the user's attach silently does nothing.
+        "session_books",
+        # Issue #86: the legacy session-scoped world-info import is the same
+        # selection class (raw lorebook JSON attached to one chat).
+        "world_info",
+        # Issue #86: the component-set swap is a live session setting
+        # (ADR-025: a selection over the generated catalogue, read back from the
+        # latest ``set_swapped`` row in the chain next turn).
+        "set_swapped",
     }
 )
 

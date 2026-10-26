@@ -21,6 +21,7 @@ detail; this file is an index, not a report. Versioning follows
 - Every model call retries a provider failure or a malformed reply twice; a named unrecoverable set never retries (#82)
 - World-info entries past the old 1,200-character budget render in full; an oversized block raises one `world_info_large` notice per turn (#83)
 - Recall no longer returns the recent turns the narrator already carries; the unused recall-window floor is deleted (#84)
+- A branch keeps the books, component set and persona it was cut from, and its summary and drawers read them from the chain like the engine does (#86)
 
 ### Changed
 

@@ -277,11 +277,13 @@ def _memory_enabled(log: "EventLog", session_id: str) -> bool:
 
     Only boolean ``enabled`` values are honored (a malformed row is skipped, so
     the gate's permissive ``system`` shape can never flip the toggle by accident).
-    Ordering comes from :meth:`EventLog.get_events` (seq order), so the last
-    valid write wins.
+    Ordering comes from :meth:`EventLog.get_chain_events` (seq order), so the
+    last valid write wins — and, issue #86, a branch inherits the toggle its
+    parent held at the cut (``chat_memory`` is carried CONFIG), exactly like the
+    engine's readability gate does.
     """
     enabled = True
-    for event in log.get_events(session_id):
+    for event in log.get_chain_events(session_id):
         if event.type != "system":
             continue
         if event.payload.get("event") != CHAT_MEMORY_EVENT:
@@ -298,6 +300,12 @@ def _agent_debug(log: "EventLog", session_id: str, default: bool) -> bool:
     Only boolean ``enabled`` values are honored (malformed rows are skipped), so
     the gate's permissive ``system`` shape can never flip capture by accident.
     Ordering comes from :meth:`EventLog.get_events` (seq order).
+
+    DELIBERATELY own-row, not chain-walked (issue #86): ``chat_agent_debug`` is
+    operational capture, not session-constant narrative config, so it is NOT in
+    :data:`fabulist.log.repo.FORK_CONFIG_EVENTS` and a branch reads the boot
+    default until someone flips it there. Reading the chain here would silently
+    re-inherit exactly what the carry whitelist excludes.
     """
     enabled = default
     for event in log.get_events(session_id):
@@ -317,11 +325,16 @@ def _user_as_actor(log: "EventLog", session_id: str) -> bool:
     Only boolean ``user_as_actor`` values are honored (a malformed row is
     skipped), so the gate's permissive ``system`` shape can never switch
     impersonation on by accident — the safe direction for this setting. Ordering
-    comes from :meth:`EventLog.get_events` (seq order), so the last valid write
-    wins.
+    comes from :meth:`EventLog.get_chain_events` (seq order), so the last valid
+    write wins.
+
+    Chain-walked (issue #86): the setting is carried CONFIG, and the engine's
+    BTS seam (:func:`fabulist.state.bts.user_as_actor`) reads through here —
+    reading own rows made a branch flip User-as-Actor OFF while the source chat
+    was ON.
     """
     enabled = False
-    for event in log.get_events(session_id):
+    for event in log.get_chain_events(session_id):
         if event.type != "system":
             continue
         if event.payload.get("event") != CHAT_USER_AS_ACTOR_EVENT:
@@ -337,8 +350,9 @@ def resolve_user_as_actor(log: "EventLog", session_id: str) -> bool:
 
     Public seam for the cast/presence lane: when ON the player is an actor — a
     first-class presence AND a lane candidate — and OFF keeps today's read-side
-    subtraction. Folds this session's ``chat_user_as_actor`` writes latest-wins
-    and defaults to ``False`` (the plan's default OFF), so a session that never
+    subtraction. Folds the CHAIN's ``chat_user_as_actor`` writes latest-wins
+    (a branch inherits the value in force at its cut, issue #86) and defaults to
+    ``False`` (the plan's default OFF), so a session that never
     wrote a row, a blank ``session_id`` and a legacy log all read as OFF.
 
     This router never imports the presence/cast modules on purpose: the event
@@ -400,9 +414,14 @@ def _recall_config(log: "EventLog", session_id: str) -> RecallConfig:
     carrying only ``k`` keeps the remaining knobs from the prior fold rather
     than resetting them. The ``enabled`` key (if present) is ignored here — the
     canonical toggle lives on ``chat_memory`` (see :func:`resolve_recall_config`).
+
+    Chain-walked (issue #86): ``chat_memory_config`` is carried CONFIG, so a
+    branch folds its parent's knobs (at/below the cut) under its own rows — the
+    own-row read returned the defaults for every knob last written before the
+    fork.
     """
     config = RecallConfig()
-    for event in log.get_events(session_id):
+    for event in log.get_chain_events(session_id):
         if event.type != "system":
             continue
         if event.payload.get("event") != CHAT_MEMORY_CONFIG_EVENT:
@@ -427,9 +446,13 @@ def _persona_id(log: "EventLog", session_id: str) -> str | None:
     A row carrying a non-``str`` ``persona_id`` (e.g. an explicit ``null``
     clearing the assignment) folds to ``None``. Reads only — this router never
     writes persona events.
+
+    Chain-walked (issue #86): a branch must echo the persona its parent held at
+    the cut, the value the narrator and ``_summarize`` already resolve; an
+    own-row read made a fresh branch report ``persona_id: None``.
     """
     persona_id: str | None = None
-    for event in log.get_events(session_id):
+    for event in log.get_chain_events(session_id):
         if event.type != "system":
             continue
         if event.payload.get("event") != CHAT_PERSONA_EVENT:
@@ -447,6 +470,11 @@ def _chat_config_view(log: "EventLog", session_id: str) -> dict:
     Shared so a PATCH reply is byte-identical to the next GET: the pane applies
     the engine's echo instead of re-reading, and the two surfaces cannot drift
     apart the way two hand-written dicts would.
+
+    Every key is session-constant config, so every fold is chain-walked (issue
+    #86): a branch echoes the settings its parent held at the cut. The one
+    exception in this module is ``chat_agent_debug`` (own-row by contract; see
+    :func:`_agent_debug`).
     """
     dispatch = resolve_npc_dispatch(log, session_id)
     return {

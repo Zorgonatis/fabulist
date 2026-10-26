@@ -1547,7 +1547,9 @@ def user_as_actor(log: Any, session_id: str) -> bool:
     this is the in-engine READ seam, imported lazily for the two reasons the
     module documents for every cross-layer read here: no import cycle
     (``api.chat_config_api`` pulls fastapi + the API package) and one truthful
-    source instead of a second fold that could disagree. An unreadable setting
+    source instead of a second fold that could disagree. That fold is
+    fork-aware (issue #86), so a branch keeps the value in force at its cut
+    instead of flipping OFF. An unreadable setting
     (or a router that is not loaded at all) reads OFF — impersonation must never
     be enabled by an accident of wiring.
     """

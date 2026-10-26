@@ -235,7 +235,12 @@ async def import_world_info(
 
 @worldinfo_router.get("/api/sessions/{session_id}/worldinfo")
 async def list_world_info(session_id: str, request: Request) -> dict:
-    """LEGACY: summarize a session's imported books (counts; content stays in the log)."""
+    """LEGACY: summarize a session's imported books (counts; content stays in the log).
+
+    Fork-aware (issue #86): ``world_info`` imports are carried config, so a
+    branch lists the imports its parent held at the cut. The drawer used to
+    read own rows only and showed an empty legacy section on every branch.
+    """
     log = _log_for(request)
     if not _session_exists(log, session_id):
         raise HTTPException(status_code=404, detail="unknown session")
@@ -244,7 +249,7 @@ async def list_world_info(session_id: str, request: Request) -> dict:
             "seq": e.seq,
             "entry_count": e.payload.get("entry_count", 0),
         }
-        for e in log.get_events(session_id)
+        for e in log.get_chain_events(session_id)
         if e.type == "system" and e.payload.get("event") == "world_info"
     ]
     return {"session_id": session_id, "imports": imports}

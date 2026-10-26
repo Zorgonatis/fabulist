@@ -515,9 +515,13 @@ def _card_seed_event(log: "EventLog", session_id: str):
     ``card_asset`` id for the card image. A world-materialized chat's FIRST
     card event is a CAST member (issue #51), which never owns the opening —
     :func:`_opening_cycle` resolves those sessions from ``world_ref`` first.
+
+    Fork-aware (issue #86): the seed sits at creation, i.e. BELOW any fork cut,
+    so a branch reaches it only through the chain — an own-row read made every
+    card chat's branch render no Opening block at all.
     """
 
-    for event in log.get_events(session_id):
+    for event in log.get_chain_events(session_id):
         if event.type == "system" and isinstance(event.payload.get("card"), dict):
             return event
     return None
@@ -676,7 +680,10 @@ async def opening_route(session_id: str, request: Request) -> dict:
     """
 
     log = _log_for(request)
-    events = log.get_events(session_id)
+    # Fork-aware read (issue #86): the card seed, the world_ref snapshot and the
+    # ``greeting_selected`` index are all inherited from below a branch's cut;
+    # own rows alone hid the Opening block on every branch.
+    events = log.get_chain_events(session_id)
     if not events:
         raise HTTPException(status_code=404, detail="unknown session")
     greetings, card, asset = _opening_cycle(log, session_id, events)
@@ -738,7 +745,10 @@ async def select_greeting_route(
     """
 
     log = _log_for(request)
-    events = log.get_events(session_id)
+    # Same fork-aware read as the GET (issue #86): the cycle the swipe is
+    # validated against is the INHERITED one on a branch. An own-row read saw an
+    # empty cycle and let an out-of-range index through.
+    events = log.get_chain_events(session_id)
     if not events:
         raise HTTPException(status_code=404, detail="unknown session")
     if body.index < 0:
