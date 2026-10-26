@@ -58,6 +58,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from ..connections import build_request, get_client
+from ..connections.client import call_with_retry_sync
 from ..graph.clock import DATE_FORMAT
 from ..theme.tokens import CURATED_PALETTE
 
@@ -580,7 +581,12 @@ class LLMExtractor:
         # override per-call regardless of the connection default.
         request = {**request, "temperature": 0.1}
         started = time.monotonic()
-        response = client.chat.completions.create(**request)
+        # Issue #82: a PROVIDER-class failure retries here, at the one-shot
+        # client seam — this call bypasses RegistryModelCaller, so nothing else
+        # would retry it.
+        response = call_with_retry_sync(
+            lambda: client.chat.completions.create(**request), stage="extraction"
+        )
         self._record_usage(response, request, started, messages)
         return response.choices[0].message.content or ""
 
@@ -598,8 +604,13 @@ class LLMExtractor:
         request = build_request("extractor", messages, registry=self._registry)
         request = {**request, "temperature": 0.1}
         started = time.monotonic()
+        # Issue #82: the retry runs INSIDE the worker thread (its backoff must
+        # never block the event loop).
         response = await asyncio.to_thread(
-            lambda: client.chat.completions.create(**request)
+            lambda: call_with_retry_sync(
+                lambda: client.chat.completions.create(**request),
+                stage="extraction",
+            )
         )
         self._record_usage(response, request, started, messages)
         return response.choices[0].message.content or ""
@@ -839,7 +850,9 @@ class LLMExtractor:
         )
         request = {**request, "temperature": 0.1}
         started = time.monotonic()
-        response = client.chat.completions.create(**request)
+        response = call_with_retry_sync(
+            lambda: client.chat.completions.create(**request), stage="extraction"
+        )
         self._record_usage(response, request, started, messages)
         return self._structured_completion(response)
 
@@ -855,7 +868,10 @@ class LLMExtractor:
         request = {**request, "temperature": 0.1}
         started = time.monotonic()
         response = await asyncio.to_thread(
-            lambda: client.chat.completions.create(**request)
+            lambda: call_with_retry_sync(
+                lambda: client.chat.completions.create(**request),
+                stage="extraction",
+            )
         )
         self._record_usage(response, request, started, messages)
         return self._structured_completion(response)

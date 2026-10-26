@@ -30,13 +30,15 @@ is the one named, extensible set (one line to extend), seeded with the classes
 the code already treated as non-retryable. Extending it must never be an inline
 ``if`` at a call site.
 
-On exhaustion the mechanism raises :class:`RetryExhausted` (carrying every
-attempt's status and a TRUNCATED raw payload, so a deterministic failure is
-diagnosable from the log) FROM the last failure — the classification chain walk
-in :mod:`fabulist.graph.provider_errors` still finds the provider status through
-the ``__cause__``. The per-stage EXHAUSTION POLICY is unchanged and stays with
-the stage: lanes degrade and the turn commits; the planner and the narrator
-abort the turn pre-commit. This module generalizes the retry, never the policy.
+On exhaustion the LAST failure is re-raised UNCHANGED — same exception object,
+same ``__cause__`` chain, so every existing ``except`` clause and every pin that
+reads a provider error's own attributes still sees exactly what it saw before —
+with the attempts attached (``retry_records``: one
+:class:`AttemptRecord` per failed attempt, each carrying the status and a
+TRUNCATED raw payload, so a deterministic failure is diagnosable from the log).
+The per-stage EXHAUSTION POLICY is unchanged and stays with the stage: lanes
+degrade and the turn commits; the planner and the narrator abort the turn
+pre-commit. This module generalizes the retry, never the policy.
 
 Layering note: this module imports the standard library only. ``connections`` is
 the LOWER layer (``graph.context_monitor`` imports ``connections.client``), so
@@ -65,8 +67,9 @@ __all__ = [
     "PROVIDER_CLASS_MARKERS",
     "RETRYABLE_CLASSES",
     "RETRY_BACKOFF_SECONDS",
+    "RECORDS_ATTR",
+    "STAGE_ATTR",
     "AttemptRecord",
-    "RetryExhausted",
     "StructuredParseFailure",
     "UNRECOVERABLE",
     "UNRECOVERABLE_CLASSES",
@@ -75,6 +78,7 @@ __all__ = [
     "failure_status",
     "is_provider_failure",
     "owned_classes",
+    "records_of",
     "run_with_retry",
     "run_with_retry_sync",
 ]
@@ -204,24 +208,33 @@ class AttemptRecord:
         return row
 
 
-class RetryExhausted(RuntimeError):
-    """Every attempt of one model call failed (``records`` explains each one).
+#: Attribute an exhausted failure carries its attempt records on. The LAST
+#: failure is re-raised UNCHANGED (identity, type and ``__cause__`` chain all
+#: preserved), so the only way to hand the stage its diagnostics is to attach
+#: them to the exception the stage is already catching.
+RECORDS_ATTR = "retry_records"
 
-    Raised FROM the last failure, so the provider status the abort/containment
-    rules read is still one ``__cause__`` hop away. ``str()`` is the last
-    failure's own text, which keeps every existing ``"error"`` row byte-identical.
+#: Attribute naming the stage the attempts were made for (``"Planning"``, ...).
+STAGE_ATTR = "retry_stage"
+
+
+def records_of(exc: BaseException) -> tuple[AttemptRecord, ...]:
+    """The attempt records an exhausted failure carries (empty when it retried none)."""
+    records = getattr(exc, RECORDS_ATTR, ())
+    return tuple(records) if isinstance(records, tuple) else ()
+
+
+def _attach(exc: BaseException, records: list[AttemptRecord], stage: str) -> None:
+    """Attach the attempt records to ``exc`` (best effort — never masks the failure).
+
+    A builtin exception that refuses attributes (a slotted class) simply carries
+    no records; the per-attempt warnings are still in the log.
     """
-
-    def __init__(
-        self, stage: str, records: "list[AttemptRecord]", last: BaseException
-    ) -> None:
-        super().__init__(str(last))
-        #: The stage label the attempts were made for (``"Planning"``, ...).
-        self.stage = stage
-        #: One record per failed attempt, in attempt order.
-        self.records = tuple(records)
-        #: The final failure, already the exception's ``__cause__``.
-        self.last_error = last
+    try:
+        setattr(exc, RECORDS_ATTR, tuple(records))
+        setattr(exc, STAGE_ATTR, stage)
+    except Exception:  # noqa: BLE001 - diagnostics never replace the failure
+        logger.debug("could not attach retry records", exc_info=True)
 
 
 # -- classification ----------------------------------------------------------
@@ -434,9 +447,10 @@ async def run_with_retry(
     unrecoverable, a shape/quality failure, a bug) is re-raised untouched, so
     every existing containment path keeps its exception identity.
 
-    On exhaustion :class:`RetryExhausted` is raised from the last failure with
-    one :class:`AttemptRecord` per failed attempt. The STAGE still owns what
-    happens next: degrade, or abort the turn.
+    On exhaustion the LAST failure is re-raised unchanged, carrying one
+    :class:`AttemptRecord` per failed attempt (:attr:`RECORDS_ATTR`, read with
+    :func:`records_of`). The STAGE still owns what happens next: degrade, or
+    abort the turn.
     """
     attempts = max(1, int(max_attempts))
     if attempts == 1:
@@ -458,7 +472,8 @@ async def run_with_retry(
             records.append(record)
             _report(stage, record, exc, attempts, on_attempt_failure)
             if number >= attempts:
-                raise RetryExhausted(stage, records, exc) from exc
+                _attach(exc, records, stage)
+                raise
             await asyncio.sleep(backoff_s)
     raise AssertionError("unreachable: the retry loop always returns or raises")
 
@@ -495,6 +510,7 @@ def run_with_retry_sync(
             records.append(record)
             _report(stage, record, exc, attempts, on_attempt_failure)
             if number >= attempts:
-                raise RetryExhausted(stage, records, exc) from exc
+                _attach(exc, records, stage)
+                raise
             time.sleep(backoff_s)
     raise AssertionError("unreachable: the retry loop always returns or raises")

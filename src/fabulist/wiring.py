@@ -30,6 +30,7 @@ from fabulist.connections.client import (
     ModelCallDeadlineExceeded,
     build_request,
     call_deadline_s,
+    call_with_retry,
     merge_sampling,
     provider_request_error,
 )
@@ -498,11 +499,18 @@ class RegistryModelCaller:
         if connection.streaming is False:
             # Streaming OFF (W9.25): one request, then the SAME frame protocol.
             req["stream"] = False
-            response = await _open_call(
-                client.chat.completions.create(**req),
-                deadline=deadline,
-                slot=slot,
-                deadline_s=deadline_s,
+            # Issue #82: the provider-class retry lives at THIS seam, so every
+            # caller of this one transport rides it — loop or one-shot. The
+            # deadline is fixed at the call's start, so all attempts share one
+            # wall-clock budget (a retry never doubles a 900s bound).
+            response = await call_with_retry(
+                lambda: _open_call(
+                    client.chat.completions.create(**req),
+                    deadline=deadline,
+                    slot=slot,
+                    deadline_s=deadline_s,
+                ),
+                stage=f"model call ({slot})",
             )
             usage = getattr(response, "usage", None)
             choice = response.choices[0] if getattr(response, "choices", None) else None
@@ -550,11 +558,17 @@ class RegistryModelCaller:
             #: instead of guessing from position (W9.24 §3.4's read-tools loop; a
             #: single-tool customer reads the same name it used to infer).
             tool_names: dict[object, str] = {}
-            response = await _open_call(
-                client.chat.completions.create(**req),
-                deadline=deadline,
-                slot=slot,
-                deadline_s=deadline_s,
+            # Issue #82: same provider-class retry as the non-streaming branch —
+            # it covers the OPEN only; a stream that fails mid-flight is already
+            # half-consumed and cannot be replayed.
+            response = await call_with_retry(
+                lambda: _open_call(
+                    client.chat.completions.create(**req),
+                    deadline=deadline,
+                    slot=slot,
+                    deadline_s=deadline_s,
+                ),
+                stage=f"model call ({slot})",
             )
             # The stream itself is bounded from here on: see ``_DeadlineStream``.
             async for chunk in _DeadlineStream(

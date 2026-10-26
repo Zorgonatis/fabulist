@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from openai import OpenAI
 
+from .. import retry as _retry
 from .capabilities import thinking_disable_payload
 from .registry import (
     Connection,
@@ -50,6 +52,8 @@ __all__ = [
     "SystemMessageOrderError",
     "build_request",
     "call_deadline_s",
+    "call_with_retry",
+    "call_with_retry_sync",
     "configure",
     "deadline_message",
     "get_client",
@@ -476,6 +480,52 @@ def provider_request_error(exc: BaseException) -> ProviderRequestError | None:
     if code is None:
         return None
     return ProviderRequestError(code=code, status=status, text=_error_text(exc))
+
+
+#: The classes this seam retries: only what it can SEE. A malformed structured
+#: reply parses ABOVE the transport (the HTTP call succeeded), so it belongs to
+#: the seam that owns call+parse (``agents.loop.run_structured_call``), never here.
+_PROVIDER_CLASSES: frozenset[str] = frozenset({_retry.PROVIDER})
+
+
+async def call_with_retry(
+    attempt: Callable[[], Awaitable[Any]], *, stage: str = "model call"
+) -> Any:
+    """Perform ONE provider request under the bounded provider-class retry (#82).
+
+    This is the caller seam: every model call through an API connection passes
+    it — the narrator and OOC turn, the planner and its seed loop, the NPC and
+    proposal lanes, BTS, the summarizer, the captioner, the assistants, the
+    critic, the imagegen caller and the extractor's one-shot clients. A
+    PROVIDER-class failure (network, 5xx, 429, 400 including the content-filtered
+    1301 per the owner's #76 ruling) is retried up to DEFAULT_MAX_ATTEMPTS; the
+    classes only this layer can see are retried here, and nothing else.
+
+    ``attempt`` is a FACTORY, not a coroutine: each attempt must create the
+    request afresh (a coroutine cannot be awaited twice), so an attempt that is
+    never started leaves nothing behind.
+
+    An OUTER retry mechanism that already owns the provider class (the lane loop,
+    which retries provider failures itself) suppresses this one — the attempt
+    runs exactly once and the outer loop owns the count, so one provider failure
+    costs three calls, not nine.
+    """
+    if _retry.PROVIDER in _retry.owned_classes():
+        return await attempt()
+    return await _retry.run_with_retry(attempt, stage=stage, classes=_PROVIDER_CLASSES)
+
+
+def call_with_retry_sync(
+    attempt: Callable[[], Any], *, stage: str = "model call"
+) -> Any:
+    """The blocking twin of :func:`call_with_retry` (the sync one-shot seams).
+
+    The extractor drives the synchronous ``openai`` client on a worker thread, so
+    backing off here never blocks the event loop. Same classes, same scope rule.
+    """
+    if _retry.PROVIDER in _retry.owned_classes():
+        return attempt()
+    return _retry.run_with_retry_sync(attempt, stage=stage, classes=_PROVIDER_CLASSES)
 
 
 def merge_sampling(entry: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
