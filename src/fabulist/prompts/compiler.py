@@ -50,6 +50,7 @@ from .parts import (
     DEFAULT_DIRECTIVES,
     ENGINE_CONTEXT_DIRECTIVE_ID,
     SYSTEM_FRAMING,
+    SYSTEM_FRAMING_HEAD,
     Directive,
 )
 from .surfaces import (
@@ -295,7 +296,7 @@ def render_system_prompt(
     toggles: Mapping[str, bool] | None = None,
     *,
     library_doc: str | None = None,
-    framing: str = SYSTEM_FRAMING,
+    framing: str | None = None,
     budget: int | None = None,
     tokenizer: TokenizerFn | None = None,
     surfaces: Mapping[str, object] | None = None,
@@ -317,6 +318,13 @@ def render_system_prompt(
     ``directives`` (preset-carried base catalog): ``None`` — the default —
     starts from the code catalog, byte-identical to the pre-preset path; a
     non-empty list replaces it in stored order (:func:`resolve_directives`).
+
+    ``framing`` defaults to ``None`` (issue #77): the effective framing then
+    derives from ``anti_injection`` — ON gets the full :data:`SYSTEM_FRAMING`
+    (both paragraphs, byte-identical to before the gate), OFF gets
+    :data:`SYSTEM_FRAMING_HEAD` (the Content Engine opening only; the two-bound
+    paragraph describes a wrapper the OFF prompt does not carry). An explicit
+    ``framing`` string still wins, for callers that pin their own header.
 
     ``anti_injection`` (issue #39): the ONE render gate for the ``## Engine
     context`` clause (``ENGINE_CONTEXT_DIRECTIVE_ID``). ``False`` — the shipped
@@ -357,9 +365,16 @@ def render_system_prompt(
         for d in resolved
         if d.enabled
     ]
+    effective_framing = (
+        framing
+        if framing is not None
+        else (SYSTEM_FRAMING if anti_injection else SYSTEM_FRAMING_HEAD)
+    )
     effective_budget = _budget_from_config(directive_config, budget)
-    enabled = _trim_to_budget(enabled, framing, effective_budget, tokenizer)
-    return _render_system(framing, enabled)
+    enabled = _trim_to_budget(
+        enabled, effective_framing, effective_budget, tokenizer
+    )
+    return _render_system(effective_framing, enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +543,7 @@ def compile(  # noqa: A001 - the compiler is the public entry point
     budget: int | None = None,
     tokenizer: TokenizerFn | None = None,
     library_doc: str | None = None,
-    framing: str = SYSTEM_FRAMING,
+    framing: str | None = None,
     recalled: str | None = None,
     notice: str | None = None,
     lane: str | None = None,
@@ -596,7 +611,7 @@ def compile_with_boundary(  # noqa: A001 - sibling of the public entry point
     budget: int | None = None,
     tokenizer: TokenizerFn | None = None,
     library_doc: str | None = None,
-    framing: str = SYSTEM_FRAMING,
+    framing: str | None = None,
     recalled: str | None = None,
     notice: str | None = None,
     lane: str | None = None,
@@ -647,6 +662,11 @@ def compile_with_boundary(  # noqa: A001 - sibling of the public entry point
     and omits the ``## Engine context`` clause while leaving the per-turn
     ``<preset_runtime>`` envelope's carrier untouched (the envelope INJECTION is
     not gated by this toggle, issue #44).
+
+    ``framing`` (keyword-only) defaults to ``None``: the effective header then
+    derives from ``anti_injection`` (:data:`SYSTEM_FRAMING` when ON,
+    :data:`SYSTEM_FRAMING_HEAD` when OFF, issue #77). An explicit string still
+    wins.
 
     ``boundary_out`` (optional dict) receives BOTH assembly boundaries (§5.1):
     ``history_start`` (the stable-prefix/history splice point) and ``def_end``

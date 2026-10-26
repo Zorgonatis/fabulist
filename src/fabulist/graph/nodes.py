@@ -4543,6 +4543,20 @@ class NpcLaneFanout:
             return []
         shared = self.build_messages(state)
         profile = self.request_profile_fn() if self.request_profile_fn else None
+        # Issue #77: the SAME persisted setting the narrator's wrapper read this
+        # build decides whether the lane tail is wrapped in <preset_runtime>.
+        # Read here (loop thread, one log read) and threaded down the payload;
+        # a read failure keeps the shipped default and never breaks a turn.
+        from fabulist.state.settings import (
+            ANTI_INJECTION_DEFAULT,
+            anti_injection_enabled,
+        )
+
+        anti_injection = ANTI_INJECTION_DEFAULT
+        try:
+            anti_injection = anti_injection_enabled(self.log)
+        except Exception:  # noqa: BLE001 - the setting must never break a turn
+            pass
         self._record_plan(state, rows)
         return [
             Send(
@@ -4556,6 +4570,10 @@ class NpcLaneFanout:
                     "shared": shared,
                     "max_lanes": self.pool_size,
                     "profile": profile,
+                    # Issue #77: the folded Anti Injection setting rides the
+                    # payload so the lane tail's <preset_runtime> wrap matches
+                    # the narrator's wrapper state for THIS build.
+                    "anti_injection": anti_injection,
                 },
             )
             for row in rows
@@ -4691,12 +4709,20 @@ class NpcLaneFanout:
         # tail content appended after the narrator's own runtime blocks,
         # never a prefix rewrite (ADR-005). Covers BOTH tail sources — the
         # code default and the preset ``npc`` flow.
+        #
+        # Issue #77 (owner note on the issue): this lane-tail wrap is INSTRUCTION
+        # framing, so it gates on the same persisted Anti Injection setting as
+        # the narrator's guard + bounds. With the toggle OFF the tail is still
+        # appended, in the same order and with the same lane CONTENT framing
+        # (<scene_digest>, <facts>, <user_message>); only the <preset_runtime>
+        # wrapper is dropped, matching the unwrapped narrator prompt.
         from fabulist.prompts.wrapper import wrap_runtime
 
-        tail = [
-            {**message, "content": wrap_runtime(message.get("content"))}
-            for message in tail
-        ]
+        if payload.get("anti_injection", True):
+            tail = [
+                {**message, "content": wrap_runtime(message.get("content"))}
+                for message in tail
+            ]
         messages = [*shared, *tail]
         content, tool_args, finish_reason = await _drain_lane(
             self.caller, messages, payload.get("profile")

@@ -1795,7 +1795,16 @@ def make_narrator_message_builder(
             messages, (def_end, envelope_at) = fold_system_prefix(
                 messages, (def_end, envelope_at)
             )
-        messages = wrap_preset_messages(messages, def_end, envelope_at=envelope_at)
+        # Issue #77: the guard line + both bounds are INSTRUCTION framing, so
+        # they gate on the same folded Anti Injection setting as the clause and
+        # the framing paragraph. OFF = the same messages in the same order, with
+        # no guard and no tags (the player's message bare and untagged).
+        messages = wrap_preset_messages(
+            messages,
+            def_end,
+            envelope_at=envelope_at,
+            anti_injection=anti_injection,
+        )
         # Belt + braces: the envelope is never in player scope (provenance) and
         # never a non-first system message (a hard 500 on a stock template).
         assert_envelope_not_in_user_scope(messages, engine_tail)
@@ -1827,7 +1836,8 @@ def narrator_system_prompt(*, anti_injection: bool = False) -> str:
 
     ``anti_injection`` (issue #39) is the persisted Anti Injection setting: the
     opening is a built prompt like any turn, so it obeys the same default (OFF =
-    no ``## Engine context`` clause). The one caller that owns a log
+    no ``## Engine context`` clause, and no two-bound framing paragraph — issue
+    #77; the framing's first paragraph always renders). The one caller that owns a log
     (:func:`fabulist.api.planner_api._opening_messages`) passes the folded
     value; the default here is the shipped default, never the ON state.
     """

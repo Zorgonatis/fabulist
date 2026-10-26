@@ -55,6 +55,18 @@ ENVELOPE_MARKERS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _anti_injection_on(monkeypatch: pytest.MonkeyPatch):
+    """Issue #77: these pins describe the ON-state prompt bytes.
+
+    The guard line, both bounds and the full framing ARE the ON state; the
+    gate's OFF state has its own pins in ``test_anti_injection_toggle.py``.
+    Flipping the shipped default keeps the REAL persisted read in charge (no
+    seam is stubbed) — a fresh log then folds ON.
+    """
+    monkeypatch.setattr("fabulist.state.settings.ANTI_INJECTION_DEFAULT", True)
+
+
 def run(coro):
     return asyncio.run(coro)
 
@@ -626,12 +638,18 @@ def test_the_narrate_node_parses_the_whole_reply(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 8. the anti-injection toggle gates the CLAUSE, never the envelope
+# 8. the anti-injection toggle gates INSTRUCTION framing, never the envelope
 # ---------------------------------------------------------------------------
 
 
-def test_the_toggle_gates_the_clause_not_the_envelope(tmp_path: Path):
-    """#39 stays as ruled: the clause render-gates; the injection does not."""
+def test_the_toggle_gates_instruction_framing_not_the_envelope(tmp_path: Path):
+    """Issue #77: guard + bounds + clause render-gate; the ENVELOPE does not.
+
+    The envelope MESSAGE is still injected immediately before the ask in both
+    states — it is the toggle's target that narrowed to instruction framing
+    (guard line, both bounds, the two-bound framing paragraph, the clause).
+    Under OFF the same engine blocks arrive unwrapped.
+    """
     from fabulist.api.settings import SETTINGS_SESSION_ID
     from fabulist.state.settings import (
         ANTI_INJECTION_FLAG,
@@ -641,25 +659,36 @@ def test_the_toggle_gates_the_clause_not_the_envelope(tmp_path: Path):
     log, sid = _seeded_log(tmp_path)
     try:
         builder = _builder(log)
-        off = builder(_turn_state(sid))
+        on = builder(_turn_state(sid))  # module pin: the ON state
 
         log.append_event(
             SETTINGS_SESSION_ID,
             "system",
             "user",
-            {"event": SETTINGS_EVENT, "features": {ANTI_INJECTION_FLAG: True}},
+            {"event": SETTINGS_EVENT, "features": {ANTI_INJECTION_FLAG: False}},
         )
-        on = builder(_turn_state(sid))
+        off = builder(_turn_state(sid))
 
-        # The clause differs; the ENVELOPE is identical and still present.
+        # Instruction framing is gone on the OFF prefix …
         assert "## Engine context" not in str(off[0]["content"])
+        assert GUARD_LINE not in str(off[0]["content"])
+        assert DEF_OPEN not in str(off[0]["content"])
+        # … and intact when ON.
         assert "## Engine context" in str(on[0]["content"])
+        assert str(on[0]["content"]).startswith(GUARD_LINE)
+        assert f"{DEF_OPEN}\n" in str(on[0]["content"])
+
+        # The ENVELOPE message — same role, same position, same blocks — is
+        # present in both states; only its wrapper tags gate.
         user_at_off, user_at_on = _final_user_index(off), _final_user_index(on)
-        assert _payload(str(off[user_at_off - 1]["content"])) == _payload(
-            str(on[user_at_on - 1]["content"])
-        )
-        assert off[user_at_off - 1]["role"] == on[user_at_on - 1]["role"] == (
-            "assistant"
-        )
+        assert off[user_at_off - 1]["role"] == "assistant"
+        assert on[user_at_on - 1]["role"] == "assistant"
+        off_tail = str(off[user_at_off - 1]["content"])
+        on_tail = str(on[user_at_on - 1]["content"])
+        assert RUNTIME_OPEN not in off_tail and RUNTIME_CLOSE not in off_tail
+        assert off_tail.startswith(f"{RUNTIME_OPEN}\n") is False
+        assert _payload(on_tail) == off_tail
+        # The engine blocks themselves survive in both states.
+        assert "<engine_state>" in off_tail
     finally:
         log.close()

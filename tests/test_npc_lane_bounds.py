@@ -61,19 +61,28 @@ class RecordingLaneCaller:
         yield {"type": "content", "delta": json.dumps(reply)}
 
 
-def _run_lane(log, *, shared, lane_messages=None):
-    """Drive ONE lane the way the ``Send`` fan-out does; return the served list."""
+def _run_lane(log, *, shared, lane_messages=None, anti_injection=None):
+    """Drive ONE lane the way the ``Send`` fan-out does; return the served list.
+
+    ``anti_injection`` (issue #77) is only put on the payload when the caller
+    passes it; ``None`` keeps the pre-#77 payload shape (the ``_request`` seam
+    then defaults to the wrapper-on behaviour these legacy pins describe).
+    """
     fanout = make_npc_lanes_node(
         log=log,
         build_messages=lambda state: [],
         caller=RecordingLaneCaller(),
         lane_messages=lane_messages,
     )
-    update = asyncio.run(
-        fanout.lane(
-            {"session_id": SID, "member": dict(MEMBER), "shared": shared, "max_lanes": 2}
-        )
-    )
+    payload = {
+        "session_id": SID,
+        "member": dict(MEMBER),
+        "shared": shared,
+        "max_lanes": 2,
+    }
+    if anti_injection is not None:
+        payload["anti_injection"] = anti_injection
+    update = asyncio.run(fanout.lane(payload))
     assert update["lane_meta"]["ran"] == 1  # the lane answered, contract intact
     return fanout.caller.calls[0]["messages"]
 
@@ -155,6 +164,48 @@ def test_multipart_lane_tail_content_passes_through_unwrapped(log):
         {"type": "text", "text": "ask"},
         {"type": "image_url"},
     ]
+
+
+def test_lane_tail_is_unwrapped_when_anti_injection_is_off(log):
+    """Issue #77 owner note: the lane tail's OWN bound gates on the setting.
+
+    The lane CONTENT framing stays in both states (the brief, the JSON ask and
+    the <scene_digest>/<facts>/<user_message> tags inside them); only the
+    <preset_runtime> wrapper around the tail is instruction framing and gates.
+    """
+    messages = _run_lane(
+        log, shared=[dict(m) for m in SHARED], anti_injection=False
+    )
+
+    assert messages[: len(SHARED)] == SHARED  # the shared prefix is untouched
+    tail = messages[len(SHARED) :]
+    assert len(tail) == 2  # the private lane brief + the JSON ask
+    for message in tail:
+        assert not _runtime_wrapped(message["content"]), message
+        assert RUNTIME_OPEN not in str(message["content"])
+        assert RUNTIME_CLOSE not in str(message["content"])
+    # Same roles, same content framing, same order as the wrapped state.
+    assert tail[0]["role"] == ENVELOPE_ROLE and tail[1]["role"] == "user"
+    assert "PRIVATE" in str(tail[0]["content"])
+    assert "engine-dispatched pass" in str(tail[1]["content"])
+
+
+def test_preset_flow_tail_is_unwrapped_at_the_same_seam_when_off(log):
+    unwrapped = [
+        {"role": "system", "content": "AUTHORED lane brief"},
+        {"role": "user", "content": "AUTHORED ask"},
+    ]
+    messages = _run_lane(
+        log,
+        shared=[dict(m) for m in SHARED],
+        lane_messages=lambda state, context: [dict(m) for m in unwrapped],
+        anti_injection=False,
+    )
+
+    assert messages[: len(SHARED)] == SHARED
+    for message in messages[len(SHARED) :]:
+        assert not _runtime_wrapped(message["content"])
+        assert "AUTHORED" in message["content"]
 
 
 def test_the_guard_line_covers_the_lane_tail_bound():

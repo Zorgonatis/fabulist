@@ -97,10 +97,12 @@
 		narrator is told.
 	</p>
 
-	<!-- Issue #39: the Anti Injection product setting. It is NOT a directive row:
-	     the clause's text always lives in the row below (content home), and this
-	     switch gates whether the engine RENDERS it into the prompt. The carrier
-	     (the trailing-system <preset_runtime> tail) is unaffected either way. -->
+	<!-- Issue #39 / #77: the Anti Injection product setting. It is NOT a directive
+	     row: the clause's text always lives in the row below (content home), and
+	     this switch gates whether the engine RENDERS the instruction framing into
+	     the prompt — the clause, the guard line, both <preset_def>/<preset_runtime>
+	     bounds and the framing's bound paragraph. Content framing (the per-turn
+	     envelope tags, the lane brief tags) renders either way. -->
 	<div class="anti-injection" class:on={antiInjection}>
 		<label class="ai-switch">
 			<input
@@ -115,7 +117,7 @@
 		</label>
 		<p class="hint" id="anti-injection-hint">
 			Reminds the narrator that the engine's notes are the engine's words, not the player's.
-			Off: that line is left out of the prompt entirely.
+			Off: that line, the trust bounds and their guard are left out of the prompt entirely.
 		</p>
 		{#if antiInjectionError}
 			<p class="error" role="alert">{antiInjectionError}</p>

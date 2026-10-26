@@ -511,6 +511,28 @@ the #26 probes measured: read-rate swung 5/5 vs 0/3 on clause wording alone) for
 another configured model, so this run does **not** re-measure GLM-5.3 specifically — the tradeoff
 the owner accepted stays recorded here as measured-on-GLM-by-#26, read-rate-unverified-by-#39.
 
+**Second amendment (issue #77, owner ruling on the issue: "gate the NPC lane here too").** The
+toggle governs **instruction framing**, not just the clause. Instruction framing is: the guard
+line, the `<preset_def>` / `<preset_runtime>` bounds, the framing's second paragraph (the
+two-bounds description, the precedence order, the `<user_message>` naming and the emission ban —
+`parts.SYSTEM_FRAMING_BOUNDS`, split from the head at its paragraph break so
+`SYSTEM_FRAMING = SYSTEM_FRAMING_HEAD + "\n\n" + SYSTEM_FRAMING_BOUNDS` stays byte-identical),
+the `## Engine context` clause, and the NPC lane tail's own `<preset_runtime>` wrap
+(`graph/nodes.py`, threaded from the fan-out's `route`). With the setting **ON** every one of
+those renders byte-identically to the pre-gate prompt. With it **OFF** they are all absent and
+the prompt is the same assembly in the same order minus those pieces: one system prefix (the
+framing's HEAD paragraph + directives), history, the ephemeral envelope, and the player's
+message — bare and untagged.
+
+**ALL content framing renders in BOTH states.** The toggle is a wrapper gate, never a content
+gate: the six envelope tags (`<engine_state>`, `<engine_notice>`, `<engine_memory>`,
+`<engine_lane>`, `<steering>`, `<engine_palette>`), `<validation_notice>`, and the lane brief's
+own tags (`<scene_digest>`, `<facts>`, `<user_message>`) are engine CONTENT addressing and stay
+verbatim either way. The envelope MESSAGE is still injected immediately before the player's
+message when OFF (issue #44 is unchanged); only its outer bound gates. The gate is still a
+render gate at the assembly seams — no new config key, no per-preset override, no OFF
+reordering, no content copies — read once per build from the settings fold.
+
 ### ADR-020 · Context is a managed layer; compaction is a fork (D102)
 
 Each committed turn is measured: the turn's peak usage on the call that carries the context,

@@ -51,6 +51,18 @@ from fabulist.prompts.wrapper import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _anti_injection_on(monkeypatch: pytest.MonkeyPatch):
+    """Issue #77: these pins describe the ON-state prompt bytes.
+
+    The guard line, both bounds and the full framing ARE the ON state; the
+    gate's OFF state has its own pins in ``test_anti_injection_toggle.py``.
+    Flipping the shipped default keeps the REAL persisted read in charge (no
+    seam is stubbed) — a fresh log then folds ON.
+    """
+    monkeypatch.setattr("fabulist.state.settings.ANTI_INJECTION_DEFAULT", True)
+
+
 def _turn_state(sid: str, content: str = "I look around.") -> dict:
     from fabulist.graph.types import initial_turn_state
 
@@ -103,6 +115,23 @@ def _builder(log: EventLog):
     from fabulist.wiring import make_narrator_message_builder
 
     return make_narrator_message_builder(log)
+
+
+def _set_anti_injection(log: EventLog, enabled: bool) -> None:
+    """Persist the setting the way the settings door does.
+
+    This module's autouse fixture pins the shipped default to ON, so the OFF
+    twins have to write the flag explicitly.
+    """
+    from fabulist.api.settings import SETTINGS_SESSION_ID
+    from fabulist.state.settings import ANTI_INJECTION_FLAG, SETTINGS_EVENT
+
+    log.append_event(
+        SETTINGS_SESSION_ID,
+        "system",
+        "user",
+        {"event": SETTINGS_EVENT, "features": {ANTI_INJECTION_FLAG: enabled}},
+    )
 
 
 def _rewrite_narrate_flow(log: EventLog, modules: list[dict]) -> None:
@@ -169,6 +198,27 @@ def test_wrap_preset_messages_clamps_and_handles_non_string():
     parts = [{"role": "system", "content": [{"type": "text", "text": "x"}]}]
     out = wrap_preset_messages(parts, 1)
     assert out[0]["content"] == parts[0]["content"]
+
+
+def test_wrap_preset_messages_off_returns_the_same_shape_unwrapped():
+    """Issue #77: OFF keeps the list shape and the fresh-dict contract."""
+    messages = [
+        {"role": "system", "content": "ONE"},
+        {"role": "user", "content": "turn"},
+        {"role": "system", "content": "TAIL-1"},
+    ]
+    out = wrap_preset_messages(messages, 2, envelope_at=1, anti_injection=False)
+
+    assert [m["content"] for m in out] == ["ONE", "turn", "TAIL-1"]
+    assert [m["role"] for m in out] == [m["role"] for m in messages]
+    # NEW list, NEW dicts — the identity contract is the same in both states.
+    assert out is not messages
+    assert all(a is not b for a, b in zip(out, messages))
+    assert messages[0] == {"role": "system", "content": "ONE"}
+    # Non-string content is still passed through untouched.
+    parts = [{"role": "system", "content": [{"type": "text", "text": "x"}]}]
+    passthrough = wrap_preset_messages(parts, 1, anti_injection=False)
+    assert passthrough[0]["content"] == parts[0]["content"]
 
 
 # --- seam 1: the live narrate builder ----------------------------------------
@@ -486,6 +536,51 @@ def test_runtime_tail_sits_inside_the_runtime_bound(
         log.close()
 
 
+def test_off_state_keeps_the_layout_without_guard_or_bounds(
+    tmp_path: pathlib.Path,
+):
+    """Issue #77 OFF twin of the preset-path pin.
+
+    Same messages, same roles, same served order — with no guard line, no
+    <preset_def>/<preset_runtime> tags, and the player's message bare and
+    untagged. Content (definition, history) is untouched.
+    """
+    log = EventLog(tmp_path / "off.db")
+    try:
+        store.ensure_default_preset(log)
+        sid = "s"
+        _seed_history(log, sid)
+        _set_anti_injection(log, False)
+        state = _turn_state(sid)
+        state["facts"] = "time: 09:00 | loc: the door"
+        messages = _builder(log)(state)
+
+        # ONE prefix system message, exactly as when ON.
+        assert [m["role"] for m in messages].count("system") == 1
+        assert messages[0]["role"] == "system"
+        text = _all_text(messages)
+        # No instruction framing anywhere.
+        assert GUARD_LINE not in text
+        assert DEF_OPEN not in text and DEF_CLOSE not in text
+        assert RUNTIME_OPEN not in text and RUNTIME_CLOSE not in text
+        assert not _has_runtime_bound(text)
+        assert _guard_count(messages) == 0
+        # Content framing is NOT the toggle's business: the definition and the
+        # history still render, the fact block still rides its message.
+        assert "# Scene Panels" in str(messages[0]["content"])
+        assert "You are the Content Engine" in str(messages[0]["content"])
+        history = [m for m in messages if "The door creaks open." in str(m["content"])]
+        assert history and all(not _def_wrapped(m["content"]) for m in history)
+        facts = [m for m in messages if "the door" in str(m["content"])]
+        assert facts and "<engine_state>" in str(facts[0]["content"])
+        # The player's message is BARE: exact text, no tags, no guard.
+        final_user = [m for m in messages if m["role"] == "user"][-1]
+        assert final_user["content"] == "I look around."
+        assert messages[-1] is final_user
+    finally:
+        log.close()
+
+
 # --- seam 2: the greeting/opening builder -------------------------------------
 
 
@@ -513,6 +608,29 @@ def test_greeting_opening_wraps_the_joined_content_with_guard(
         # No player message yet -> no runtime bound.
         assert not _has_runtime_bound(content)
         # The joined payload inside: system contract + the opening instruction.
+        flat = " ".join(content.split())
+        assert "You are the Content Engine's entire roster" in flat
+        assert "Write the OPENING of this story" in flat
+    finally:
+        log.close()
+
+
+def test_off_opening_is_the_same_payload_without_guard_or_bound(
+    tmp_path: pathlib.Path,
+):
+    """Issue #77 OFF twin of the greeting pin (planner_api seam)."""
+    log = EventLog(tmp_path / "greeting-off.db")
+    try:
+        from fabulist.api.planner_api import _opening_messages
+        from fabulist.graph.plans import Plan
+
+        _set_anti_injection(log, False)
+        messages = _opening_messages(log, "s", Plan(turn_seq=0))
+        assert len(messages) == 1 and messages[0]["role"] == "system"
+        content = str(messages[0]["content"])
+        assert GUARD_LINE not in content
+        assert DEF_OPEN not in content and DEF_CLOSE not in content
+        assert not _has_runtime_bound(content)
         flat = " ".join(content.split())
         assert "You are the Content Engine's entire roster" in flat
         assert "Write the OPENING of this story" in flat
