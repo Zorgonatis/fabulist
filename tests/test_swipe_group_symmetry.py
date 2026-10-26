@@ -243,13 +243,13 @@ def test_branches_siblings_keep_continuation_exclusions_both_ways(build_app):
 
             alt = (
                 await client.post(
-                    f"/api/sessions/{base}/fork", json={"at_seq": 1}
+                    f"/api/sessions/{base}/fork", json={"at_seq": 2}
                 )
             ).json()["session_id"]
             _reply(log, alt, "A different reply.")
             era = (
                 await client.post(
-                    f"/api/sessions/{base}/fork", json={"at_seq": 1}
+                    f"/api/sessions/{base}/fork", json={"at_seq": 2}
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)

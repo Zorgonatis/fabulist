@@ -87,6 +87,11 @@ REASON_FIRST_MESSAGE = "first_message"
 REASON_PIVOT_MISSING = "pivot_missing"
 REASON_NOT_A_MESSAGE = "not_a_message"
 
+#: ``409`` ``reason`` of ``POST .../fork`` when ``at_seq`` names no message
+#: (issue #74). A fork cut must land ON a user/narrative row: a stale or
+#: sibling-pivot seq would silently rewind the story to an earlier turn.
+REASON_CUT_NOT_A_MESSAGE = "cut_not_a_message"
+
 
 class ForkRequest(BaseModel):
     """Body of ``POST /api/sessions/{id}/fork``."""
@@ -147,6 +152,23 @@ def is_message_event(event: "Event") -> bool:
 def chain_messages(chain: Iterable["Event"]) -> list["Event"]:
     """The messages of a fork-aware chain, in chain (seq) order."""
     return [event for event in chain if is_message_event(event)]
+
+
+def names_a_message(log: "EventLog", session_id: str, at_seq: int) -> bool:
+    """Whether ``at_seq`` names a message (user/narrative row) on the chain.
+
+    Issue #74: the fork cut the client sends is the seq of the user message the
+    reader acted on. A stale pointer — or ``branchInfo.cut``, which is the
+    PREVIOUS fork's own ``base_seq`` — names a non-message row (a ``system``
+    bookkeeping row, a ``state-delta``, a ``roll``) and would fork the story
+    back to an earlier turn. Fork-aware read (MANDATORY): a branch's visible
+    messages are mostly INHERITED rows, so ``get_events`` would miss a cut on
+    an ancestor's row (the 4e59afd chain-read starvation bug, AGENTS.md).
+    """
+    return any(
+        event.seq == at_seq and is_message_event(event)
+        for event in log.get_chain_events(session_id)
+    )
 
 
 def delete_tail_cut(chain: Iterable["Event"], pivot: "Event") -> int | None:
@@ -330,6 +352,15 @@ async def fork_branch(
     """Fork ``session_id`` at ``at_seq``; returns the new branch id."""
     log = _log_for(request)
     _known(log, session_id)
+    # Issue #74: a fork cut must name a MESSAGE on the source's chain. A stale
+    # or sibling-pivot ``at_seq`` names a non-message row and would silently
+    # rewind the story; refuse it instead of forking an earlier point. This is
+    # /fork ONLY -- delete-tail legitimately cuts at the largest seq BELOW its
+    # pivot (a non-message seq) and must keep working.
+    if not names_a_message(log, session_id, body.at_seq):
+        raise HTTPException(
+            status_code=409, detail={"reason": REASON_CUT_NOT_A_MESSAGE}
+        )
     new_session_id = body.new_session_id or uuid.uuid4().hex
     try:
         log.fork_session(session_id, body.at_seq, new_session_id)

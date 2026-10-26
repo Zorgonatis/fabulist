@@ -1093,8 +1093,20 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	async function retry(): Promise<void> {
 		const id = get(sessionId);
 		if (!id || streaming || branchBusy) return;
-		const source = branchInfo?.parentId ?? id;
-		const at = branchInfo?.cut ?? lastUserSeq;
+		// Issue #74: a turn that ended in error left `lastUserSeq` one turn stale.
+		// `send()` never updates it (only a settled/committed turn does) and a
+		// failed turn returns without a refresh, so the pointer still names the
+		// PREVIOUS turn's user message. Re-read the projection first (the existing
+		// refresh path `recoverFromError` already uses) so the fork cuts at the
+		// message the reader actually acted on, never 85 events early.
+		if (get(connection) === 'error') {
+			await refreshTranscript();
+		}
+		// The CURRENT session always owns the message acted on. `branchInfo`
+		// describes a stored SIBLING pivot (the previous fork's own base_seq), so
+		// forking the parent at that cut rewinds the story to an earlier turn.
+		const source = id;
+		const at = lastUserSeq;
 		if (at === null) return;
 
 		branchBusy = true;
