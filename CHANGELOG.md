@@ -15,6 +15,7 @@ detail; this file is an index, not a report. Versioning follows
 - A failed preset or context read warns and leaves a `preset_degraded` notice instead of a silent wrong-model turn (#70)
 - A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
 - A branch's session state reads its own tip: the fork snapshot is a base and later deltas win (#78)
+- Regenerate after a failed turn forks at the failed turn's user message, not the previous one (#80)
 
 ### Changed
 
