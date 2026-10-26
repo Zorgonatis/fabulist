@@ -17,6 +17,7 @@ detail; this file is an index, not a report. Versioning follows
 ### Changed
 
 - Anti Injection OFF now removes the guard line and wrapping bounds too; content-framing tags stay (#77)
+- The Engine context clause names every block's tag wherever it arrives, spells out the validation-notice case, and tells the narrator to read tags, never write them (#75)
 
 ## [0.0.4] - 2026-10-26
 

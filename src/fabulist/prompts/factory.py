@@ -95,7 +95,13 @@ __all__ = [
 #:       validator, the narrator's ``anti_slop`` directive (via
 #:       ``{{slop_phrases}}``) and the d1 question bank all derive from it.
 #:       Existing installs see the review/reset notice and adopt deliberately.
-FACTORY_VERSION: int = 10
+#:  11 — issue #75: the ``## Engine context`` clause is rewritten in full —
+#:       the six blocks are named as engine-authored wherever they arrive, the
+#:       ``<validation_notice>`` case is spelled out, and the clause gains the
+#:       input-language statement (read the tags, never write them: render what
+#:       a block carries as plain prose). No tag, anchor or position changes.
+#:       Existing installs see the review/reset notice and adopt deliberately.
+FACTORY_VERSION: int = 11
 
 #: Repo-relative location of the committed factory image. ``configs/`` is
 #: gitignored user state, so the artifact lives under ``prompts/`` instead
