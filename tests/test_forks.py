@@ -297,7 +297,7 @@ def test_router_fork_and_list_branches(build_app):
             _seed_reply(app.state.log, base, "Welcome to the market.")
 
             fork = await client.post(
-                f"/api/sessions/{base}/fork", json={"at_seq": 1}
+                f"/api/sessions/{base}/fork", json={"at_seq": 2}
             )
             assert fork.status_code == 200, fork.text
             new_id = fork.json()["session_id"]
@@ -314,7 +314,7 @@ def test_router_fork_and_list_branches(build_app):
     entry = body["branches"][0]
     assert entry["session_id"] == new_id
     assert entry["base_session"] == base
-    assert entry["base_seq"] == 1
+    assert entry["base_seq"] == 2
     assert entry["created_at"]
     assert entry["snippet"] == "The lantern flickers."
     assert entry["visible"] is True
@@ -349,7 +349,7 @@ def test_router_prune_branch_hard_deletes(build_app):
             new_id = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "child-1"},
+                    json={"at_seq": 2, "new_session_id": "child-1"},
                 )
             ).json()["session_id"]
             _seed_reply(app.state.log, new_id, "Hello from the branch.")
@@ -387,7 +387,7 @@ def test_router_prune_refuses_parent_with_children(build_app):
         async with client_for(app) as client:
             base = await _create(client, title="Base")
             app.state.log.append_event(base, "user", "user", {"text": "enter"})
-            await client.post(f"/api/sessions/{base}/fork", json={"at_seq": 1})
+            await client.post(f"/api/sessions/{base}/fork", json={"at_seq": 2})
             resp = await client.delete(f"/api/sessions/{base}/branch")
             return base, resp
 
@@ -409,7 +409,7 @@ def test_router_fork_unknown_and_bad_body(build_app):
     async def scenario():
         async with client_for(app) as client:
             unknown = await client.post(
-                "/api/sessions/nope/fork", json={"at_seq": 1}
+                "/api/sessions/nope/fork", json={"at_seq": 2}
             )
             base = await _create(client, title="Base")
             negative = await client.post(

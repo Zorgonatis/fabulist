@@ -106,7 +106,7 @@ def test_branch_kind_user_vs_compaction_and_label(build_app):
             alt = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "alt-1"},
+                    json={"at_seq": 2, "new_session_id": "alt-1"},
                 )
             ).json()["session_id"]
             _seed_reply(log, alt, "The lantern flickers.")
@@ -114,7 +114,7 @@ def test_branch_kind_user_vs_compaction_and_label(build_app):
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)
@@ -156,7 +156,7 @@ def test_compaction_kind_is_own_rows_not_chain_nor_first_row(build_app):
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)
@@ -165,7 +165,7 @@ def test_compaction_kind_is_own_rows_not_chain_nor_first_row(build_app):
             # A fork OF the era: the marker is inherited on the chain, never owned.
             await client.post(
                 f"/api/sessions/{era}/fork",
-                json={"at_seq": 1, "new_session_id": "swipe-of-era"},
+                json={"at_seq": 2, "new_session_id": "swipe-of-era"},
             )
 
             listed = await client.get(f"/api/sessions/{base}/branches")
@@ -197,7 +197,7 @@ def test_fork_of_an_era_is_kind_user(build_app):
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)
@@ -205,7 +205,7 @@ def test_fork_of_an_era_is_kind_user(build_app):
             swipe = (
                 await client.post(
                     f"/api/sessions/{era}/fork",
-                    json={"at_seq": 1, "new_session_id": "swipe-of-era"},
+                    json={"at_seq": 2, "new_session_id": "swipe-of-era"},
                 )
             ).json()["session_id"]
             _seed_reply(log, swipe, "The new era begins differently.")
@@ -233,7 +233,7 @@ def test_era_with_its_own_prose_keeps_prose_and_label(build_app):
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)
@@ -262,14 +262,14 @@ def test_swipe_group_excludes_continuation_but_list_keeps_it(build_app):
             alt = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "alt-1"},
+                    json={"at_seq": 2, "new_session_id": "alt-1"},
                 )
             ).json()["session_id"]
             _seed_reply(log, alt, "A different reply.")
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1)
@@ -311,7 +311,7 @@ def test_sessions_list_marks_only_the_superseded_parent(build_app):
             era = (
                 await client.post(
                     f"/api/sessions/{base}/fork",
-                    json={"at_seq": 1, "new_session_id": "era-1"},
+                    json={"at_seq": 2, "new_session_id": "era-1"},
                 )
             ).json()["session_id"]
             _mark_era(log, base, era, at=1, covers=(1, 1))
