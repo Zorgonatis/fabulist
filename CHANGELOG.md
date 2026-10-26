@@ -8,6 +8,8 @@ detail; this file is an index, not a report. Versioning follows
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-10-26
+
 ### Fixed
 
 - A fork view can edit an inherited message; the revision lands in the branch and the parent keeps the original (#90)
@@ -20,7 +22,7 @@ detail; this file is an index, not a report. Versioning follows
 - A per-connection Vision toggle gates image parts at message build: vision stages receive images inline, text-only stages receive the uniform `[inline image caption: …]` marker from the same log rows (#79)
 - The regenerate control sits on the failed turn's own row: the trailing unanswered user row takes the branch controls (#81)
 - The failed turn's ↻ renders with no branch context at all, and never carries another turn's alternate counts (#81)
-- Every model call retries a provider failure or a malformed reply twice; a named unrecoverable set never retries (#82)
+- Every chat-completion model call retries a provider failure or a malformed structured reply twice; a named unrecoverable set never retries (#82)
 - World-info entries past the old 1,200-character budget render in full; an oversized block raises one `world_info_large` notice per turn (#83)
 - Recall no longer returns the recent turns the narrator already carries; the unused recall-window floor is deleted (#84)
 - A branch keeps the books, component set and persona it was cut from, and its summary and drawers read them from the chain like the engine does (#86)

@@ -1,6 +1,6 @@
 [project]
 name = "fabulist"
-version = "0.0.4"
+version = "0.0.5"
 description = "Personal RP narrative engine: a MUD with an LLM narrator."
 requires-python = ">=3.12"
 license = "Apache-2.0"
