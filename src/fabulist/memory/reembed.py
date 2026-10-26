@@ -37,6 +37,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "EmbedderTarget",
     "planned_sessions",
+    "prune_orphan_sessions",
     "reembed_all",
     "resolve_embedder",
     "resolve_reranker",
@@ -152,6 +153,45 @@ def visible_session_ids(log: "EventLog") -> list[str]:
             continue
         visible.append(session_id)
     return visible
+
+
+def prune_orphan_sessions(
+    log: "EventLog", store: Any, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Delete index rows whose session is hidden or absent from the log.
+
+    The inverse sweep of :func:`visible_session_ids` (issue #85): that function
+    never re-embeds a hidden chat, so a rebuild cannot remove rows the index
+    already holds for it. This one-time pass walks the ``session_id`` index in
+    ``memory_meta`` and deletes every row whose chat is not visible — a
+    soft-hidden chat or a branch whose log row was hard-pruned before this
+    delete path existed. Rows with an empty ``session_id`` (no provenance) are
+    left alone, and a visible chat's rows are never touched, including a chat
+    that opted out of memory (it still owns them).
+
+    ``dry_run`` counts without deleting. Returns
+    ``{"sessions", "rows", "pruned", "dry_run"}``; the derived index is
+    rebuildable (D5), so a repeated run is safe.
+    """
+    visible = set(visible_session_ids(log))
+    pruned: list[str] = []
+    rows = 0
+    for session_id in store.session_ids():
+        if session_id in visible:
+            continue
+        count = int(store.count_session_rows(session_id))
+        if not count:
+            continue
+        if not dry_run:
+            count = int(store.delete_session_rows(session_id))
+        pruned.append(session_id)
+        rows += count
+    return {
+        "sessions": len(pruned),
+        "rows": rows,
+        "pruned": pruned,
+        "dry_run": dry_run,
+    }
 
 
 def planned_sessions(log: "EventLog") -> list[tuple[str, MemoryScope]]:

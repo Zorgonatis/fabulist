@@ -61,6 +61,8 @@ from fabulist.cards.v2 import is_import_seed_text
 from fabulist.graph.compaction import has_compaction_marker, session_title
 from fabulist.log.repo import PruneError
 
+from .memory_cleanup import delete_session_memory
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fabulist.log import EventLog
     from fabulist.log.events import Event
@@ -499,4 +501,8 @@ async def prune_branch(session_id: str, request: Request) -> dict:
         removed = log.prune_branch(session_id)
     except PruneError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Issue #85: a pruned branch's derived rows must not linger in a shared
+    # layer. Best-effort: a missing store (memory off) is a no-op and a store
+    # failure never fails the prune.
+    delete_session_memory(request.app, session_id)
     return {"session_id": session_id, "pruned": True, "events_deleted": removed}
