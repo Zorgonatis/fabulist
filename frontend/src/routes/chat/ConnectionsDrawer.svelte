@@ -40,6 +40,14 @@
 	// NOWHERE (that is the default, so an untouched connection is unchanged). A
 	// stored value outside the documented vocabulary is never dropped — it
 	// renders as its own appended raw option.
+	//
+	// "Vision" (issue #79) is the per-connection VISION toggle: whether the model
+	// accepts image content parts. It follows the `reasoning_effort` precedent —
+	// a typed, per-connection field with its own drawer control (never a JSON-only
+	// capabilities key). It is OFF/unset by default, and OFF means every image
+	// the consumer sees renders as the uniform `[inline image caption: ...]`
+	// marker instead of inline bytes. The gate is resolved live at message-build
+	// time, so flipping it changes rendering on the next turn.
 	import { onMount } from 'svelte';
 	import type { ConnectionEntry, ConnectionsCatalog, ConnectionWrite, ReembedStatus } from '#lib/api';
 	import {
@@ -100,6 +108,8 @@
 		 * the select's not-set sentinel, NOT a value: `none` is a real effort.
 		 */
 		reasoning_effort: string;
+		/** "Vision": whether this connection's model accepts image parts. */
+		vision: boolean;
 		temperature: number | null;
 		/** "Response Length": the generation cap (`sampling.max_tokens`). */
 		max_tokens: number | null;
@@ -553,6 +563,8 @@
 			streaming: true,
 			return_thinking: 'auto',
 			reasoning_effort: '',
+			// Off by default: an unset connection is text-only.
+			vision: false,
 			temperature: 1,
 			max_tokens: 16000,
 			top_p: 0.95,
@@ -594,6 +606,8 @@
 			// Verbatim: an effort outside the documented list stays selected (the raw
 			// option renders it) instead of being silently reset to not-set.
 			reasoning_effort: entry.reasoning_effort ?? '',
+			// null/false both mean text-only; only `true` carries vision.
+			vision: entry.vision === true,
 			temperature: samplingNumber(entry.sampling.temperature),
 			max_tokens: samplingNumber(entry.sampling.max_tokens),
 			top_p: samplingNumber(entry.sampling.top_p),
@@ -770,6 +784,9 @@
 				// value rides back verbatim; the engine names the vocabulary if it is
 				// genuinely invalid.
 				reasoning_effort: form.reasoning_effort.trim() ? form.reasoning_effort.trim() : null,
+				// Always written like the toggles: text-only is `null` (the default),
+				// vision is `true`. Omitting the key would leave a stored `true` in place.
+				vision: form.vision ? true : null,
 				api_key_env: form.api_key_env.trim() ? form.api_key_env.trim() : null,
 				// The pasted key rides the SAME request as the rest of the draft: the engine
 				// writes it to `.env` and answers with the derived env NAME. An empty field
@@ -1013,7 +1030,7 @@
 			entry.streaming === false ? 'off' : 'on'
 		} · return thinking: ${returnThinkingLabel(entry.return_thinking)} · reasoning effort: ${
 			entry.reasoning_effort ?? 'not set'
-		}`;
+		} · vision: ${entry.vision === true ? 'on' : 'off'}`;
 	}
 
 	// --- item flavor (what a connection is for) ------------------------------
@@ -1271,6 +1288,15 @@
 								thinking models; AUTO does this whenever the provider returns reasoning.
 							</small>
 						</label>
+						<label class="toggle">
+							<input type="checkbox" bind:checked={draft.vision} data-field="vision" />
+							<span>Vision</span>
+						</label>
+						<small>
+							Off by default. Checked, this connection's model receives images inline as content
+							parts; unchecked, every image renders as the uniform
+							<code>[inline image caption: …]</code> text marker. Applies on the next turn.
+						</small>
 						<label class="field">
 							<span>Reasoning effort</span>
 							<select bind:value={draft.reasoning_effort} data-field="reasoning_effort">
