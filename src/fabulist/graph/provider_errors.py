@@ -49,6 +49,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from fabulist import retry as _retry
+
 __all__ = [
     "FATAL_STATUSES",
     "PhaseCallError",
@@ -63,25 +65,12 @@ __all__ = [
 #: serve us, which is fatal in a pre-commit phase however it is spelled.
 FATAL_STATUSES = frozenset({400, 401, 403, 404, 408, 409, 422, 425, 429})
 
-#: Class-name markers of a provider/transport failure, checked over the MRO and
-#: along the cause chain. Duck-typed on purpose (the ``agents.loop.
+#: Class-name markers of a provider/transport failure. They now live in
+#: :mod:`fabulist.retry` — the retry mechanism classifies the same failures, and
+#: two copies would drift. Duck-typed on purpose (the ``agents.loop.
 #: is_transport_timeout`` rule): ``openai`` and ``httpx`` name these classes
-#: differently, and this module imports neither.
-_PROVIDER_CLASS_MARKERS = (
-    "apierror",
-    "apistatus",
-    "apiconnection",
-    "apitimeout",
-    "ratelimit",
-    "httperror",
-    "httpstatus",
-    "transport",
-    "connecterror",
-    "readtimeout",
-    "writetimeout",
-    "pooltimeout",
-    "remoteprotocol",
-)
+#: differently, and neither module imports them.
+_PROVIDER_CLASS_MARKERS = _retry.PROVIDER_CLASS_MARKERS
 
 #: The provider's own words, capped: the frame carries a sentence, not a body.
 _DETAIL_LIMIT = 300
@@ -118,45 +107,20 @@ def _chain(exc: BaseException):
         current = current.__cause__ or current.__context__
 
 
-def _status_of(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value if 100 <= value <= 599 else None
-
-
 def failure_status(exc: BaseException) -> int | None:
     """The provider's HTTP status for ``exc``, or ``None`` when it carried none.
 
     Three spellings, all duck-typed: ``status_code`` (openai's ``APIStatusError``,
     httpx responses), ``status`` (the older clients), and ``exc.response.
-    status_code`` (an ``httpx.HTTPStatusError``).
+    status_code`` (an ``httpx.HTTPStatusError``). One implementation, in
+    :mod:`fabulist.retry` — the retry mechanism must read the same fact.
     """
-    for current in _chain(exc):
-        for name in ("status_code", "status"):
-            status = _status_of(getattr(current, name, None))
-            if status is not None:
-                return status
-        status = _status_of(getattr(getattr(current, "response", None), "status_code", None))
-        if status is not None:
-            return status
-    return None
+    return _retry.failure_status(exc)
 
 
 def _is_provider_failure(exc: BaseException) -> bool:
     """True when ``exc`` is a transport/provider class rather than content noise."""
-    for current in _chain(exc):
-        if isinstance(current, (ConnectionError, TimeoutError)):
-            return True
-        # ``PlannerBootstrapError`` sets this when its loop was ended by a
-        # transport timeout: the phase failed because no answer arrived.
-        if getattr(current, "transport", False) is True:
-            return True
-        names = [klass.__name__.lower() for klass in type(current).__mro__]
-        if any(
-            marker in name for name in names for marker in _PROVIDER_CLASS_MARKERS
-        ):
-            return True
-    return False
+    return _retry.is_provider_failure(exc)
 
 
 def _provider_text(exc: BaseException) -> str:
