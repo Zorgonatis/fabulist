@@ -1,27 +1,53 @@
 // Fabulist API client - message revisions, semantic search, card export.
 
-import { API_BASE } from './shared';
+import { API_BASE, errorMessage, isAbort, readErrorDetail } from './shared';
 
 // --- revisions (message-edit door) ---------------------------------------------
+
+/**
+ * Hang guard for the revision POST, not a latency budget (#87).
+ *
+ * The append is local and returns in milliseconds (the re-embed is backgrounded
+ * after the response), so a request still open after this long is never
+ * settling. The abort turns that into an ordinary failure value, which lets the
+ * editor's `finally` re-enable Cancel instead of wedging it at "saving…".
+ */
+const REVISION_TIMEOUT_MS = 30_000;
 
 export async function postRevision(
 	sessionId: string,
 	targetId: number,
 	newText: string
 ): Promise<{ revision_id: number } | { error: string }> {
+	const controller = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, REVISION_TIMEOUT_MS);
 	try {
 		const res = await fetch(
 			`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/revisions`,
 			{
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ target_id: targetId, new_text: newText })
+				body: JSON.stringify({ target_id: targetId, new_text: newText }),
+				signal: controller.signal
 			}
 		);
-		if (!res.ok) return { error: `revision failed (${res.status})` };
+		if (!res.ok) {
+			// Surface WHY: the engine answers 404/422 with a plain-string detail or
+			// `{detail:{reason}}`; the editor shows it verbatim (#87).
+			const { reason, status } = await readErrorDetail(res);
+			return { error: reason || `revision failed (${status})` };
+		}
 		return (await res.json()) as { revision_id: number };
 	} catch (err) {
-		return { error: err instanceof Error ? err.message : String(err) };
+		if (timedOut) return { error: `no answer after ${REVISION_TIMEOUT_MS / 1000} seconds` };
+		if (isAbort(err, controller.signal)) return { error: 'the request was cancelled' };
+		return { error: errorMessage(err) };
+	} finally {
+		clearTimeout(timer);
 	}
 }
 

@@ -31,6 +31,13 @@
 	/** W9.26 §2.2/§2.5: the three system row kinds. */
 	export type SystemRowKind = 'context_low' | 'compaction_break' | 'compaction_notice';
 
+	/**
+	 * What one save attempt resolved to (#87). The editor needs more than a
+	 * boolean: on a failure it keeps the draft and the box open and shows WHY, and
+	 * the reason comes from the engine's own detail (via the revision transport).
+	 */
+	export type ReviseOutcome = { ok: true } | { ok: false; detail?: string };
+
 	/** One `context_low` projection row, resolved for rendering. */
 	export interface ContextLowView {
 		/** Measured ratio of the usable prompt budget (`1.0` = over-budget sentinel). */
@@ -166,7 +173,7 @@
 		branchBusy?: boolean;
 		onSwipe?: (delta: 1 | -1) => void;
 		onRetry?: () => void;
-		onRevise?: (logId: number, newText: string) => Promise<boolean> | boolean;
+		onRevise?: (logId: number, newText: string) => Promise<ReviseOutcome> | ReviseOutcome;
 		/** Issue #35: delete this message and every message after it. The page owns
 		 *  the call (the engine forks below the pivot and the page switches to the
 		 *  new branch); resolves `true` once the switch landed. */
@@ -302,6 +309,9 @@
 	let editingId: string | null = $state(null);
 	let draft = $state('');
 	let reviseBusy = $state(false);
+	/** Why the last save attempt failed (#87). Display only: it never feeds the
+	 *  branch-control derivation, and it clears when the next attempt starts. */
+	let reviseError = $state('');
 
 	// The stale-reply offer (Wave-1 Bug 2b): editing your own latest message
 	// makes the reply that already answered it stale, so offer a one-click
@@ -350,26 +360,48 @@
 	function startEdit(id: string, text: string): void {
 		editingId = id;
 		draft = text;
+		reviseError = '';
 	}
 
+	/**
+	 * Save the open row editor (#87).
+	 *
+	 * The busy flag resets in `finally`, so NO outcome can wedge the dialog: a
+	 * failed save keeps the draft and the box open and shows why, and Cancel
+	 * (disabled only while the attempt is in flight) is usable again the moment it
+	 * ends. The transport's 30-second abort bounds that in-flight window. The CLOSE
+	 * stays success-only on purpose — closing on failure would throw the draft
+	 * away.
+	 */
 	async function saveEdit(entry: TranscriptEntry): Promise<void> {
 		if (!onRevise || reviseBusy || entry.logId === undefined) return;
 		reviseBusy = true;
-		const ok = await onRevise(entry.logId, draft);
-		reviseBusy = false;
-		if (!ok) return;
-		editingId = null;
-		if (entry.role === 'user') {
-			// Wave-1 Bug 2b: editing your own latest message makes the reply that
-			// already answered it stale, so offer a one-click regeneration (the
-			// page's existing retry path) right on the row. The revision rehydrates
-			// the transcript (fresh `history-<logId>` entries), so re-resolve the
-			// row by its log id instead of trusting the pre-edit entry id.
-			const revised = entries.find((candidate) => candidate.logId === entry.logId);
-			if (revised) {
-				regenOfferId = revised.id;
-				regenBaseline = narratorCount;
+		reviseError = '';
+		try {
+			const outcome = await onRevise(entry.logId, draft);
+			if (!outcome.ok) {
+				reviseError = outcome.detail || 'the revision failed';
+				return;
 			}
+			editingId = null;
+			if (entry.role === 'user') {
+				// Wave-1 Bug 2b: editing your own latest message makes the reply that
+				// already answered it stale, so offer a one-click regeneration (the
+				// page's existing retry path) right on the row. The revision rehydrates
+				// the transcript (fresh `history-<logId>` entries), so re-resolve the
+				// row by its log id instead of trusting the pre-edit entry id.
+				const revised = entries.find((candidate) => candidate.logId === entry.logId);
+				if (revised) {
+					regenOfferId = revised.id;
+					regenBaseline = narratorCount;
+				}
+			}
+		} catch (err) {
+			// The handler reports failure as a value; a throw is a defect elsewhere.
+			// It still must not leave the dialog stuck.
+			reviseError = err instanceof Error ? err.message : String(err);
+		} finally {
+			reviseBusy = false;
 		}
 	}
 
@@ -602,6 +634,9 @@
 	let openingEditing = $state(false);
 	let openingDraft = $state('');
 	let openingRevising = $state(false);
+	/** Why the last opening save failed (#87) — the same treatment as the row
+	 *  editor: the draft stays, the box stays, the reason shows. */
+	let openingError = $state('');
 	let detailsOpen = $state(false);
 	let openingSig = '';
 
@@ -676,21 +711,35 @@
 		if (!opening || opening.openingLogId === undefined) return;
 		openingEditing = true;
 		openingDraft = opening.greetings[0] ?? '';
+		openingError = '';
 	}
 
 	/** Append a revision to the opening narrative, then re-read it (latest-wins).
 	 * The original row stays in the log (D10); `onRevise` is the page's normal
-	 * message-edit path, so nothing about the opening is special. */
+	 * message-edit path, so nothing about the opening is special.
+	 *
+	 * Twin of `saveEdit` (#87): the busy flag resets in `finally` whatever
+	 * happens, a failure keeps the draft and shows the reason, and the close is
+	 * success-only — closing on failure would throw the draft away. */
 	async function saveOpeningEdit(): Promise<void> {
 		const logId = opening?.openingLogId;
 		if (!onRevise || openingRevising || logId === undefined) return;
 		openingRevising = true;
-		const ok = await onRevise(logId, openingDraft);
-		openingRevising = false;
-		if (!ok) return;
-		openingEditing = false;
-		const id = get(currentSessionId);
-		if (id) await loadOpening(id, () => false);
+		openingError = '';
+		try {
+			const outcome = await onRevise(logId, openingDraft);
+			if (!outcome.ok) {
+				openingError = outcome.detail || 'the revision failed';
+				return;
+			}
+			openingEditing = false;
+			const id = get(currentSessionId);
+			if (id) await loadOpening(id, () => false);
+		} catch (err) {
+			openingError = err instanceof Error ? err.message : String(err);
+		} finally {
+			openingRevising = false;
+		}
 	}
 
 	async function swipeOpening(delta: 1 | -1): Promise<void> {
@@ -1284,6 +1333,9 @@
 			{#if openingEditing && opening.openingLogId !== undefined}
 				<div class="edit-box">
 					<textarea bind:value={openingDraft} rows="4" aria-label="edit opening"></textarea>
+					{#if openingError}
+						<p class="edit-error" role="alert">{openingError}</p>
+					{/if}
 					<div class="edit-actions">
 						<button
 							type="button"
@@ -1491,6 +1543,9 @@
 						rows="4"
 						aria-label="edit message"
 					></textarea>
+					{#if reviseError}
+						<p class="edit-error" role="alert">{reviseError}</p>
+					{/if}
 					<div class="edit-actions">
 						<button
 							type="button"
@@ -2065,6 +2120,13 @@
 		gap: 0.4rem;
 		margin-top: 0.35rem;
 		justify-content: flex-end;
+	}
+	/* #87: the failed-save reason. Same red as every other error line here; it
+	   sits between the draft and the buttons so it reads as part of the box. */
+	.edit-error {
+		margin: 0.35rem 0 0;
+		color: var(--danger-text);
+		font-size: 0.78rem;
 	}
 	.edit-save {
 		background: var(--accent);
