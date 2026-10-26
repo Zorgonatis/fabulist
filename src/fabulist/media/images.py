@@ -16,34 +16,27 @@ scope instead, and dedupe by content address so a re-import adds no second
 asset. The session-scoped :func:`store_image` / :func:`find_asset` are
 unchanged (:func:`store_image`'s optional ``anchor=True`` switches scopes).
 
-The captioner path
-------------------
+Captioning at asset arrival
+---------------------------
 A vision-capable *captioner* agent (registry name ``captioner``) receives the
 image as an OpenAI-style multimodal content part and returns a short
-visible-detail caption. That caption is appended as a ``system`` event
-``{"event": "image_caption", "asset": <asset_id>, "text": <caption>}``. Only the
-caption text enters the narrator turn, via :func:`build_image_turn_prefix`, so
-the narrator prompt/compiler needs no change and stays text-only.
+visible-detail caption. That caption is appended AT UPLOAD TIME as a ``system``
+event ``{"event": "image_caption", "asset": <asset_id>, "text": <caption>}`` —
+issue #79's arrival rule. A generated image needs no captioner: its stored
+generation prompt IS its arrival text. No captioner call ever runs inside the
+turn lock, and a legacy asset without a caption simply falls back to the text
+its row already carries or a terse placeholder (no automatic backfill).
 
-VLM seam (documented, intentionally NOT built)
-----------------------------------------------
-A future vision narrator would skip the caption entirely and hand the image to
-the narrator as a content part. The turn's final user message is built in
-``prompts/narrator.assemble_messages`` / ``wiring.make_narrator_message_builder``
-and is currently ``{"role": "user", "content": "<str>"}``. A VLM narrator would
-instead emit::
-
-    {"role": "user", "content": [
-        {"type": "text", "text": "<facts + user text>"},
-        {"type": "image_url",
-         "image_url": {"url": "data:<mime>;base64,<bytes_b64>"}},
-    ]}
-
-built from the same stored ``asset`` payload (:func:`image_content_part` below
-shows the exact shape). The compiler's ``user_content`` seam would accept either
-a string or a list of parts, and the captioner path could then be dropped. Until
-that model is available, the captioner is the v1 workaround; no code here
-implements content-part delivery to the narrator.
+Per-connection rendering
+------------------------
+Whether image bytes ride a request is a property of the CONNECTION, not of the
+row: :attr:`fabulist.connections.registry.Connection.vision` is resolved live
+at message-build time by every consumer (narrator history, current-turn
+attachment, each NPC lane, OOC and preview). A vision connection receives the
+native OpenAI image part (:func:`image_content_part`); every other connection
+receives the uniform :func:`build_image_turn_prefix` marker,
+``[inline image caption: <text>]``. Nothing is baked into the log, so a rebind
+changes rendering on the next turn with no migration.
 """
 
 from __future__ import annotations
@@ -62,16 +55,22 @@ __all__ = [
     "CAPTION_INSTRUCTION",
     "CAPTION_MAX_WORDS",
     "CAPTION_SYSTEM",
+    "IMAGE_CAPTION_PLACEHOLDER",
+    "MEDIA_META_KEY",
     "MAX_IMAGE_BYTES",
     "MEDIA_ACTOR",
     "MEDIA_ANCHOR",
     "build_caption_messages",
     "build_image_turn_prefix",
     "caption",
+    "connection_has_vision",
     "find_asset",
+    "find_caption",
     "find_definition_asset",
     "image_content_part",
     "is_image_narrative",
+    "render_image_history_message",
+    "rerender_image_history",
     "sha256_hex",
     "store_definition_image",
     "store_image",
@@ -109,6 +108,14 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 #: ``system`` event kind carrying a caption row.
 CAPTION_EVENT = "image_caption"
+
+#: Text used when an image row has no caption, prompt, text or note.
+IMAGE_CAPTION_PLACEHOLDER = "no caption available"
+
+#: Transient message metadata key carrying a history image's render inputs.
+#: The key never reaches a provider: ``connections.client.build_request``
+#: strips it at the one wire seam, and preview strips it before serializing.
+MEDIA_META_KEY = "_fabulist_media"
 
 #: Soft budget stated in the captioner prompt (words).
 CAPTION_MAX_WORDS = 120
@@ -279,11 +286,94 @@ async def caption(
     return log.append_event(session_id, "system", MEDIA_ACTOR, event_payload)
 
 
-def build_image_turn_prefix(caption_text: str) -> str:
-    """The ``[image: ...]`` prefix that carries a caption into a turn message.
+def find_caption(log: "EventLog", session_id: str, asset_ref: str) -> str:
+    """The latest arrival caption for ``asset_ref``, or ``""`` when none.
 
-    ``caption_text`` is the caption string (whitespace-trimmed); the returned
-    prefix is prepended to the user content for a turn that should be aware of
-    an attached image.
+    Folds the append-only ``image_caption`` rows (later wins). A legacy asset
+    with no caption row returns ``""`` — the caller then falls back to the
+    text the row already carries (prompt/note) or the terse placeholder. This
+    NEVER calls the captioner: captioning happens at arrival only (issue #79),
+    so a turn build can never invoke a model inside the lock.
     """
-    return f"[image: {caption_text.strip()}]"
+    text = ""
+    for event in log.get_events(session_id):
+        if event.type != "system":
+            continue
+        if event.payload.get("event") != CAPTION_EVENT:
+            continue
+        if str(event.payload.get("asset") or "") == str(asset_ref):
+            text = str(event.payload.get("text") or "")
+    return text
+
+
+def connection_has_vision(connection: Any | None) -> bool:
+    """Whether ``connection`` accepts native image content parts (issue #79).
+
+    Only an explicit ``True`` enables vision; ``None``/absent (the default) and
+    ``False`` are TEXT-ONLY. One spelling for every consumer, so a narrator, a
+    lane, OOC and the preview can never disagree about the gate.
+    """
+    return getattr(connection, "vision", None) is True
+
+
+def build_image_turn_prefix(caption_text: str) -> str:
+    """The uniform text fallback for an image on a text-only connection.
+
+    ``caption_text`` is the already-computed arrival text (caption, imagegen
+    prompt, legacy row text or note); an empty value renders the terse
+    :data:`IMAGE_CAPTION_PLACEHOLDER`. Every image kind uses this ONE shape:
+    ``[inline image caption: <text>]``.
+    """
+    text = caption_text.strip() or IMAGE_CAPTION_PLACEHOLDER
+    return f"[inline image caption: {text}]"
+
+
+def rerender_image_history(messages: list[Any], vision: bool) -> list[Any]:
+    """Re-render a shared history list for a CONSUMER's vision capability.
+
+    Issue #79: the NPC lanes share the narrator's built history, but each lane
+    is bound to its own connection. Every image message carries its render
+    inputs (:data:`MEDIA_META_KEY`), so the lanes re-render the SAME rows for
+    THEIR connection instead of inheriting the narrator's shape. A list with no
+    image message is returned untouched (identity preserved).
+    """
+    rendered: list[Any] = []
+    changed = False
+    for message in messages:
+        meta = message.get(MEDIA_META_KEY) if isinstance(message, dict) else None
+        if isinstance(meta, dict):
+            rendered.append(render_image_history_message(meta, vision))
+            changed = True
+        else:
+            rendered.append(message)
+    return rendered if changed else messages
+
+
+def render_image_history_message(meta: dict[str, Any], vision: bool) -> dict:
+    """Render one image history row for a consumer's vision capability.
+
+    ``meta`` is the row's render inputs (``url``/``kind``/``fallback``/
+    ``visible``); ``vision=True`` yields the native multipart ASSISTANT message,
+    otherwise the uniform caption marker. The returned message carries the
+    transient :data:`MEDIA_META_KEY` so a per-consumer seam (an NPC lane bound
+    differently from the narrator) can re-render the SAME shared history for
+    ITS connection. :func:`fabulist.connections.client.build_request` strips
+    that key at the wire.
+    """
+    kind = meta.get("kind") or "image"
+    if vision:
+        content: list[dict[str, Any]] | str = [
+            {"type": "text", "text": "Now visible: " + str(meta.get("visible") or "")},
+            (
+                {"type": "input_video", "input_video": {"url": meta.get("url", "")}}
+                if kind == "video"
+                else {"type": "image_url", "image_url": {"url": meta.get("url", "")}}
+            ),
+        ]
+    else:
+        content = build_image_turn_prefix(str(meta.get("fallback") or ""))
+    return {
+        "role": "assistant",
+        "content": content,
+        MEDIA_META_KEY: dict(meta),
+    }

@@ -41,6 +41,7 @@ class FakeTurnEngine:
         *,
         image_url: str | None = None,
         image_kind: str = "image",
+        image_text: str = "",
     ) -> AsyncIterator[StreamEvent]:
         self.calls.append((session_id, content, kind))
         if image_url:

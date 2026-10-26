@@ -554,6 +554,32 @@ def _with_reasoning_history(
     return out
 
 
+def _strip_media_metadata(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove the engine's transient image-render metadata before the wire.
+
+    Issue #79: history image rows carry ``MEDIA_META_KEY`` so a per-consumer
+    seam (an NPC lane bound differently from the narrator) can re-render the
+    SAME shared history for ITS connection. The key is engine bookkeeping, never
+    a provider field, so it is stripped here — the ONE request-building seam
+    every consumer rides. A list with no such key is returned untouched.
+    """
+    from fabulist.media.images import MEDIA_META_KEY
+
+    if not any(
+        isinstance(message, dict) and MEDIA_META_KEY in message
+        for message in messages
+    ):
+        return messages
+    return [
+        {key: value for key, value in message.items() if key != MEDIA_META_KEY}
+        if isinstance(message, dict) and MEDIA_META_KEY in message
+        else message
+        for message in messages
+    ]
+
+
 def build_request(
     agent_name: str,
     messages: list[dict[str, Any]],
@@ -611,7 +637,9 @@ def build_request(
             f"build_request({agent_name!r}): request_profile extra_body must be an object"
         )
 
-    wire_messages = _with_reasoning_history(messages, connection)
+    wire_messages = _with_reasoning_history(
+        _strip_media_metadata(messages), connection
+    )
     # Issues #67/#68: the ONE shape guard. Every consumer rides this builder (the
     # narrator, the tool loops, the extractor, imagegen), so "system messages
     # LEAD and the engine tail is an assistant message" is enforced HERE rather

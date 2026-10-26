@@ -16,6 +16,7 @@ detail; this file is an index, not a report. Versioning follows
 - A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
 - A branch's session state reads its own tip: the fork snapshot is a base and later deltas win (#78)
 - Regenerate after a failed turn forks at the failed turn's user message, not the previous one (#80)
+- A per-connection Vision toggle gates image parts at message build: vision stages receive images inline, text-only stages receive the uniform `[inline image caption: …]` marker from the same log rows (#79)
 
 ### Changed
 

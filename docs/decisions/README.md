@@ -118,6 +118,24 @@ drives budget warnings, the compaction threshold and prompt headroom accounting.
 Consequence: pointing one slot at a different model is a data edit, and the engine stops being
 blind to how large the window it is filling actually is.
 
+### ADR-028 · Image delivery is a per-connection capability, resolved at each assembly seam (issue #79)
+
+A request never carries a content part the connection serving it cannot accept. `vision` is a
+per-connection owner toggle (a drawer control, off/unset by default) that every consumer
+resolves LIVE at message-build time: the narrator's history and current-turn attachment, each
+NPC lane over the shared history, OOC, and the prompt preview (parity is a contract, so the
+preview gates identically). The log stores the asset id and its arrival text — the upload
+caption, imagegen's stored prompt, or the note a legacy row carries — and never a capability. A
+vision connection receives the native content part; every other connection receives one uniform
+`[inline image caption: <text>]` marker, with a terse placeholder when the asset carries no text
+at all. Captioning happens at ASSET ARRIVAL only: no captioner call ever runs inside a turn,
+and legacy assets are not re-captioned.
+
+Consequence: the same log rows render inline on one binding and as text on another, so a rebind
+changes rendering on the next turn with no migration; and because each stage resolves its own
+connection, a text-only lane can never inherit a prefix built for a vision narrator — the 400
+reported in #79 cannot come back through any seam.
+
 ## 4. The turn
 
 ### ADR-009 · The turn is an executable graph, and the graph is editable (D70, D71, D72)

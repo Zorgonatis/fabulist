@@ -35,6 +35,13 @@ export interface ConnectionEntry {
 	 * verbatim rather than silently reset.
 	 */
 	reasoning_effort: string | null;
+	/**
+	 * "Vision" (issue #79): whether this connection's model accepts image content
+	 * parts. null/false = text-only (the default — images render as the uniform
+	 * `[inline image caption: …]` marker); true = images ride inline. Resolved
+	 * live at message-build time, so a rebind applies on the next turn.
+	 */
+	vision: boolean | null;
 	/** Free-text user note (document state the typed registry ignores). */
 	note?: string;
 }
@@ -132,6 +139,8 @@ export interface ConnectionWrite {
 	 * `none` is a REAL value (an explicit disable instruction), never null.
 	 */
 	reasoning_effort?: string | null;
+	/** "Vision"; null = text-only (default), true = native image content parts. */
+	vision?: boolean | null;
 }
 
 
@@ -212,7 +221,8 @@ export function normalizeConnectionEntry(name: string, raw: unknown): Connection
 		return_thinking: typeof obj.return_thinking === 'boolean' ? obj.return_thinking : null,
 		// Kept VERBATIM (never coerced to a known value): an effort outside the
 		// documented set is the engine's to reject, not the browser's to rewrite.
-		reasoning_effort: str(obj.reasoning_effort) || null
+		reasoning_effort: str(obj.reasoning_effort) || null,
+		vision: typeof obj.vision === 'boolean' ? obj.vision : null
 	};
 	if (typeof obj.note === 'string') entry.note = obj.note;
 	return entry;
@@ -501,6 +511,7 @@ let mockConnectionsMap: Record<string, ConnectionEntry> = {
 		streaming: null,
 		return_thinking: null,
 		reasoning_effort: null,
+		vision: null,
 		note: 'Local llama.cpp narrator.'
 	},
 	'glm-api': {
@@ -525,7 +536,8 @@ let mockConnectionsMap: Record<string, ConnectionEntry> = {
 		thinking: true,
 		streaming: false,
 		return_thinking: null,
-		reasoning_effort: 'max'
+		reasoning_effort: 'max',
+		vision: true
 	}
 };
 
@@ -724,6 +736,7 @@ function mockCreateConnection(name: string, body: ConnectionWrite): ConnectionEn
 		streaming: body.streaming ?? null,
 		return_thinking: body.return_thinking ?? null,
 		reasoning_effort: body.reasoning_effort ?? null,
+		vision: body.vision ?? null,
 		...(body.note ? { note: body.note } : {})
 	};
 	mockConnectionsMap = { ...mockConnectionsMap, [name]: entry };
@@ -758,7 +771,10 @@ function mockUpdateConnection(name: string, body: ConnectionWrite): ConnectionEn
 		// leaves the current value alone.
 		...(body.reasoning_effort !== undefined
 			? { reasoning_effort: body.reasoning_effort }
-			: {})
+			: {}),
+		// null is a real write (it clears a stored vision): only an absent key
+		// leaves the current value alone.
+		...(body.vision !== undefined ? { vision: body.vision } : {})
 	};
 	if (body.note !== undefined) {
 		if (body.note) next.note = body.note;

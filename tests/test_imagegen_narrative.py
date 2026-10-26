@@ -2,11 +2,14 @@
 
 A generated image is a CANON narrative row (``type="narrative"``, actor
 ``imagegen``) whose payload carries ``image_asset_id`` and the effective
-positive ``prompt`` and NO prose. ``history_from_log`` must inline its bytes as
-an ASSISTANT message (a text part plus an image part), and the legacy
-``user`` + ``kind="image"`` row must render identically. ``_recent_scene`` (the
-image generator's advisory context) must skip image rows so they never fabricate
-a ``USER:/NARRATIVE:`` turn pair.
+positive ``prompt`` and NO prose. ``history_from_log`` renders it as an
+ASSISTANT message whose shape is decided by the CONSUMER's connection
+(issue #79): a vision connection gets the native multipart message (a text part
+plus an image part); a text-only connection (the default) gets the uniform
+``[inline image caption: ...]`` marker. The legacy ``user`` + ``kind="image"``
+row renders identically. ``_recent_scene`` (the image generator's advisory
+context) must skip image rows so they never fabricate a ``USER:/NARRATIVE:``
+turn pair.
 """
 
 from __future__ import annotations
@@ -41,7 +44,8 @@ def test_history_renders_image_narrative_as_assistant_message(tmp_path):
         },
     )
 
-    hist = history_from_log(log, "s1")
+    # Vision connection -> native multipart assistant message.
+    hist = history_from_log(log, "s1", vision=True)
     assert hist == [
         {
             "role": "assistant",
@@ -49,8 +53,13 @@ def test_history_renders_image_narrative_as_assistant_message(tmp_path):
                 {"type": "text", "text": "Now visible: a red fox"},
                 {"type": "image_url", "image_url": {"url": PNG_URL}},
             ],
+            "_fabulist_media": hist[0]["_fabulist_media"],
         }
     ]
+    # Text-only connection (the default) -> the uniform caption marker.
+    text_only = history_from_log(log, "s1")
+    assert text_only[0]["role"] == "assistant"
+    assert text_only[0]["content"] == "[inline image caption: a red fox]"
 
 
 def test_history_renders_legacy_user_image_row_as_assistant_message(tmp_path):
@@ -71,7 +80,7 @@ def test_history_renders_legacy_user_image_row_as_assistant_message(tmp_path):
         },
     )
 
-    hist = history_from_log(log, "s1")
+    hist = history_from_log(log, "s1", vision=True)
     assert hist == [
         {
             "role": "assistant",
@@ -79,8 +88,13 @@ def test_history_renders_legacy_user_image_row_as_assistant_message(tmp_path):
                 {"type": "text", "text": "Now visible: a blue fox"},
                 {"type": "image_url", "image_url": {"url": PNG_URL}},
             ],
+            "_fabulist_media": hist[0]["_fabulist_media"],
         }
     ]
+    # A legacy row on a text-only connection renders the uniform marker.
+    assert history_from_log(log, "s1")[0]["content"] == (
+        "[inline image caption: a blue fox]"
+    )
 
 
 def test_history_keeps_normal_narrative_unchanged(tmp_path):
@@ -111,11 +125,16 @@ def test_history_image_row_interleaves_with_turns(tmp_path):
         {"prose": "", "dsl": "", "kind": "image", "image_asset_id": asset.payload["asset_id"], "prompt": "the tavern"},
     )
 
-    hist = history_from_log(log, "s1")
+    hist = history_from_log(log, "s1", vision=True)
     assert [m["role"] for m in hist] == ["user", "assistant", "assistant"]
     assert hist[1]["content"] == "The fire crackles."
     assert hist[2]["content"][0]["text"] == "Now visible: the tavern"
     assert hist[2]["content"][1]["type"] == "image_url"
+    # Same rows, text-only connection: the image row collapses to one marker.
+    text_only = history_from_log(log, "s1")
+    assert [m["role"] for m in text_only] == ["user", "assistant", "assistant"]
+    assert text_only[1]["content"] == "The fire crackles."
+    assert text_only[2]["content"] == "[inline image caption: the tavern]"
 
 
 def test_recent_scene_skips_image_narratives(tmp_path):

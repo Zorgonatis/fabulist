@@ -113,6 +113,7 @@ class GraphTurnEngine:
         *,
         image_url: str | None = None,
         image_kind: str = "image",
+        image_text: str = "",
     ) -> AsyncIterator[StreamEvent]:
         if kind not in _VALID_KINDS:
             raise ValueError(f"unknown turn kind: {kind!r}")
@@ -129,7 +130,7 @@ class GraphTurnEngine:
                 yield event
             return
         async for event in self._run_in_character(
-            session_id, content, image_url, image_kind
+            session_id, content, image_url, image_kind, image_text
         ):
             yield event
 
@@ -139,6 +140,7 @@ class GraphTurnEngine:
         content: str,
         image_url: str | None = None,
         image_kind: str = "image",
+        image_text: str = "",
     ) -> AsyncIterator[StreamEvent]:
         if self._graph_source is not None:
             try:
@@ -155,6 +157,8 @@ class GraphTurnEngine:
             # image as a content part (VLM path) instead of a caption prefix.
             initial["image_url"] = image_url
             initial["image_kind"] = image_kind
+            # Issue #79: the arrival text the text-only fallback marker needs.
+            initial["image_text"] = image_text
         roll_results = rolls_for_turn(content)
         if roll_results:
             # GM rolls (PLAN §4 pre-turn): dice are dice — the engine commits
