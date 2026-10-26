@@ -10,6 +10,7 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Fixed
 
+- A fork view can edit an inherited message; the revision lands in the branch and the parent keeps the original (#90)
 - A missing event log announces itself at boot instead of silently recreating empty (#72)
 - Regenerate forks the current session at the message acted on, never a stale pivot (#74)
 - A failed preset or context read warns and leaves a `preset_degraded` notice instead of a silent wrong-model turn (#70)
