@@ -94,9 +94,11 @@ __all__ = [
     "DEFAULT_MODULES",
     "FLOW_STRUCTURAL_TYPES",
     "INTERACTIONS",
+    "LANE_INTERACTIONS",
     "STRUCTURAL_TYPES",
     "SURFACES_KEY",
     "PromptModule",
+    "carry_lane_brief",
     "compile_flow",
     "compile_flow_with_boundary",
     "compile_preset_messages",
@@ -171,6 +173,16 @@ FLOW_STRUCTURAL_TYPES: dict[str, frozenset[str]] = {
     # JSON ask. Mirrors ``npc`` — one lane, one call.
     "proposals": frozenset({"system", "payload"}),
 }
+
+#: Interactions whose flow is a LANE TAIL: compiled as its own message list and
+#: appended AFTER the narrator's history, never served as a standalone request.
+#: A ``system`` row in such a flow therefore lands at the END of the final
+#: request, where the central guard refuses it (``connections.client``
+#: ``_assert_system_messages_lead`` — issues #67/#68/#73). The lane brief is
+#: ENGINE INSTRUCTION, so it rides the narrator's carrier instead
+#: (:func:`carry_lane_brief`). Membership is a property of the interaction, not
+#: a caller flag, so no call site can compile the same flow two ways.
+LANE_INTERACTIONS: frozenset[str] = frozenset({"npc", "proposals"})
 
 ModuleType = Literal[
     "text",
@@ -293,6 +305,9 @@ DEFAULT_FLOWS: dict[str, list[PromptModule]] = {
     # prefix is not part of this flow — the node appends this tail to the
     # narrator's own prefix (D2).
     "npc": [
+        # (The ``system`` row's ROLE here is the authored row type; the carrier
+        # is the compile seam's — issue #73: a lane brief ships on
+        # ``ENVELOPE_ROLE`` because this list is appended after the history.)
         PromptModule("npc_system", "Lane brief + private context", "system"),
         PromptModule("npc_payload", "Lane ask (JSON contract)", "payload"),
     ],
@@ -539,6 +554,35 @@ def _part_message(messages: list[dict], role: str, content: object) -> None:
     messages.append({"role": role, "content": content})
 
 
+def carry_lane_brief(messages: list[dict]) -> list[dict]:
+    """Put a LANE flow's engine brief on the narrator's carrier (issue #73).
+
+    A lane flow is compiled standalone and its messages are appended after the
+    narrator's own history (the NPC fan-out's private tail) — so a ``system``
+    row it emits is a system message at index N of the final request, which the
+    central guard refuses (:class:`fabulist.connections.client.
+    SystemMessageOrderError`) and a stock Jinja chat template answers with a
+    hard 500. The lane brief is ENGINE INSTRUCTION, not the frozen prefix, so it
+    rides ``ENVELOPE_ROLE`` — the ONE assistant carrier the per-turn envelope
+    uses (issue #44) — at its own position, which in every lane flow is
+    immediately before the final user ask. Order, content and count are the
+    preset's; only the ROLE changes. Returns a NEW list (the compiled rows are
+    never mutated).
+
+    This is the single source for BOTH lane paths: the compiled preset flow
+    (:data:`LANE_INTERACTIONS`, applied at the end of
+    :func:`compile_flow_with_boundary`) and the code defaults
+    (``graph.nodes.default_npc_lane_messages``,
+    ``prompts.proposals.default_lane_messages``), so the two cannot disagree.
+    """
+    return [
+        {**message, "role": ENVELOPE_ROLE}
+        if message.get("role") == "system"
+        else message
+        for message in messages
+    ]
+
+
 def compile_flow_with_boundary(
     interaction: str, modules: list, parts: dict, boundary_out: dict | None = None
 ) -> tuple[list[dict], int]:
@@ -698,6 +742,14 @@ def compile_flow_with_boundary(
     messages, final_def_end, envelope_at = insert_engine_envelope(
         messages, final_def_end, envelope_body
     )
+    # Issue #73: a LANE flow is appended after the narrator's history, so a
+    # ``system`` row in it is a trailing system message — refused by the central
+    # guard. Its brief rides ``ENVELOPE_ROLE`` at its own position (in every
+    # lane flow: immediately before the final user ask). Role only; the row
+    # order and content stay the preset's. Length is unchanged, so the tracked
+    # boundaries above remain valid message indices.
+    if interaction in LANE_INTERACTIONS:
+        messages = carry_lane_brief(messages)
     if boundary_out is not None:
         # No user-role row emitted a message -> no post-user region: the whole
         # compiled list is the definition, and the caller's appended tail is
@@ -729,7 +781,9 @@ def compile_flow(
       whitespace-only) row keeps the byte-identical default — the engine part
       ``parts["system"]`` (the interaction's compiled default prompt) is
       emitted. This is the module-content override seam: preset-authored
-      system text rides the flow as data instead of a code constant.
+      system text rides the flow as data instead of a code constant. In a LANE
+      flow (:data:`LANE_INTERACTIONS`) that message is then carried on
+      ``ENVELOPE_ROLE`` — see :func:`carry_lane_brief` (issue #73).
     * ``history`` -> splices the supplied ``parts["history"]`` verbatim.
     * ``facts`` / ``user`` -> one user message (``parts["facts"]`` /
       ``parts["user_content"]``).

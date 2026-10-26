@@ -325,13 +325,25 @@ def build_lane_payload(
 
 
 def default_lane_messages(system: str, payload: str) -> list[dict]:
-    """The code-default lane messages: the brief (``system``) + the ask (``user``).
+    """The code-default lane messages: the brief + the ask (``user``).
+
+    Issue #73: the brief rides ``ENVELOPE_ROLE`` (the narrator's assistant
+    carrier), NOT ``system`` — a lane tail is engine instruction appended after
+    the narrator's history, and a non-leading system row is refused by the
+    central guard (and 500s on a stock Jinja template). It goes through the SAME
+    helper the preset-compiled ``proposals`` flow uses
+    (:func:`fabulist.prompts.modules.carry_lane_brief`), so the two paths cannot
+    disagree about the shape.
 
     The wired engine compiles the preset's ``proposals`` flow instead (D18/D19);
     keeping a default here means the lane node is testable and usable without a
     preset, exactly like :func:`fabulist.graph.nodes.default_npc_lane_messages`.
     """
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": payload},
-    ]
+    from fabulist.prompts.modules import carry_lane_brief
+
+    return carry_lane_brief(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": payload},
+        ]
+    )

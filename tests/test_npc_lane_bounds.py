@@ -28,6 +28,7 @@ import json
 
 from fabulist.api.cast_api import SPEAKER_PALETTE, SPEAKER_PALETTE_NAMES
 from fabulist.graph.nodes import make_npc_lanes_node, render_lane_block
+from fabulist.prompts.envelope import ENVELOPE_ROLE
 from fabulist.prompts.wrapper import GUARD_LINE, RUNTIME_CLOSE, RUNTIME_OPEN
 
 SID = "s1"
@@ -105,8 +106,12 @@ def test_default_lane_tail_is_wrapped_in_the_runtime_bound(log):
 
     assert messages[: len(SHARED)] == SHARED  # the shared prefix is untouched
     tail = messages[len(SHARED) :]
-    assert len(tail) == 2  # the private system brief + the JSON ask
-    assert tail[0]["role"] == "system" and tail[1]["role"] == "user"
+    assert len(tail) == 2  # the private lane brief + the JSON ask
+    # Issue #73: the brief is ENGINE INSTRUCTION appended after the narrator's
+    # history, so it rides the narrator's ASSISTANT carrier — never ``system``
+    # (the central guard refuses a non-leading system row and a stock Jinja
+    # template 500s on it). The ask stays ``user``.
+    assert tail[0]["role"] == ENVELOPE_ROLE and tail[1]["role"] == "user"
     for message in tail:
         assert _runtime_wrapped(message["content"]), message
     # The ask rides the bound too — the message the guard used to litigate.

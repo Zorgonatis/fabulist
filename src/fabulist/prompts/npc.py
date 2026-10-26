@@ -64,7 +64,13 @@ Rules:
 
 
 def build_lane_system(name: str, private_block: str) -> str:
-    """The lane's ONE system message: the brief, then its private block."""
+    """The lane's ONE brief message: the brief, then its private block.
+
+    The BODY only — it carries no role. Issue #73: the lane tail is appended
+    after the narrator's history, so this body rides ``ENVELOPE_ROLE`` (the
+    narrator's assistant carrier) at the assembly seam
+    (:func:`fabulist.prompts.modules.carry_lane_brief`), never ``system``.
+    """
     header = f"{NPC_LANE_SYSTEM_PROMPT}\n\n## PRIVATE — you are {name}\n"
     return f"{header}{private_block}".rstrip() + "\n" if private_block else header
 

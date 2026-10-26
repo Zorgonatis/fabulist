@@ -143,11 +143,12 @@ class FakeLaneCaller:
 
     @staticmethod
     def _name(messages):
+        # Issue #73: the lane brief rides the ASSISTANT carrier, so the PRIVATE
+        # marker is found by content, not by role.
         for message in reversed(messages):
-            if message.get("role") == "system":
-                for line in str(message.get("content") or "").splitlines():
-                    if line.startswith("## PRIVATE — you are "):
-                        return line.split("## PRIVATE — you are ", 1)[1].strip()
+            for line in str(message.get("content") or "").splitlines():
+                if line.startswith("## PRIVATE — you are "):
+                    return line.split("## PRIVATE — you are ", 1)[1].strip()
         return ""
 
     async def __call__(self, messages, stream=True, **kwargs):

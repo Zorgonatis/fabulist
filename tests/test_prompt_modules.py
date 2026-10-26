@@ -74,6 +74,29 @@ def test_default_modules_round_trip_order():
     ]
 
 
+def test_the_lane_carrier_never_touches_the_narrator_prefix():
+    """Issue #73 against ADR-005: the narrator's own bytes are unmoved.
+
+    The lane carrier is a LANE-only rule. The narrator flow compiles to the
+    SAME literal list as before the fix (pinned twice: here through the preset
+    entry point, above through ``compile_preset_messages``), and the lane set
+    can never grow to include ``narrate`` — a change there would rewrite the
+    stable prefix and break the prompt cache.
+    """
+    from fabulist.prompts.modules import LANE_INTERACTIONS
+    from fabulist.prompts.preset_store import compile_preset_flow
+
+    assert "narrate" not in LANE_INTERACTIONS
+    assert compile_preset_flow(None, "narrate", _parts()) == [
+        {"role": "system", "content": "SYSTEM\n\nLIBRARY"},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "FACTS"},
+        {"role": "assistant", "content": "RECALLED"},
+        {"role": "user", "content": "CURRENT"},
+    ]
+
+
 def test_history_is_spliced_verbatim():
     history = [{"role": "user", "content": "raw", "extra": 1}]
     messages = compile_preset_messages(

@@ -4918,21 +4918,31 @@ async def _drain_lane(
 
 
 def default_npc_lane_messages(context: Mapping) -> list[dict]:
-    """The default lane tail: one private ``system`` + the JSON ask (``user``).
+    """The default lane tail: the brief on the assistant carrier + the JSON ask.
+
+    Issue #73: this tail is APPENDED after the narrator's history, so the brief
+    must not be a ``system`` message (the central guard refuses a non-leading
+    system row, and a stock Jinja template 500s on it). It rides
+    ``ENVELOPE_ROLE`` through the SAME helper the preset-compiled ``npc`` flow
+    uses (:func:`fabulist.prompts.modules.carry_lane_brief`), so the two paths
+    cannot disagree about the shape.
 
     The wiring replaces this with the preset-compiled ``npc`` flow; keeping a
     default here means the node is testable (and usable) without a preset.
     """
+    from fabulist.prompts.modules import carry_lane_brief
     from fabulist.prompts.npc import build_lane_ask, build_lane_system
 
     name = str(context.get("name") or "")
-    return [
-        {
-            "role": "system",
-            "content": build_lane_system(name, render_private_block(context)),
-        },
-        {"role": "user", "content": build_lane_ask(name)},
-    ]
+    return carry_lane_brief(
+        [
+            {
+                "role": "system",
+                "content": build_lane_system(name, render_private_block(context)),
+            },
+            {"role": "user", "content": build_lane_ask(name)},
+        ]
+    )
 
 
 class AssetProposalFanout:
