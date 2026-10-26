@@ -23,6 +23,11 @@ you are working in a clone, that directory will not exist; do not recreate it.
 - A long-lived local stack usually runs the engine and the UI as user services — the specific
   unit names and URLs are in `the maintainer's private ops notes (unshipped)`.
 
+## Releases
+
+- The changelog gets one line per change with a reference to its closed issue (`(#NN)`).
+  The issue thread carries the detail — the changelog is an index, not a report.
+
 ## Non-negotiables
 
 1. **Verify live, not just with fakes.** Unit tests with mock transports have lied at every
