@@ -48,6 +48,7 @@ the log. Nothing here may hold state the log cannot reconstruct.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -79,6 +80,15 @@ from .nodes import (
 )
 from .contracts import implements_of, prune_disabled_fanout, stage_disabled
 from .types import ExtractorFn, LogPort, ModelCaller, TurnState
+
+logger = logging.getLogger(__name__)
+
+#: First-run log line for the checkpoint cache (DEBUG: derived, rebuildable by
+#: replaying the log, ADR-003 -- a missing cache is not data loss).
+NEW_CHECKPOINT_DEBUG: str = (
+    "checkpoint cache not found - creating a NEW EMPTY cache; it is derived and "
+    "rebuildable from the event log"
+)
 
 __all__ = [
     "CANONICAL_TOPOLOGY",
@@ -1153,5 +1163,9 @@ async def open_sqlite_checkpointer(path: str | Path) -> AsyncIterator[AsyncSqlit
     Construct inside a running event loop (``AsyncSqliteSaver`` binds to the
     loop). The connection is closed when the context exits.
     """
+    # A missing cache file is a first run: the saver creates it. DEBUG only --
+    # the checkpoint is derived cache, never truth (ADR-003).
+    if str(path) != ":memory:" and not Path(path).exists():
+        logger.debug("%s: %s", path, NEW_CHECKPOINT_DEBUG)
     async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
         yield saver

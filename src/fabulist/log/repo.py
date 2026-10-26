@@ -35,6 +35,7 @@ superseded content is resolved latest-wins and the originals stay queryable.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -57,6 +58,18 @@ from .schema import DDL
 # a player turn — the transcript, prompt history, variables and auto-assistant
 # all read ``user_messages`` from here.
 from fabulist.cards.v2 import is_import_seed_text
+
+logger = logging.getLogger(__name__)
+
+#: Boot log line for an event log that does not exist yet. A missing log file is
+#: a FIRST RUN, not a broken install: the constructor creates an empty log so the
+#: engine boots. A moved or lost log is NOT recovered automatically -- the new
+#: file is empty, which is why this is a WARNING (the log owns everything,
+#: ADR-001) and not a silent DEBUG like the derived stores below.
+NEW_LOG_WARNING: str = (
+    "event log not found - creating a NEW EMPTY log; a moved or lost log is NOT "
+    "recovered automatically"
+)
 
 
 def _now() -> str:
@@ -193,6 +206,11 @@ class EventLog:
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
+        # A missing file is a first run: sqlite3.connect below creates it. Warn
+        # ONCE per process -- the first construction creates the file, so the
+        # later constructions in the same boot see it exist and stay silent.
+        if self.path != ":memory:" and not Path(self.path).exists():
+            logger.warning("%s: %s", self.path, NEW_LOG_WARNING)
         # isolation_level=None: transactions are explicit (BEGIN IMMEDIATE) so
         # read-then-write seq assignment is atomic across connections.
         self._conn = sqlite3.connect(self.path, isolation_level=None)
