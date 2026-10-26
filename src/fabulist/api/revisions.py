@@ -29,6 +29,23 @@ rows are untouched by this rule.
 Any other event type (``asset``, ``system``, ``state-delta``, ...) is refused
 with a ``422`` and a machine-readable reason; those rows are not free text.
 
+Fork views (issue #90)
+----------------------
+A branch renders its ancestors' pre-cut events through the chain
+(:meth:`EventLog.get_projection` -> ``_stream_events``), so those messages carry
+an edit control. The target is therefore resolved through
+:meth:`EventLog.get_chain_events` — the same fork-aware walk — not through the
+session-LOCAL :meth:`EventLog.get_events`. A fork editing an inherited event
+appends the revision to the FORK (the URL's session): the edit is branch-local,
+so the parent's own row, and the parent's own projection, keep the original
+text. ``EventLog.append_revision`` resolves the target id globally, so a branch
+revision superseding a parent row appends without a repo change, and
+``_resolve_payloads`` folds it only in the stream that carries the revision row
+(the fork's own).
+
+The listing is chain-aware for the same reason: an inherited revision row is
+what marks an inherited message as edited in a branch view.
+
 The router reads the live :class:`~fabulist.log.EventLog` from
 ``request.app.state.log`` (the app factory stores it there), matching the other
 routers, so wiring is one line in ``app.py``::
@@ -226,15 +243,25 @@ async def create_revision(
 ) -> dict:
     """Append one revision superseding ``target_id``; return the new row id.
 
-    ``404`` for an unknown session or a target id absent from the session's own
-    events; ``422`` for a non-editable event type (with the type in the detail).
+    The target is resolved over the session's CHAIN
+    (:meth:`EventLog.get_chain_events`), not its own rows: a fork view renders
+    the inherited pre-cut events, so editing one of those must work from the
+    branch. The revision is appended to the URL's session (the fork) — the edit
+    is branch-local (issue #90).
+
+    ``404`` for an unknown session or a target id absent from the session's
+    chain; ``422`` for a non-editable event type (with the type in the detail).
     """
     log = _log_for(request)
     if not _session_exists(log, session_id):
         raise HTTPException(status_code=404, detail="unknown session")
 
     target = next(
-        (event for event in log.get_events(session_id) if event.id == body.target_id),
+        (
+            event
+            for event in log.get_chain_events(session_id)
+            if event.id == body.target_id
+        ),
         None,
     )
     if target is None:
@@ -277,9 +304,11 @@ async def create_revision(
 
 @router.get("/api/sessions/{session_id}/revisions")
 async def list_revisions(session_id: str, request: Request) -> dict:
-    """List the session's ``revision`` rows in append order.
+    """List the session's chain-visible ``revision`` rows in append order.
 
-    Projection-independent: reads raw :meth:`EventLog.get_events` and filters
+    Projection-independent: reads raw :meth:`EventLog.get_chain_events` (so a
+    fork also lists the ancestors' revision rows for the events it inherits —
+    that is the edited marker on an inherited message) and filters
     ``type == "revision"``. The superseded target id is the row's
     ``Event.supersedes`` field (the dataclass attribute / ``to_dict`` key), not
     a payload key — :meth:`EventLog.append_revision` stores it in the row's
@@ -296,7 +325,7 @@ async def list_revisions(session_id: str, request: Request) -> dict:
             "reason": event.payload.get("reason", ""),
             "ts": event.ts,
         }
-        for event in log.get_events(session_id)
+        for event in log.get_chain_events(session_id)
         if event.type == "revision"
     ]
     return {"session_id": session_id, "revisions": revisions}
