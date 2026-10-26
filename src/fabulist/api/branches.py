@@ -19,6 +19,9 @@ just below the pivot whose id the client switches to. It writes only the fork
 bookkeeping row plus one ``system``/``session_renamed`` title-carry row on the
 new branch (the pattern ``CompactService._start_era`` uses) -- no compaction
 marker, so the old line stays in the same swipe group and is one swipe away.
+``POST /fork`` writes the same title-carry row (issue #86): the branch must list
+the title the reader was just on, and the carry is the branch-LOCAL anchor its
+own renames supersede.
 
 W9.26 §2.6 (context management) adds the era distinction: a child whose OWN
 rows carry a ``system``/``compaction`` marker is a CONTINUATION era, everything
@@ -366,6 +369,27 @@ async def fork_branch(
         log.fork_session(session_id, body.at_seq, new_session_id)
     except ValueError as exc:  # target exists / forks onto itself
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Title carry (issue #86; the delete-tail and compaction rule, title only):
+    # ``GET /api/sessions`` summarizes the title from OWN rows, so the branch
+    # would otherwise list "Untitled chat" while the reader is sitting on it --
+    # and, because the title fold is the rename revision's TARGET, a rename on
+    # the branch would supersede the PARENT's title row if no branch-local anchor
+    # existed. This row is that anchor: branch-local, superseded by the branch's
+    # own next rename, and never consulted by the parent's supersede chain.
+    #
+    # ALWAYS append it, empty title included: a branch with zero own rows is
+    # dropped from the list (``_summarize`` returns ``None``); fork_session
+    # always writes the snapshot, so this only matters for an UNTITLED source,
+    # where the row still pins a branch-local title anchor.
+    title = session_title(log.get_events(session_id))
+    log.append_event(
+        new_session_id,
+        "system",
+        "system",
+        {"event": "session_renamed", "title": title},
+    )
+
     info = log.get_session(new_session_id) or {}
     return {
         "session_id": new_session_id,

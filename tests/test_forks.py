@@ -365,8 +365,9 @@ def test_router_prune_branch_hard_deletes(build_app):
     assert pruned.json() == {
         "session_id": new_id,
         "pruned": True,
-        # the issue #62 state snapshot row + the branch's own reply
-        "events_deleted": 2,
+        # the issue #62 state snapshot row + the issue #86 title carry
+        # + the branch's own reply
+        "events_deleted": 3,
     }
     assert after.json()["branches"] == []
     assert [s["session_id"] for s in sessions.json()["sessions"]] == [base]
