@@ -62,6 +62,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **NPC and proposal lanes keep their brief on the engine carrier.** A lane flow is compiled
+  standalone and appended after the narrator's history, so its brief was a `system` message at
+  the tail of the request — which the new central guard refuses and a strict template answers
+  with a 500, costing the turn its lanes. The brief now rides the `assistant` carrier, in the
+  same position, immediately before the lane's ask; the ask stays `user`. One seam does it for
+  both lane flows and for their code defaults, so the compiled and default paths cannot
+  disagree. Order and content stay the preset's.
+
 - **Swiping back no longer strands the newer branch.** Regenerating forked a new chat, and
   swiping back to the original left no forward target. The swipe group is now computed at the
   fork pivot, so both directions list every reply at that position across both chains, in a
