@@ -1037,15 +1037,20 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	 * just drops the preview from the current view.
 	 */
 	/** Message-edit door (SURFACE #6): append a revision, then rehydrate so
-	 * the transcript shows latest-wins without a manual reload. */
-	async function reviseEntry(logId: number, newText: string): Promise<boolean> {
+	 * the transcript shows latest-wins without a manual reload.
+	 *
+	 * Issue #87: a failure resolves `ok: false` WITH the reason, because the
+	 * editor keeps the draft open and shows it. The transport keeps the engine's
+	 * own detail (a 404 "unknown session", a 422 `reason`), so the user reads
+	 * what went wrong, not "Save did nothing". */
+	async function reviseEntry(
+		logId: number,
+		newText: string
+	): Promise<{ ok: true } | { ok: false; detail: string }> {
 		const id = get(sessionId);
-		if (!id) return false;
+		if (!id) return { ok: false, detail: 'no chat is open' };
 		const result = await postRevision(id, logId, newText);
-		if ('error' in result) {
-			console.error(result.error);
-			return false;
-		}
+		if ('error' in result) return { ok: false, detail: result.error };
 		try {
 			const projection = await getProjection(id);
 			hydrate(projection, await hydrateAttachments(id));
@@ -1055,7 +1060,7 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		} catch {
 			// projection refresh failed; the revision landed — reload will show it
 		}
-		return true;
+		return { ok: true };
 	}
 
 	/**
