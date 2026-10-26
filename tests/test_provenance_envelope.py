@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from fabulist.context.facts import RECALLED_FRAMING
 from fabulist.log import EventLog
 from fabulist.prompts.compiler import compile as compile_turn, render_system_prompt
@@ -49,6 +51,18 @@ from fabulist.prompts.wrapper import (
     RUNTIME_OPEN,
     wrap_preset_messages,
 )
+
+@pytest.fixture(autouse=True)
+def _anti_injection_on(monkeypatch: pytest.MonkeyPatch):
+    """Issue #77: these pins describe the ON-state prompt bytes.
+
+    The guard line, both bounds and the full framing ARE the ON state; the
+    gate's OFF state has its own pins in ``test_anti_injection_toggle.py``.
+    Flipping the shipped default keeps the REAL persisted read in charge (no
+    seam is stubbed) — a fresh log then folds ON.
+    """
+    monkeypatch.setattr("fabulist.state.settings.ANTI_INJECTION_DEFAULT", True)
+
 
 FACTS = "time: 09:15 | loc: the dock | weather: light rain"
 PLAN = "PLAN (turn 2)\nSTRINGS: the door opens"

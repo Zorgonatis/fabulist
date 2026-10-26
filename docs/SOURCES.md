@@ -40,7 +40,11 @@ PALETTE) — per message, with the guard line exactly once, outside both, on the
 definition message. The player's message is the closing edge of `<preset_def>`, named the
 `<user_message>` bound in documentation (no literal tag: the message already carries the
 `user` role). Both boundaries are explicit out-of-band indices plumbed from the
-emission sites (never role-scanned). Full mechanics and the nine-iteration review record:
+emission sites (never role-scanned). Issue #77: the guard and both bounds — like the
+framing's bound paragraph and the NPC lane tail's own `<preset_runtime>` wrap — are
+INSTRUCTION framing and render only while the Anti Injection setting is ON; the content
+framing (the six envelope tags, `<validation_notice>`, the lane brief's own tags) renders
+in both states. Full mechanics and the nine-iteration review record:
 `the maintainer's private notes (unshipped)` §5.1.
 
 ## Provenance note

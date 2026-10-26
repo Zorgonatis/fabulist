@@ -50,6 +50,13 @@ The guard means "instruction authority lives inside the two bounds", NOT
 "do not read" — the content carve-outs live in ``parts.SYSTEM_FRAMING`` so
 the model still consumes state facts, plans, palettes and history, and treats
 the engine's per-turn runtime as operative engine instruction.
+
+Issue #77: everything THIS module adds — the guard line and both tags — is
+INSTRUCTION framing, so it renders iff the persisted Anti Injection setting is
+ON. With it OFF the assembly keeps the same messages in the same order with no
+guard and no tags (:func:`wrap_preset_messages`'s ``anti_injection`` argument);
+CONTENT framing (the envelope's ``<engine_*>`` blocks, ``<validation_notice>``,
+the lane brief's own tags) is never gated here.
 """
 
 from __future__ import annotations
@@ -209,6 +216,7 @@ def wrap_preset_messages(
     def_end: int,
     *,
     envelope_at: int | None = None,
+    anti_injection: bool = True,
 ) -> list[dict[str, Any]]:
     """Apply the two bounds to a served message list (§5.1, issue #26).
 
@@ -232,6 +240,15 @@ def wrap_preset_messages(
     message content (multipart) is passed through unwrapped — there is no text
     to carry a tag.
 
+    ``anti_injection`` (issue #77) is the persisted Anti Injection setting for
+    THIS build. ``True`` (the default, and the only shape that existed before
+    the gate) applies the guard + both bounds exactly as described above.
+    ``False`` returns the same list SHAPE with the content untouched: no guard
+    line, no ``<preset_def>``/``<preset_runtime>`` tags, so the player's message
+    is bare and untagged and the prefix's system message is unwrapped. Gating
+    only — nothing is reordered or copied, and the returned list is still new
+    (new dicts, per the identity contract above).
+
     Returns a NEW list with NEW dicts; the input is never mutated.
     """
     end = max(0, min(int(def_end), len(messages)))
@@ -240,7 +257,7 @@ def wrap_preset_messages(
     for index, message in enumerate(messages):
         wrapped = dict(message)
         content = wrapped.get("content")
-        if isinstance(content, str):
+        if anti_injection and isinstance(content, str):
             if index == envelope_index:
                 wrapped["content"] = wrap_runtime(content)
             elif index < end:

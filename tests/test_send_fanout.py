@@ -330,6 +330,33 @@ def test_the_shared_prefix_is_built_once_per_turn_and_never_per_lane(log):
 # -- best-effort lanes -----------------------------------------------------
 
 
+def test_route_threads_the_anti_injection_setting_into_every_payload(log):
+    """Issue #77: the fan-out's Send payload carries the folded setting.
+
+    The lane tail's <preset_runtime> wrap is decided per build from the same
+    persisted setting the narrator's wrapper read, so the two carriers can
+    never disagree inside one turn. Default OFF on a fresh log.
+    """
+    from fabulist.api.settings import SETTINGS_SESSION_ID
+    from fabulist.state.settings import ANTI_INJECTION_FLAG, SETTINGS_EVENT
+
+    _cast(log, "Marcus", "Ilse")
+    fanout = _fanout(log, caller=LaneCaller())
+    update = asyncio.run(fanout(_state()))
+
+    off = asyncio.run(fanout.route({**_state(), **update}))
+    assert [send.arg["anti_injection"] for send in off] == [False, False]
+
+    log.append_event(
+        SETTINGS_SESSION_ID,
+        "system",
+        "user",
+        {"event": SETTINGS_EVENT, "features": {ANTI_INJECTION_FLAG: True}},
+    )
+    on = asyncio.run(fanout.route({**_state(), **update}))
+    assert [send.arg["anti_injection"] for send in on] == [True, True]
+
+
 def test_a_failed_lane_records_a_skip_and_never_raises(log):
     _cast(log, "Marcus", "Ilse")
     caller = LaneCaller(replies={"Ilse": RuntimeError("boom")})

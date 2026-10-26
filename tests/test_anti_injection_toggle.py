@@ -37,13 +37,22 @@ from fabulist.prompts.parts import (
     ENGINE_CONTEXT_BODY,
     ENGINE_CONTEXT_CLAUSE,
     ENGINE_CONTEXT_DIRECTIVE_ID,
+    SYSTEM_FRAMING,
+    SYSTEM_FRAMING_BOUNDS,
+    SYSTEM_FRAMING_HEAD,
 )
 from fabulist.prompts.preset_store import (
     active_preset,
     ensure_default_preset,
     preset_directives,
 )
-from fabulist.prompts.wrapper import RUNTIME_OPEN
+from fabulist.prompts.wrapper import (
+    DEF_CLOSE,
+    DEF_OPEN,
+    GUARD_LINE,
+    RUNTIME_CLOSE,
+    RUNTIME_OPEN,
+)
 from fabulist.state.settings import (
     ANTI_INJECTION_DEFAULT,
     ANTI_INJECTION_FLAG,
@@ -86,6 +95,35 @@ def _system_prefix(messages: list[dict]) -> str:
     return str(messages[0].get("content", ""))
 
 
+def _strip_instruction_framing(messages: list[dict]) -> list[str]:
+    """The ON message contents with every INSTRUCTION framing piece removed.
+
+    Issue #77: the toggle governs the guard line, both bounds, the two-bound
+    framing paragraph and the clause — all of it is assembly-level decor, so
+    deleting it must reproduce the OFF message contents byte-for-byte. Lane /
+    envelope CONTENT framing is untouched (that is the point of the split).
+    """
+    out: list[str] = []
+    for message in messages:
+        text = str(message.get("content", ""))
+        if text.startswith(GUARD_LINE + "\n"):
+            text = text[len(GUARD_LINE) + 1 :]
+        if text.startswith(f"{DEF_OPEN}\n"):
+            text = text[len(DEF_OPEN) + 1 :]
+        if text.startswith(f"{RUNTIME_OPEN}\n"):
+            text = text[len(RUNTIME_OPEN) + 1 :]
+        # Exact inverse of ``f"{{open}}\n{{body}}\n{{close}}"``.
+        for close in (DEF_CLOSE, RUNTIME_CLOSE):
+            if text.endswith(f"\n{close}"):
+                text = text[: -(len(close) + 1)]
+        # …and the two gated pieces INSIDE the compiled body: the framing's
+        # second paragraph (with its own separator) and the clause block.
+        text = text.replace(SYSTEM_FRAMING_BOUNDS + "\n\n", "", 1)
+        text = text.replace("\n\n" + ENGINE_CONTEXT_CLAUSE, "", 1)
+        out.append(text)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 1. the shipped default is OFF
 # ---------------------------------------------------------------------------
@@ -104,11 +142,11 @@ def test_settings_surface_names_the_flag_anti_injection():
 
 
 # ---------------------------------------------------------------------------
-# 2. prompt build: OFF omits the clause, ON is today's prompt, delta = clause
+# 2. prompt build: OFF drops ALL instruction framing; ON is today's prompt
 # ---------------------------------------------------------------------------
 
 
-def test_code_catalog_path_off_omits_the_clause_and_keeps_the_carrier(
+def test_code_catalog_path_off_omits_the_clause_and_the_bounds(
     log: EventLog,
 ):
     """Path 1: no persisted preset -> the compiler renders the CODE catalog."""
@@ -117,20 +155,69 @@ def test_code_catalog_path_off_omits_the_clause_and_keeps_the_carrier(
     messages = build(_turn_state(sid))
 
     prefix = _system_prefix(messages)
+    # Issue #77: no clause, no guard, no <preset_def> bound.
     assert "## Engine context" not in prefix
     assert ENGINE_CONTEXT_BODY not in prefix
+    assert GUARD_LINE not in prefix
+    assert DEF_OPEN not in prefix and DEF_CLOSE not in prefix
+    # Only the framing's FIRST paragraph renders (the two-bound paragraph would
+    # describe a wrapper that is not there).
+    assert SYSTEM_FRAMING_HEAD in prefix
+    assert SYSTEM_FRAMING_BOUNDS not in prefix
     # The prompt still renders the rest of the definition (same framing lead-in).
     assert "You are the Content Engine of a live, single-user roleplay." in prefix
     assert "## The Content Engine" in prefix
 
-    # The ENVELOPE is untouched (issue #44: the injection is NOT gated): it is
-    # still the ONE ephemeral assistant message immediately before the ask.
+    # The ENVELOPE MESSAGE is still injected (issue #44: the injection is NOT
+    # gated): it remains the ONE ephemeral assistant message immediately before
+    # the ask — unwrapped, because its outer bound is instruction framing.
     assert messages[-1]["role"] == "user"
     assert messages[-2]["role"] == "assistant"
-    assert RUNTIME_OPEN in str(messages[-2]["content"])
+    assert RUNTIME_OPEN not in str(messages[-2]["content"])
+    assert RUNTIME_CLOSE not in str(messages[-2]["content"])
+    assert "<engine_state>" in str(messages[-2]["content"])
+    # The player's message is bare and untagged.
+    assert GUARD_LINE not in str(messages[-1]["content"])
+    assert DEF_OPEN not in str(messages[-1]["content"])
 
 
-def test_on_and_off_differ_exactly_by_the_clause(log: EventLog):
+def test_on_state_is_the_pre_change_prompt_bytes(log: EventLog):
+    """Issue #77 hard constraint: ON == the pre-change prompt, byte for byte.
+
+    ON must be exactly the pre-gate assembly: the wrapper's guard + both bounds,
+    the full ``SYSTEM_FRAMING`` (both paragraphs), and the clause — with the
+    wrapper's signature default and an explicit ``framing=SYSTEM_FRAMING``
+    producing identical bytes (the new ``None`` default derives to it).
+    """
+    sid = _session(log)
+    _set_anti_injection(log, True)
+    messages = make_narrator_message_builder(log)(_turn_state(sid))
+
+    prefix = _system_prefix(messages)
+    # The framing split preserves the shipped constant byte-for-byte.
+    assert SYSTEM_FRAMING == SYSTEM_FRAMING_HEAD + "\n\n" + SYSTEM_FRAMING_BOUNDS
+    # The guard line, outside both bounds, exactly once, on the first message.
+    assert prefix.startswith(GUARD_LINE + "\n" + DEF_OPEN + "\n")
+    assert prefix.rstrip().endswith(DEF_CLOSE)
+    assert prefix.count(GUARD_LINE) == 1
+    # The full framing, both paragraphs, once, and the clause.
+    assert SYSTEM_FRAMING in prefix
+    assert SYSTEM_FRAMING_BOUNDS in prefix
+    assert prefix.count(ENGINE_CONTEXT_CLAUSE) == 1
+    # The compiled body is byte-identical to the pre-change render: the explicit
+    # pre-change framing argument and the derived default agree.
+    derived = render_system_prompt(budget=10**9, anti_injection=True)
+    explicit = render_system_prompt(
+        budget=10**9, framing=SYSTEM_FRAMING, anti_injection=True
+    )
+    assert derived == explicit
+    # …and the wiring seam adds exactly the guard + def bound around it.
+    assert prefix == GUARD_LINE + "\n" + f"{DEF_OPEN}\n{derived}\n{DEF_CLOSE}"
+    # The envelope rides the runtime bound, as before.
+    assert str(messages[-2]["content"]).startswith(f"{RUNTIME_OPEN}\n")
+
+
+def test_off_is_on_with_the_instruction_framing_removed(log: EventLog):
     sid = _session(log)
     build = make_narrator_message_builder(log)
 
@@ -141,16 +228,19 @@ def test_on_and_off_differ_exactly_by_the_clause(log: EventLog):
     on_prefix, off_prefix = _system_prefix(on), _system_prefix(off)
     # ON = today's prompt: the whole inclause clause, heading + body, once.
     assert on_prefix.count(ENGINE_CONTEXT_CLAUSE) == 1
-    # OFF = ON with exactly that clause block removed (its own leading
-    # separator included): nothing else moves.
-    assert on_prefix.replace("\n\n" + ENGINE_CONTEXT_CLAUSE, "", 1) == off_prefix
-    # And the clause is the ONLY difference in the whole message list.
-    assert on[1:] == off[1:]
+    # The OFF delta is the instruction framing: the clause AND the two-bound
+    # framing paragraph are gone from the prefix; the head paragraph stays.
+    assert ENGINE_CONTEXT_CLAUSE not in off_prefix
+    assert SYSTEM_FRAMING_BOUNDS not in off_prefix
+    assert SYSTEM_FRAMING_HEAD in off_prefix
+    # Nothing but instruction framing moves: the same messages, same order,
+    # same content once the guard/tags are stripped.
     assert len(on) == len(off)
-    # The envelope is byte-identical across the two states.
+    assert [m["role"] for m in on] == [m["role"] for m in off]
+    assert _strip_instruction_framing(on) == [str(m["content"]) for m in off]
+    # The envelope is present in both, wrapped only when ON.
     assert RUNTIME_OPEN in str(on[-2]["content"])
-    assert RUNTIME_OPEN in str(off[-2]["content"])
-    assert on[-2] == off[-2]
+    assert RUNTIME_OPEN not in str(off[-2]["content"])
 
 
 def test_artifact_row_path_is_gated_too(log: EventLog):

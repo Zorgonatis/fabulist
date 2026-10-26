@@ -615,13 +615,18 @@ def _opening_messages(log: "EventLog", session_id: str, plan: Any) -> list[dict]
     Issue #39: the opening is a BUILT narrator prompt, so it reads the persisted
     Anti Injection setting per call (default OFF = no ``## Engine context``
     clause) exactly like the turn builder.
+
+    Issue #77: that same read gates the INSTRUCTION framing too — the guard
+    line and the ``<preset_def>`` bound around the joined payload. OFF leaves
+    the same payload, unwrapped and unguarded.
     """
     from fabulist.prompts.variables import display_variables
     from fabulist.prompts.wrapper import wrap_preset
     from fabulist.state.settings import anti_injection_enabled
     from fabulist.wiring import narrator_system_prompt
 
-    parts = [narrator_system_prompt(anti_injection=anti_injection_enabled(log))]
+    anti_injection = anti_injection_enabled(log)
+    parts = [narrator_system_prompt(anti_injection=anti_injection)]
     try:
         from fabulist.context.roster import extract_cards, persona_block
 
@@ -644,4 +649,11 @@ def _opening_messages(log: "EventLog", session_id: str, plan: Any) -> list[dict]
         "player can answer. Prose and openui DSL only; do not speak or act for "
         "the player's character, and do not address the player out of character."
     )
-    return [{"role": "system", "content": wrap_preset("\n\n".join(parts), guard=True)}]
+    joined = "\n\n".join(parts)
+    # Issue #77: the def bound AND the guard line are BOTH instruction framing.
+    # ``wrap_preset`` always emits the tags, so the OFF state skips the call
+    # entirely rather than passing ``guard=False`` (which would leave an
+    # unguarded ``<preset_def>`` around a prompt the narrator's turn builder
+    # serves unwrapped).
+    content = wrap_preset(joined, guard=True) if anti_injection else joined
+    return [{"role": "system", "content": content}]
