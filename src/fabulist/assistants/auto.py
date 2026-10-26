@@ -132,7 +132,11 @@ async def _run_assistant_turn(
     if flow is not None:
         # D18 completion: the assistant interaction's module flow, when the
         # orchestrator supplies one (preset-customized); None keeps the default.
-        manager._messages_builder = flow
+        # Issue #70: bind THIS consult's session id into the flow call, so a
+        # swallowed preset read leaves its ``preset_degraded`` row on the turn.
+        manager._messages_builder = lambda definition, context: flow(
+            definition, context, session_id
+        )
     context = AssistantContext(
         facts=scene_facts_line(log, session_id),
         recent_prose=scene_recent_prose(log, session_id),

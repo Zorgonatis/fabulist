@@ -61,8 +61,23 @@ the preset store entirely.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping
 from typing import Any
+
+from fabulist.log.degradation import append_preset_degraded
+
+logger = logging.getLogger(__name__)
+
+
+def _session_for_row() -> str:
+    """The turn's session (the pump-installed seam), or ``""`` off-turn."""
+    try:
+        from fabulist.agents.debug import CURRENT_SESSION
+
+        return CURRENT_SESSION.get("") or ""
+    except Exception:  # noqa: BLE001 - a row is best-effort, never fatal
+        return ""
 
 __all__ = [
     "INTERACTIONS",
@@ -173,7 +188,18 @@ def _preset_bindings_provider(log: Any) -> Mapping[str, Any] | None:
         return None
     try:
         preset = preset_store.active_preset(log)
-    except Exception:  # noqa: BLE001 - a bad preset must not break a turn
+    except Exception as exc:  # noqa: BLE001 - a bad preset must not break a turn
+        # Issue #70: a failed preset read silently answers with the DEFAULT
+        # bindings (the wrong-model class) — never leave it without a trace.
+        logger.warning("agent bindings preset read failed; using defaults", exc_info=True)
+        append_preset_degraded(
+            log,
+            _session_for_row(),
+            stage="agent_bindings",
+            exc=exc,
+            advice="every interaction fell back to its default agent — check the "
+            "preset store",
+        )
         return None
     if not isinstance(preset, Mapping):
         return None
@@ -292,7 +318,16 @@ def bindings_for(log: Any) -> dict:
     provider = _bindings_provider or _preset_bindings_provider
     try:
         found = provider(log)
-    except Exception:  # noqa: BLE001 - never let preset lookup break a turn
+    except Exception as exc:  # noqa: BLE001 - never let preset lookup break a turn
+        logger.warning("agent bindings provider failed; using defaults", exc_info=True)
+        append_preset_degraded(
+            log,
+            _session_for_row(),
+            stage="agent_bindings",
+            exc=exc,
+            advice="every interaction fell back to its default agent — check the "
+            "bindings provider",
+        )
         found = None
     if isinstance(found, Mapping) and found:
         return dict(found)

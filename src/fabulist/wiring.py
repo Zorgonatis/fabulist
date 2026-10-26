@@ -41,6 +41,7 @@ from fabulist.log.degradation import (
     RECALL_DEGRADED_EVENT,
     STAGES,
     append_degradation,
+    append_preset_degraded,
     degradation_reason,
 )
 
@@ -1080,6 +1081,42 @@ def _response_length(connection: Any) -> int:
     return int(sampling.get("max_tokens") or 0)
 
 
+def _format_session_for_row() -> str:
+    """The CURRENT turn's session id for a degradation row, or ``""``.
+
+    Binding/profile seams are invoked through the model-caller interface, which
+    carries no session id; the pump installs ``CURRENT_SESSION`` for the whole
+    turn (the same seam the usage rows and the BTS pass read it from), so this
+    is where those sites recover it. Anchor sessions are refused by
+    :func:`append_preset_degraded` itself.
+    """
+    try:
+        from fabulist.agents.debug import CURRENT_SESSION
+
+        return CURRENT_SESSION.get("") or ""
+    except Exception:  # noqa: BLE001 - a row is best-effort, never fatal
+        return ""
+
+
+def _preset_degraded(
+    log: EventLog,
+    session_id: str,
+    interaction: str,
+    exc: BaseException,
+    advice: str = "",
+) -> None:
+    """Append ONE ``preset_degraded`` row for a swallowed preset/context read.
+
+    ``interaction`` is both the stage the Inspector shows and the label the
+    caller's warning names; the caller has already warned (issue #70 pairs one
+    warning per handler with one row per block). A ``""`` session id (an
+    off-turn build) is a no-op — the warning is the whole record there.
+    """
+    append_preset_degraded(
+        log, session_id, stage=interaction, exc=exc, advice=advice
+    )
+
+
 def _interaction_slot(
     registry: Registry, log: EventLog, interaction: str, fallback: str
 ) -> str:
@@ -1089,6 +1126,10 @@ def _interaction_slot(
     slot: the Summary/ledger/budget consumers below all come through here, so a
     preset re-bind or a hot-reloaded connection applies on the next call and no
     seam can re-derive the hierarchy on its own.
+
+    Issue #70: a failed preset read here silently answers with the WRONG MODEL,
+    so it warns and (when the turn's session is known) leaves a
+    ``preset_degraded`` row.
     """
     from fabulist.connections.taxonomy import resolve_interaction_agent
     from fabulist.prompts.agent_sets import bindings_for
@@ -1097,7 +1138,19 @@ def _interaction_slot(
         return resolve_interaction_agent(
             bindings_for(log), registry.agents, interaction, fallback
         )
-    except Exception:  # noqa: BLE001 - an unreadable preset store = the default
+    except Exception as exc:  # noqa: BLE001 - an unreadable preset store = the default
+        logger.warning(
+            "%s binding resolution fell back to %r", interaction, fallback,
+            exc_info=True,
+        )
+        _preset_degraded(
+            log,
+            _format_session_for_row(),
+            f"{interaction}_binding",
+            exc,
+            "the interaction fell back to its default agent — check the preset "
+            "bindings",
+        )
         return fallback
 
 
@@ -1115,7 +1168,20 @@ def _interaction_connection(
         return registry.connection_for(
             _interaction_slot(registry, log, interaction, fallback)
         )
-    except Exception:  # noqa: BLE001 - an unknown connection means no window math
+    except Exception as exc:  # noqa: BLE001 - an unknown connection means no window math
+        # Issue #70: a swallowed settings read is the same class — never silent.
+        logger.warning(
+            "%s connection read failed; no window math this read", interaction,
+            exc_info=True,
+        )
+        _preset_degraded(
+            log,
+            _format_session_for_row(),
+            f"{interaction}_connection",
+            exc,
+            "the interaction resolved no connection — check the connections "
+            "document and the preset bindings",
+        )
         return None
 
 
@@ -1480,8 +1546,16 @@ def make_narrator_message_builder(
         anti_injection = ANTI_INJECTION_DEFAULT
         try:
             anti_injection = anti_injection_enabled(log)
-        except Exception:  # noqa: BLE001 - the setting must never break a turn
+        except Exception as exc:  # noqa: BLE001 - the setting must never break a turn
             logger.warning("anti-injection setting read failed", exc_info=True)
+            _preset_degraded(
+                log,
+                sid,
+                "anti_injection",
+                exc,
+                "the Anti Injection setting fell back to its shipped default — "
+                "check the settings log",
+            )
 
         lib_effective = (
             resolve_library_doc(surfaces, variables)
@@ -1887,7 +1961,15 @@ def make_ooc_message_builder(log: EventLog) -> Callable[[str, str], list[dict]]:
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001 - absent store = defaults
+        except Exception as exc:  # noqa: BLE001 - absent store = defaults
+            logger.warning("ooc preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "ooc",
+                exc,
+                "the OOC turn used the code default prompt — check the preset store",
+            )
             preset = None
         facts_line = facts_line_from_log(log, session_id) or ""
         # The state facts are the envelope's <engine_state> block, never a
@@ -2017,8 +2099,21 @@ def build_engine(
                     self._interaction,
                     self._fallback,
                 )
-            except Exception:  # noqa: BLE001 - preset lookup must never break calls
-                pass
+            except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+                logger.warning(
+                    "%s caller binding fell back to %r",
+                    self._interaction,
+                    self._fallback,
+                    exc_info=True,
+                )
+                _preset_degraded(
+                    log,
+                    _format_session_for_row(),
+                    f"{self._interaction}_binding",
+                    exc,
+                    "the call fell back to its default agent — check the preset "
+                    "bindings",
+                )
             self.agent = agent
             if agent not in self._cache:
                 # W5-S2 chokepoint: every resolved narrator/OOC caller is
@@ -2042,7 +2137,21 @@ def build_engine(
             try:
                 self._caller()  # resolves (and caches) the agent this call would use
                 return registry.connection_for(self.agent).call_timeout_s
-            except Exception:  # noqa: BLE001 - a settings read never breaks a phase
+            except Exception as exc:  # noqa: BLE001 - a settings read never breaks a phase
+                # Issue #70: a swallowed settings read is the same class.
+                logger.warning(
+                    "%s call-deadline read failed; the phase records no bound",
+                    self._interaction,
+                    exc_info=True,
+                )
+                _preset_degraded(
+                    log,
+                    _format_session_for_row(),
+                    f"{self._interaction}_connection",
+                    exc,
+                    "the phase recorded no call deadline — check the "
+                    "connection settings",
+                )
                 return None
 
         async def __call__(
@@ -2077,16 +2186,28 @@ def build_engine(
     # while the flow stays all-default — precedence documented in
     # preset_store.compile_preset_flow). Variables resolve per call so
     # {{message}}/{{last_narrative}} carry the turn under extraction.
-    def _extract_flow_messages(user_msg: str, narrative: str) -> list[dict]:
+    def _extract_flow_messages(
+        user_msg: str, narrative: str, session_id: str = ""
+    ) -> list[dict]:
         # Lazy imports at call scope (cycle hygiene). The turn under
         # extraction rides the variables; the session-scoped resolvers use
         # "" (the extractor is post-turn and session-blind by contract).
+        # The session id is threaded explicitly (issue #70) so a failed preset
+        # read can leave its ``preset_degraded`` row on the TURN's session.
         from fabulist.prompts.preset_store import active_preset, compile_preset_flow
         from fabulist.state.extractor import EXTRACTOR_SYSTEM_PROMPT, _turn_block
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("extract preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id or "",
+                "extract",
+                exc,
+                "the extractor used the code default prompt — check the preset store",
+            )
             preset = None
         return compile_preset_flow(
             preset,
@@ -2104,7 +2225,9 @@ def build_engine(
     # deterministic, see :mod:`fabulist.state.attribution`) — the ``bts`` pass
     # still resolves its agent per call from the active preset's agent_bindings
     # (fallback ``extractor``) and compiles through its D18 module flow.
-    def _bts_flow_messages(user_msg, narrative, prior_state, checkpoint):
+    def _bts_flow_messages(
+        user_msg, narrative, prior_state, checkpoint, session_id: str = ""
+    ):
         # D25 capture correctness: post-turn hooks inherit the pump's
         # CURRENT_INTERACTION ("narrate") — relabel so bts captures/usage
         # attribute truthfully.
@@ -2116,7 +2239,16 @@ def build_engine(
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("bts preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "bts",
+                exc,
+                "the world-state pass used the code default prompt — check the "
+                "preset store",
+            )
             preset = None
         base = build_bts_messages(user_msg, narrative, prior_state, checkpoint=checkpoint)
         return compile_preset_flow(
@@ -2150,13 +2282,32 @@ def build_engine(
             agent = resolve_interaction_agent(
                 bindings_for(log), registry.agents, "bts", agent
             )
-        except Exception:  # noqa: BLE001 - preset lookup must never break calls
-            pass
+        except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+            logger.warning("bts binding resolution fell back to %r", agent, exc_info=True)
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "bts_binding",
+                exc,
+                "the BTS request profile fell back to its default agent — check "
+                "the preset bindings",
+            )
         try:
             return build_bts_request_profile(
                 resolve_capabilities(registry.connection_for(agent))
             )
-        except Exception:  # noqa: BLE001 - unknown connection degrades to notation
+        except Exception as exc:  # noqa: BLE001 - unknown connection degrades to notation
+            logger.warning(
+                "bts request profile read failed; using notation", exc_info=True
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "bts_connection",
+                exc,
+                "the BTS pass fell back to the notation path — check the "
+                "connection settings",
+            )
             return None
 
     def _loop_connection(interaction: str, fallback: str) -> Connection | None:
@@ -2178,8 +2329,19 @@ def build_engine(
             agent = resolve_interaction_agent(
                 bindings_for(log), registry.agents, interaction, agent
             )
-        except Exception:  # noqa: BLE001 - preset lookup must never break calls
-            pass
+        except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+            logger.warning(
+                "%s binding resolution fell back to %r", interaction, agent,
+                exc_info=True,
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                f"{interaction}_binding",
+                exc,
+                "the loop's connection fell back to its default agent — check "
+                "the preset bindings",
+            )
         try:
             return registry.connection_for(agent)
         except Exception:  # noqa: BLE001 - unknown connection keeps the default
@@ -2215,8 +2377,16 @@ def build_engine(
             agent = resolve_interaction_agent(
                 bindings_for(log), registry.agents, "bts", agent
             )
-        except Exception:  # noqa: BLE001 - preset lookup must never break calls
-            pass
+        except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+            logger.warning("bts timeout binding fell back to %r", agent, exc_info=True)
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "bts_binding",
+                exc,
+                "the BTS loop timeout fell back to its default agent — check the "
+                "preset bindings",
+            )
         try:
             return registry.connection_for(agent).timeout
         except Exception:  # noqa: BLE001 - unknown connection keeps the row honest
@@ -2309,12 +2479,25 @@ def build_engine(
         A CALLABLE is what the node and the junction take, so a Studio cadence /
         fields / steer edit applies on the next due evaluation with no rebuild
         (the planner config is deliberately outside the topology digest).
+
+        Issue #70: a failed read silently drops the owner's steer/fields, which
+        reads like a model that ignored instructions — so it warns and leaves a
+        ``preset_degraded`` row on the turn's session.
         """
         from fabulist.prompts.preset_store import active_preset, planner_config
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001 - a bad preset must not break a turn
+        except Exception as exc:  # noqa: BLE001 - a bad preset must not break a turn
+            logger.warning("planner config read failed; using defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "planner_config",
+                exc,
+                "the planner used its default cadence/steer/fields — check the "
+                "preset store",
+            )
             preset = None
         return planner_config(preset)
 
@@ -2323,7 +2506,7 @@ def build_engine(
         cadence = _planner_config().get("cadence")
         return cadence if isinstance(cadence, int) and cadence >= 1 else DEFAULT_PLAN_CADENCE
 
-    def _planner_flow_messages() -> list[dict]:
+    def _planner_flow_messages(session_id: str = "") -> list[dict]:
         """Render the planner's prompt surface through the preset's flow.
 
         W9.20 §6: the planner is edited like the critic or the lanes — its
@@ -2336,7 +2519,18 @@ def build_engine(
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001 - absent store = the code default
+        except Exception as exc:  # noqa: BLE001 - absent store = the code default
+            logger.warning(
+                "planner directive read failed; using the code default", exc_info=True
+            )
+            _preset_degraded(
+                log,
+                session_id,
+                "planner_directive",
+                exc,
+                "the planner used the code default directive — check the preset "
+                "store",
+            )
             preset = None
         return compile_preset_flow(
             preset,
@@ -2344,9 +2538,9 @@ def build_engine(
             {"system": DEFAULT_PLANNER_DIRECTIVE, "variables": {}},
         )
 
-    def _planner_directive() -> str:
+    def _planner_directive(session_id: str = "") -> str:
         """The planner's directive text (the flow's system row, compiled)."""
-        messages = _planner_flow_messages()
+        messages = _planner_flow_messages(session_id)
         content = messages[0].get("content") if messages else None
         return str(content or DEFAULT_PLANNER_DIRECTIVE)
 
@@ -2367,14 +2561,34 @@ def build_engine(
             agent = resolve_interaction_agent(
                 bindings_for(log), registry.agents, "planner", narrator_agent
             )
-        except Exception:  # noqa: BLE001 - preset lookup must never break calls
-            pass
+        except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+            logger.warning("planner binding resolution fell back to %r", agent, exc_info=True)
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "planner_binding",
+                exc,
+                "the planner request profile fell back to its default agent — "
+                "check the preset bindings",
+            )
         try:
             return build_planner_request_profile(
                 resolve_capabilities(registry.connection_for(agent)),
                 _planner_config().get("fields") or [],
             )
-        except Exception:  # noqa: BLE001 - unknown connection degrades to notation
+        except Exception as exc:  # noqa: BLE001 - unknown connection degrades to notation
+            logger.warning(
+                "planner request profile read failed; using content mode",
+                exc_info=True,
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "planner_connection",
+                exc,
+                "the planner fell back to content mode — check the planner "
+                "connection",
+            )
             return None
 
     def _planner_loop_return_thinking() -> bool | None:
@@ -2390,7 +2604,7 @@ def build_engine(
     # bts/attribution it compiles through its own D18 module flow (``critic``) and
     # resolves its agent per call from the active preset's agent_bindings
     # (fallback ``extractor``, D49's cheap extractor-class default).
-    def _critic_flow_messages(evidence):
+    def _critic_flow_messages(evidence, session_id: str = ""):
         # D25 capture correctness: post-turn hooks inherit the pump's
         # CURRENT_INTERACTION ("narrate") — relabel so critic captures/usage
         # attribute truthfully.
@@ -2402,7 +2616,15 @@ def build_engine(
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("critic preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "critic",
+                exc,
+                "the critic used the code default prompt — check the preset store",
+            )
             preset = None
         return compile_preset_flow(
             preset,
@@ -2422,7 +2644,9 @@ def build_engine(
     # map all resolve through it. The builder is handed to the fan-out below, so
     # an owner edit to the ``proposals`` flow applies to the next turn with no
     # rebuild.
-    def _proposals_flow_messages(payload: Mapping[str, str]) -> list[dict]:
+    def _proposals_flow_messages(
+        payload: Mapping[str, str], session_id: str = ""
+    ) -> list[dict]:
         """Compile the ``proposals`` flow for ONE data type's lane (W9.22 §3).
 
         ``payload`` carries the two structural block bodies the flow splices
@@ -2441,7 +2665,16 @@ def build_engine(
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("proposals preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "proposals",
+                exc,
+                "the proposal lanes used the code default prompt — check the "
+                "preset store",
+            )
             preset = None
         return compile_preset_flow(
             preset,
@@ -2512,7 +2745,15 @@ def build_engine(
         CURRENT_INTERACTION.set("npc")
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001 - absent store = defaults
+        except Exception as exc:  # noqa: BLE001 - absent store = defaults
+            logger.warning("npc preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                str(state.get("session_id") or ""),
+                "npc",
+                exc,
+                "the NPC lane used the code default prompt — check the preset store",
+            )
             preset = None
         name = str(context.get("name") or "")
         try:
@@ -2569,11 +2810,13 @@ def build_engine(
             provider_label_fn=_provider_label(registry, log, "npc", "extractor"),
         )
 
-    async def critic(evidence):
+    async def critic(evidence, session_id: str = ""):
         """Call the ``critic`` flow, returning its raw reply text (D23 caller)."""
         from fabulist.graph.types import collect_text
 
-        return await collect_text(critic_caller, _critic_flow_messages(evidence))
+        return await collect_text(
+            critic_caller, _critic_flow_messages(evidence, session_id)
+        )
 
     # The SAME builder the narrator node uses for the turn (one instance). The
     # W9.24 repair loop rides that same message list: its iterations only ever
@@ -2601,11 +2844,30 @@ def build_engine(
             agent = resolve_interaction_agent(
                 bindings_for(log), registry.agents, "narrate", narrator_agent
             )
-        except Exception:  # noqa: BLE001 - preset lookup must never break calls
-            pass
+        except Exception as exc:  # noqa: BLE001 - preset lookup must never break calls
+            logger.warning("narrate binding resolution fell back to %r", agent, exc_info=True)
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "narrate_binding",
+                exc,
+                "the repair loop fell back to its default agent — check the "
+                "preset bindings",
+            )
         try:
             return resolve_capabilities(registry.connection_for(agent))
-        except Exception:  # noqa: BLE001 - unknown connection degrades to keep + flags
+        except Exception as exc:  # noqa: BLE001 - unknown connection degrades to keep + flags
+            logger.warning(
+                "narrate capability read failed; the repair loop stays off",
+                exc_info=True,
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "narrate_connection",
+                exc,
+                "the repair loop did not engage — check the narrate connection",
+            )
             return None
 
     def _narrate_loop_timeout() -> float | None:
@@ -2625,7 +2887,18 @@ def build_engine(
                 bindings_for(log), registry.agents, "narrate", narrator_agent
             )
             return registry.connection_for(agent).timeout
-        except Exception:  # noqa: BLE001 - unknown connection keeps the row honest
+        except Exception as exc:  # noqa: BLE001 - unknown connection keeps the row honest
+            logger.warning(
+                "narrate timeout binding read failed; no bound recorded", exc_info=True
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "narrate_binding",
+                exc,
+                "the repair loop recorded no transport bound — check the preset "
+                "bindings and connections",
+            )
             return None
 
     def _narrate_loop_return_thinking() -> bool | None:
@@ -2654,7 +2927,18 @@ def build_engine(
             return build_extractor_request_profile(
                 resolve_capabilities(registry.connection_for("extractor"))
             )
-        except Exception:  # noqa: BLE001 - unknown connection degrades to notation
+        except Exception as exc:  # noqa: BLE001 - unknown connection degrades to notation
+            logger.warning(
+                "extractor request profile read failed; using notation", exc_info=True
+            )
+            _preset_degraded(
+                log,
+                _format_session_for_row(),
+                "extractor_connection",
+                exc,
+                "the extractor fell back to the notation path — check the "
+                "extractor connection",
+            )
             return None
 
     # W9.5 (R10): compile from the PRESET's topology (validated; falls back to
@@ -2713,7 +2997,9 @@ def build_engine(
         planner=make_planner_node(
             log=log,
             caller=planner_caller,
-            directive=_planner_directive(),
+            # Issue #70: a session-aware reader, not a build-time snapshot, so
+            # a failed preset read leaves a ``preset_degraded`` row on the turn.
+            directive=_planner_directive,
             planner_config=_planner_config,
             request_profile_fn=_planner_request_profile,
             provider_label_fn=_provider_label(
@@ -3126,7 +3412,7 @@ def build_app(
 
     summarizer = _SummarizeCaller()
 
-    def _summarize_flow_messages(transcript: str) -> list[dict]:
+    def _summarize_flow_messages(transcript: str, session_id: str = "") -> list[dict]:
         """The summarize interaction's module flow (preset-customized or default).
 
         D18 completion: Studio preview and the real call render through the same
@@ -3138,7 +3424,18 @@ def build_app(
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("summarize preset read failed; using code defaults", exc_info=True)
+            # The compaction service is shared across sessions and does not
+            # hand its session to the builder; it keeps CURRENT_SESSION installed
+            # for the run, so resolve the row's target from there.
+            _preset_degraded(
+                log,
+                session_id or _format_session_for_row(),
+                "summarize",
+                exc,
+                "compaction used the code default prompt — check the preset store",
+            )
             preset = None
         base = build_summarizer_messages(transcript)
         return compile_preset_flow(
@@ -3174,13 +3471,23 @@ def build_app(
     # fatal; disabled enablement returns silently inside the hook). Built from
     # the same flow + factory the consult route uses, so panel and manual
     # consult are byte-identical paths.
-    def _assistant_flow_messages(definition: Any, context: Any) -> list[dict]:
+    def _assistant_flow_messages(
+        definition: Any, context: Any, session_id: str = ""
+    ) -> list[dict]:
         from fabulist.prompts.preset_store import active_preset, compile_preset_flow
         from fabulist.assistants.manager import build_assistant_messages
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("assistant preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "assistant",
+                exc,
+                "the assistant used the code default prompt — check the preset store",
+            )
             preset = None
         base = build_assistant_messages(definition, context)
         return compile_preset_flow(
@@ -3210,13 +3517,21 @@ def build_app(
     # evaluation with no rebuild) or on the owner's run-now door. The runner is
     # built ONCE and shared: the post-turn hook below and the API's status/run
     # routes must agree about what is in flight.
-    def _historian_cadence() -> int:
+    def _historian_cadence(session_id: str = "") -> int:
         """Committed turns between automatic historian runs (the preset's)."""
         from fabulist.prompts.preset_store import active_preset, historian_config
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001 - an unreadable store = the default
+        except Exception as exc:  # noqa: BLE001 - an unreadable store = the default
+            logger.warning("historian cadence read failed; using the default", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "historian_cadence",
+                exc,
+                "the historian used its default cadence — check the preset store",
+            )
             preset = None
         return historian_config(preset)["cadence"]
 
@@ -3289,13 +3604,21 @@ def build_app(
 
     # D18 completion: caption + assistant flow renderers (the routers read
     # them off app.state; None keeps the fixed default shapes).
-    def _caption_flow_messages(asset: dict) -> list[dict]:
+    def _caption_flow_messages(asset: dict, session_id: str = "") -> list[dict]:
         from fabulist.media.images import build_caption_messages
         from fabulist.prompts.preset_store import active_preset, compile_preset_flow
 
         try:
             preset = active_preset(log)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("caption preset read failed; using code defaults", exc_info=True)
+            _preset_degraded(
+                log,
+                session_id,
+                "caption",
+                exc,
+                "the captioner used the code default prompt — check the preset store",
+            )
             preset = None
         base = build_caption_messages(asset)
         return compile_preset_flow(

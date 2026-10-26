@@ -41,9 +41,13 @@ card event the session carries; the session model has no per-card tombstone, so
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Sequence
 
 from fabulist.context.roster import extract_cards
+from fabulist.log.degradation import append_preset_degraded
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fabulist.log import EventLog
@@ -229,7 +233,17 @@ def cast_delta_notice(log: "EventLog", session_id: str) -> str | None:
     parts: list[str] = []
     try:
         world_part = _world_delta_notice(log, session_id)
-    except Exception:  # noqa: BLE001 - the notice is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 - the notice is advisory, never fatal
+        # Issue #70: the cast-delta notice is a preset/context read; a failed
+        # half must not look like "no change" on the prompt.
+        logger.warning("cast delta notice: world diff failed", exc_info=True)
+        append_preset_degraded(
+            log,
+            session_id,
+            stage="cast_context",
+            exc=exc,
+            advice="the narrator's cast-change notice may be incomplete",
+        )
         world_part = None
     if world_part:
         parts.append(world_part)
@@ -237,7 +251,15 @@ def cast_delta_notice(log: "EventLog", session_id: str) -> str | None:
         from fabulist.state.cast import runtime_notice
 
         roster_part = runtime_notice(log, session_id)
-    except Exception:  # noqa: BLE001 - the notice is advisory, never fatal
+    except Exception as exc:  # noqa: BLE001 - the notice is advisory, never fatal
+        logger.warning("cast delta notice: roster growth failed", exc_info=True)
+        append_preset_degraded(
+            log,
+            session_id,
+            stage="cast_context",
+            exc=exc,
+            advice="the narrator's cast-change notice may be incomplete",
+        )
         roster_part = None
     if roster_part:
         parts.append(roster_part)

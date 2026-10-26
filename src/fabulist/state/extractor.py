@@ -216,9 +216,17 @@ class ExtractorResult:
 
 
 class ExtractorFn(Protocol):
-    """The post-turn extractor seam: ``(user_msg, narrative) -> ExtractorResult``."""
+    """The post-turn extractor seam: ``(user_msg, narrative) -> ExtractorResult``.
 
-    def __call__(self, user_msg: str, narrative: str) -> ExtractorResult: ...
+    Issue #70: the production renderer is session-aware (the flow builder takes
+    an explicit ``session_id``), but the seam keeps the two-argument shape so
+    deterministic oracles and test stubs stay valid — the node only passes the
+    keyword when the callable declares it.
+    """
+
+    def __call__(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult: ...
 
 
 # --- tolerant parsing -------------------------------------------------------
@@ -656,12 +664,20 @@ class LLMExtractor:
         except Exception:  # noqa: BLE001 - unknown slot = no window math
             return None
 
-    def _messages(self, user_msg: str, narrative: str) -> list[dict[str, str]]:
+    def _messages(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> list[dict[str, str]]:
         if self._messages_renderer is not None:
             # D18 completion: the extract interaction's module flow compiles
             # the messages (preset-customized or default); the repair path
             # below still appends its assistant+REPAIR messages after.
-            return list(self._messages_renderer(user_msg, narrative))
+            # Issue #70: the renderer takes the turn's session so a swallowed
+            # preset read leaves its ``preset_degraded`` row on the right log.
+            if session_id is None:
+                return list(self._messages_renderer(user_msg, narrative))
+            return list(
+                self._messages_renderer(user_msg, narrative, session_id)
+            )
         return [
             {"role": "system", "content": self._system_prompt or EXTRACTOR_SYSTEM_PROMPT},
             {"role": "user", "content": _turn_block(user_msg, narrative)},
@@ -673,8 +689,10 @@ class LLMExtractor:
             return None
         return self._profile_fn()
 
-    def __call__(self, user_msg: str, narrative: str) -> ExtractorResult:
-        messages = self._messages(user_msg, narrative)
+    def __call__(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult:
+        messages = self._messages(user_msg, narrative, session_id)
         profile = self._profile()
         if profile is not None:
             return self._structured_call(messages, profile)
@@ -692,9 +710,11 @@ class LLMExtractor:
                     raw=repaired,
                 ) from first_error
 
-    async def acall(self, user_msg: str, narrative: str) -> ExtractorResult:
+    async def acall(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult:
         """Async :meth:`__call__` for the async post_turn hook (W5A-2 / S5)."""
-        messages = self._messages(user_msg, narrative)
+        messages = self._messages(user_msg, narrative, session_id)
         profile = self._profile()
         if profile is not None:
             return await self._structured_call_async(messages, profile)
@@ -904,11 +924,17 @@ class AsyncExtractor:
     def __init__(self, inner: ExtractorFn) -> None:
         self._inner = inner
 
-    async def __call__(self, user_msg: str, narrative: str) -> ExtractorResult:
+    async def __call__(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult:
         acall = getattr(self._inner, "acall", None)
         if acall is not None:
-            return await acall(user_msg, narrative)
-        return await asyncio.to_thread(self._inner, user_msg, narrative)
+            if session_id is None:
+                return await acall(user_msg, narrative)
+            return await acall(user_msg, narrative, session_id)
+        if session_id is None:
+            return await asyncio.to_thread(self._inner, user_msg, narrative)
+        return await asyncio.to_thread(self._inner, user_msg, narrative, session_id)
 
 
 class FallbackExtractor:
@@ -946,15 +972,21 @@ class FallbackExtractor:
         self._fallback = fallback
         self._log = log
 
-    def __call__(self, user_msg: str, narrative: str) -> ExtractorResult:
+    def __call__(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult:
         try:
-            return self._primary(user_msg, narrative)
+            if session_id is None:
+                return self._primary(user_msg, narrative)
+            return self._primary(user_msg, narrative, session_id)
         except Exception as exc:  # noqa: BLE001 - deterministic fallback, never fatal
             result = self._fallback(user_msg, narrative)
             self._note_fallback(exc, result)
             return result
 
-    async def acall(self, user_msg: str, narrative: str) -> ExtractorResult:
+    async def acall(
+        self, user_msg: str, narrative: str, session_id: str | None = None
+    ) -> ExtractorResult:
         """Async fallback path for the async post_turn hook (W5A-2 / W5A-3).
 
         Prefers the primary's own async method so its network I/O runs off the
@@ -963,9 +995,15 @@ class FallbackExtractor:
         """
         try:
             primary = getattr(self._primary, "acall", None)
+            if session_id is None:
+                if primary is not None:
+                    return await primary(user_msg, narrative)
+                return await asyncio.to_thread(self._primary, user_msg, narrative)
             if primary is not None:
-                return await primary(user_msg, narrative)
-            return await asyncio.to_thread(self._primary, user_msg, narrative)
+                return await primary(user_msg, narrative, session_id)
+            return await asyncio.to_thread(
+                self._primary, user_msg, narrative, session_id
+            )
         except Exception as exc:  # noqa: BLE001 - deterministic fallback, never fatal
             result = self._fallback(user_msg, narrative)
             self._note_fallback(exc, result)
