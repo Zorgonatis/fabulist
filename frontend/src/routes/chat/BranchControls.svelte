@@ -6,6 +6,11 @@
 	// one from the events endpoint); the retry chip forks at the last user
 	// message and streams a fresh reply into the new branch.
 	//
+	// Issue #81: `branch` is nullable, and null is the FAILED-TURN case. A turn
+	// that stored no reply has no siblings to step, so it renders the ↻ alone —
+	// the fork needs no group data, and a group the page did load belongs to an
+	// earlier pivot (#80 re-reads the projection, so the cut is still right).
+	//
 	// W9.26 §2.6: `branch.continuations` are the compaction-era children. They
 	// are SHOWN here (labelled, with a "compacted" tag) and never swiped: an era
 	// is a continuation of the history, not an alternate reply, so it must not
@@ -15,13 +20,16 @@
 	import type { BranchInfo } from '#lib/api';
 
 	let {
-		branch,
+		branch = null,
 		busy = false,
 		onPrev,
 		onNext,
 		onRetry
 	}: {
-		branch: BranchInfo;
+		/** The loaded sibling group (only when it describes THIS row's turn).
+		 *  `null` = no group data: the ↻ still applies (a failed turn has no
+		 *  alternates to step through), the `‹ n/m ›` block does not. */
+		branch?: BranchInfo | null;
 		busy?: boolean;
 		onPrev: () => void;
 		onNext: () => void;
@@ -31,14 +39,18 @@
 	/** Message used when the era has not taken a turn yet (no snippet to show). */
 	const ERA_LABEL = 'compacted continuation';
 
-	const continuations = $derived(branch.continuations ?? []);
-	const atFirst = $derived(branch.index <= 1);
-	const atLast = $derived(branch.index >= branch.count);
-	const disabled = $derived(busy || branch.count <= 1);
+	const continuations = $derived(branch?.continuations ?? []);
+	// A missing group is a group of ONE: nothing to step through, and the ↻ is
+	// the only control (issue #81 follow-up — a failed turn has no alternates).
+	const groupIndex = $derived(branch?.index ?? 1);
+	const groupCount = $derived(branch?.count ?? 1);
+	const atFirst = $derived(groupIndex <= 1);
+	const atLast = $derived(groupIndex >= groupCount);
+	const disabled = $derived(busy || groupCount <= 1);
 </script>
 
 <div class="branch-controls" aria-label="Reply alternates">
-	{#if branch.count > 1}
+	{#if groupCount > 1}
 		<button
 			type="button"
 			class="arrow"
@@ -51,7 +63,7 @@
 		</button>
 		<span class="count" title="Alternate replies for this turn">
 			<span class="gylph" aria-hidden="true">⑂</span>
-			{branch.index} / {branch.count}
+			{groupIndex} / {groupCount}
 		</span>
 		<button
 			type="button"
