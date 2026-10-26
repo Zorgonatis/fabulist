@@ -26,6 +26,10 @@ appends ONE typed ``system`` variant here:
 * :data:`PRESET_DEGRADED_EVENT` — a preset/context read raised, so the turn
   fell back to code defaults (issue #70: a silent wrong-model or
   missing-context turn reads like a model problem).
+* :data:`WORLD_INFO_LARGE_EVENT` — the turn's rendered world-info block is very
+  large (issue #83). This is an ADVISORY, not a failure: the block is sent in
+  full because user-provided lore is never trimmed. The row exists to make the
+  size visible and never changes a prompt byte.
 
 Payload shape (the one the Inspector notices tab renders)::
 
@@ -54,8 +58,10 @@ __all__ = [
     "PRESET_DEGRADED_EVENT",
     "RECALL_DEGRADED_EVENT",
     "REASON_LIMIT",
+    "WORLD_INFO_LARGE_EVENT",
     "append_degradation",
     "append_preset_degraded",
+    "append_world_info_large",
     "degradation_reason",
     "degradation_text",
 ]
@@ -75,6 +81,9 @@ HOOK_DEGRADED_EVENT = "hook_degraded"
 #: A preset/context read failed; the turn fell back to the code defaults (#70).
 PRESET_DEGRADED_EVENT = "preset_degraded"
 
+#: The turn's world-info block is very large; it is sent UNCAPPED (#83).
+WORLD_INFO_LARGE_EVENT = "world_info_large"
+
 #: Every name :func:`append_degradation` accepts (the Inspector's read set).
 DEGRADATION_EVENTS = frozenset(
     {
@@ -83,6 +92,7 @@ DEGRADATION_EVENTS = frozenset(
         INDEX_DEGRADED_EVENT,
         HOOK_DEGRADED_EVENT,
         PRESET_DEGRADED_EVENT,
+        WORLD_INFO_LARGE_EVENT,
     }
 )
 
@@ -96,6 +106,7 @@ STAGES: dict[str, str] = {
     INDEX_DEGRADED_EVENT: "memory_index",
     HOOK_DEGRADED_EVENT: "post_turn_hook",
     PRESET_DEGRADED_EVENT: "preset_resolution",
+    WORLD_INFO_LARGE_EVENT: "world_info_render",
 }
 
 
@@ -205,4 +216,58 @@ def append_preset_degraded(
         PRESET_DEGRADED_EVENT,
         stage=stage,
         reason=degradation_reason(exc, advice),
+    )
+
+
+def append_world_info_large(
+    log: Any,
+    session_id: str | None,
+    chars: int,
+    *,
+    threshold: int,
+) -> bool:
+    """Append ONE ``world_info_large`` advisory per turn; never raises.
+
+    Issue #83: the world-info budget is gone, so a huge activated book reaches
+    the prompt in full. That is the ruling (user-provided content is never
+    trimmed) — this row only makes the size visible in the Inspector notices
+    tab, beside the real failure notices. It is an ADVISORY: nothing failed,
+    nothing was dropped, and the prompt bytes are untouched.
+
+    At most ONE row per turn: the anchor is the session's newest ``user`` event
+    seq, so the several renders one turn performs (the ``{{facts}}`` / ``{{wi}}``
+    macros plus the builder) collapse to a single notice. A render with no user
+    event (a preview, a replay, a definition read) emits nothing — that is not
+    a turn and must not leave a row.
+    """
+    if not session_id or str(session_id).startswith("__"):
+        return False
+    try:
+        events = log.get_events(str(session_id))
+    except Exception:  # noqa: BLE001 - the advisory is best-effort
+        return False
+    turn: int | None = None
+    for event in events:
+        if getattr(event, "type", None) == "user":
+            turn = int(event.seq)
+    if turn is None:
+        return False
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("event") != WORLD_INFO_LARGE_EVENT:
+            continue
+        if payload.get("turn") == turn:
+            return False
+    return append_degradation(
+        log,
+        str(session_id),
+        WORLD_INFO_LARGE_EVENT,
+        stage=STAGES[WORLD_INFO_LARGE_EVENT],
+        reason=(
+            f"world-info block is {chars} characters. That is over the "
+            f"{threshold}-character advisory size. The block is sent in full. "
+            "Split the book if the context window is tight."
+        ),
+        turn=turn,
+        extra={"chars": chars, "threshold": threshold},
     )

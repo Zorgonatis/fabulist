@@ -1,9 +1,11 @@
 """SillyTavern World Info v1 engine (PLAN §2).
 
-PLAN §2 lists "Full ST World Info semantics" as out of scope and pins the v1
-contract verbatim: **"v1 = keywords + budget + recursion-lite. Sticky/cooldown/
-vector later."** This module implements exactly that slice as three pure,
-side-effect-free functions (no I/O, no event-log writes):
+PLAN §2 lists "Full ST World Info semantics" as out of scope and pinned the
+v1 contract as **"v1 = keywords + budget + recursion-lite. Sticky/cooldown/
+vector later."** The owner re-ruled the budget on 2026-10-26 (issue #83): the
+engine never trims user-provided lore. Whatever activation calls for is what
+renders. This module implements that slice as three pure, side-effect-free
+functions (no I/O, no event-log writes):
 
 * :func:`parse_book` — normalize a character card's ``character_book`` (or a
   standalone SillyTavern world-info JSON file) into a list of
@@ -15,8 +17,8 @@ side-effect-free functions (no I/O, no event-log writes):
   the always-on ``constant`` entries, plus one *recursion-lite* pass over the
   content of the first-pass hits (depth capped at 1). No stickiness, no
   cooldown, no vectors — those are explicitly deferred by PLAN §2.
-* :func:`render_block` — greedily pack whole entries into a character budget in
-  insertion order, never truncating an entry.
+* :func:`render_block` — render EVERY activated entry in insertion order, with
+  no size filter and no truncation.
 
 The parser is permissive about missing optional fields (real cards carry them)
 and strict about structure (garbage raises :class:`WorldInfoError`). Wiring the
@@ -31,7 +33,6 @@ from typing import Any, Sequence
 
 __all__ = [
     "BLOCK_HEADER",
-    "DEFAULT_BUDGET",
     "DEFAULT_RECURSION_DEPTH",
     "WorldInfoEntry",
     "WorldInfoError",
@@ -42,9 +43,6 @@ __all__ = [
 
 #: Header line that opens a rendered world-info block.
 BLOCK_HEADER = "### World info"
-
-#: Default character budget for :func:`render_block` (ST's usual default).
-DEFAULT_BUDGET = 1200
 
 #: v1 activates at most one recursion pass (PLAN §2 "recursion-lite").
 DEFAULT_RECURSION_DEPTH = 1
@@ -282,31 +280,19 @@ def activate(
     return sorted(picked, key=lambda entry: entry.order)
 
 
-def render_block(
-    entries: Sequence[WorldInfoEntry],
-    *,
-    budget: int = DEFAULT_BUDGET,
-) -> str | None:
-    """Render active entries as a ``### World info`` block within ``budget``.
+def render_block(entries: Sequence[WorldInfoEntry]) -> str | None:
+    """Render EVERY active entry as a ``### World info`` block.
 
     Entries are emitted in ``insertion_order`` (stable) as ``- {content}``
-    lines under a :data:`BLOCK_HEADER`. Whole entries only — packing stops
-    before the first entry that would push the block past ``budget``, so no
-    entry is ever truncated mid-content. Returns ``None`` when nothing fits
-    (including the empty case).
+    lines under a :data:`BLOCK_HEADER`. There is no character budget and no
+    size filter: the owner ruling of 2026-10-26 (issue #83) makes user-provided
+    lore uncapped, so whatever activation calls for is what renders. An entry
+    is never dropped or truncated for size. Returns ``None`` only when nothing
+    was activated — nothing was called for, so nothing renders.
     """
 
     ordered = sorted(entries, key=lambda entry: entry.order)
-    lines: list[str] = []
-    used = len(BLOCK_HEADER)
-    for entry in ordered:
-        line = f"- {entry.content}"
-        cost = len(line) + 1  # the newline that follows header / previous line
-        if used + cost > budget:
-            break
-        lines.append(line)
-        used += cost
-
-    if not lines:
+    if not ordered:
         return None
+    lines = [f"- {entry.content}" for entry in ordered]
     return BLOCK_HEADER + "\n" + "\n".join(lines)

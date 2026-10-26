@@ -82,6 +82,7 @@ from fabulist.context.world_info import (
     render_block,
 )
 from fabulist.graph.compaction import recap_texts
+from fabulist.log.degradation import append_world_info_large
 from fabulist.log.repo import Event, EventLog
 from fabulist.log.schema_gate import SET_SWAP_EVENT, VALIDATION_NOTICE_EVENT
 from fabulist.prompts.envelope import (
@@ -114,6 +115,7 @@ __all__ = [
     "VALIDATION_NOTICE_CLOSE",
     "VALIDATION_NOTICE_FRAMING",
     "VALIDATION_NOTICE_OPEN",
+    "WORLD_INFO_ADVISORY_CHARS",
     "assemble_turn_context",
     "context_suffix_parts",
     "facts_hash",
@@ -142,6 +144,15 @@ __all__ = [
 #: How many trailing ``stt`` transcripts the facts block renders.
 #: Extracted from the literal ``[-3:]`` at wiring.py:270 (``session_stt_block``).
 STT_LINE_CAP = 3
+
+#: Rendered world-info size (characters) that earns ONE turn-time advisory in
+#: the notices channel (issue #83). This is a VISIBILITY threshold, never a cap:
+#: nothing is trimmed at any size (owner ruling 2026-10-26). Change this one
+#: line to move the line. 8000 characters is deliberately "very large": it is
+#: about 2,000 tokens at the char/4 heuristic and roughly an eighth of the
+#: compiler's 16,000-token default prompt budget, so an ordinary book stays
+#: silent and only a genuinely huge activation warns.
+WORLD_INFO_ADVISORY_CHARS = 8000
 
 #: D22 (llm-expert design, live-probed 2026-10-10): a post-user ``system``
 #: message carrying dynamic reference material (recall / world info / summaries /
@@ -727,10 +738,14 @@ def session_world_info_block(
     (the live definition; the ``world_ref`` snapshot is its fallback for a
     tombstoned world). Activation still scans the current
     user message + recent narrative tail; constants always ride; recursion-lite
-    depth 1; budget-capped whole entries — the existing
+    depth 1; every activated entry rendered whole (the budget was removed by
+    the owner ruling of 2026-10-26, issue #83) — the existing
     :func:`~fabulist.context.world_info.activate` / ``render_block`` math is
-    untouched. A session with no entities and no world renders byte-identically
-    to the pre-D31 single-source render. Fork-aware (reads the base chain).
+    otherwise untouched. A rendered block at or above
+    :data:`WORLD_INFO_ADVISORY_CHARS` appends ONE advisory notice for the turn;
+    it is visibility only and never changes the rendered bytes. A session with
+    no entities and no world renders byte-identically to the pre-D31
+    single-source render. Fork-aware (reads the base chain).
 
     ``variables`` is the fixed-vocabulary macro map (D43): World Info entries
     and the world block's text are user-authored ST text that may carry
@@ -762,6 +777,22 @@ def session_world_info_block(
                 entries.extend(parse_book(book))
             active = activate(_dedupe_entries(entries), scan_text)
             rendered = render_block(active)
+            if rendered is not None:
+                # Issue #83: nothing is trimmed, so the engine makes an
+                # oversized activation visible instead. Advisory only: the row
+                # never changes the rendered block, and it is emitted at most
+                # once per turn (the helper anchors on the turn's user event).
+                try:
+                    size = len(_render_value(rendered, variables))
+                    if size >= WORLD_INFO_ADVISORY_CHARS:
+                        append_world_info_large(
+                            log,
+                            session_id,
+                            size,
+                            threshold=WORLD_INFO_ADVISORY_CHARS,
+                        )
+                except Exception:  # noqa: BLE001 - the advisory never breaks a turn
+                    logger.warning("world-info size advisory skipped", exc_info=True)
         except WorldInfoError:
             logger.warning("world info parse failed for %s", session_id, exc_info=True)
             rendered = None
