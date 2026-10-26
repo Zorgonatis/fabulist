@@ -253,3 +253,152 @@ def test_memory_off_when_no_registry(app_and_log, fake_embedder, monkeypatch):
     assert resp.status_code == 200
     assert [e for e in log.get_events("s1") if e.type == "revision"]
     assert "body" not in fake_embedder
+
+
+# -- fork views (issue #90): where does a branch edit's re-embed land? --------
+#
+# A fork view can now edit an INHERITED event. ``schedule_reindex`` receives the
+# target's ORIGINAL (parent) seq, while ``resolve_scope`` resolves the FORK's own
+# write layer. The store keys rows by ``(session_id, seq)``, so the write lands as
+# the fork's own row at the inherited seq:
+#
+#   * the parent's row for the same event is NEVER rewritten or deleted — the
+#     edit is branch-local and the parent's own view keeps its text (D10/D53);
+#   * the row is written at the fork's RESOLVED write collection, exactly where
+#     ``index_tail`` puts the branch's own turns, so recall from the branch reads
+#     the revised text;
+#   * nothing is silently skipped: a chat whose memory is off is the only case
+#     that writes nothing, and that opt-out is itself chain-inherited.
+#
+# These tests pin all three against a real store over a faked embedder.
+
+
+def _index_rows(collection: str, log_path: Path) -> list[dict]:
+    """Every row of ``collection`` as ``{session_id, seq, kind, text}``."""
+    with MemoryStore(_memory_db(log_path)) as store:
+        return [
+            {
+                "session_id": r["session_id"],
+                "seq": int(r["seq"]),
+                "kind": r["kind"],
+                "text": r["text"],
+            }
+            for r in store.query(collection, VEC, k=10)
+        ]
+
+
+def _collections(log_path: Path) -> list[str]:
+    with MemoryStore(_memory_db(log_path)) as store:
+        return store.collections()
+
+
+def _fork_parent(log, *, world: bool):
+    """``p1`` with a user row, plus ``b1`` cut ABOVE it (the row is inherited)."""
+    if world:
+        log.append_event(
+            "p1", "system", "system", {"event": "world_ref", "world_id": "w1", "name": "W"}
+        )
+    user = log.append_event("p1", "user", "user", {"text": "original text"})
+    log.fork_session("p1", at_seq=log.get_events("p1")[-1].seq, new_session_id="b1")
+    return user
+
+
+def _edit_from_fork(app, target_id: int, new_text: str) -> httpx.Response:
+    async def scenario():
+        async with _client(app) as client:
+            resp = await client.post(
+                "/api/sessions/b1/revisions",
+                json={"target_id": target_id, "new_text": new_text},
+            )
+            # The reindex is fire-and-forget; drain the handler's strong refs.
+            await asyncio.gather(*list(revisions._REINDEX_TASKS))
+            return resp
+
+    return run(scenario())
+
+
+def test_fork_edit_reembeds_the_forks_own_row_in_a_shared_world_layer(
+    app_and_log, fake_embedder
+):
+    """World layer: parent and fork share ONE collection — keys keep them apart."""
+    from fabulist.memory.scope import collection_for_world
+
+    app, log, log_path = app_and_log
+    user = _fork_parent(log, world=True)
+    world = collection_for_world("w1")
+    # The parent's row, as a live ``index_tail`` would have written it.
+    with MemoryStore(_memory_db(log_path)) as store:
+        store.upsert(world, user.seq, "user", "original text", VEC, session_id="p1")
+
+    resp = _edit_from_fork(app, user.id, "revised text")
+
+    assert resp.status_code == 200
+    # The re-embed carries the REVISED text (not a skip).
+    assert fake_embedder["body"]["input"] == ["title: none | text: revised text"]
+    # One write, at the fork's resolved layer (never a chat-local collection).
+    assert _collections(log_path) == [world]
+
+    rows = _index_rows(world, log_path)
+    by_session = {(r["session_id"], r["seq"]): r for r in rows}
+    # The fork's own row holds the revision at the INHERITED seq.
+    assert by_session[("b1", user.seq)]["text"] == "revised text"
+    assert by_session[("b1", user.seq)]["kind"] == "user"
+    # The parent's row for the SAME event is untouched (branch-local edit).
+    assert by_session[("p1", user.seq)]["text"] == "original text"
+    assert len(rows) == 2
+
+
+def test_fork_edit_reembeds_into_the_forks_own_layer(app_and_log, fake_embedder):
+    """Chat layer: the branch writes ``c_<fork>``, never the parent's ``c_<parent>``."""
+    app, log, log_path = app_and_log
+    user = _fork_parent(log, world=False)
+    parent_layer = collection_for("p1")
+    with MemoryStore(_memory_db(log_path)) as store:
+        store.upsert(
+            parent_layer, user.seq, "user", "original text", VEC, session_id="p1"
+        )
+
+    resp = _edit_from_fork(app, user.id, "revised text")
+
+    assert resp.status_code == 200
+    assert fake_embedder["body"]["input"] == ["title: none | text: revised text"]
+    fork_layer = collection_for("b1")
+    assert fork_layer != parent_layer
+    assert sorted(_collections(log_path)) == sorted([parent_layer, fork_layer])
+
+    # The parent's layer still holds exactly its own original row.
+    assert _index_rows(parent_layer, log_path) == [
+        {
+            "session_id": "p1",
+            "seq": user.seq,
+            "kind": "user",
+            "text": "original text",
+        }
+    ]
+    # The fork's layer holds the revision at the inherited seq.
+    assert _index_rows(fork_layer, log_path) == [
+        {
+            "session_id": "b1",
+            "seq": user.seq,
+            "kind": "user",
+            "text": "revised text",
+        }
+    ]
+
+
+def test_fork_edit_honors_the_inherited_memory_opt_out(app_and_log, fake_embedder):
+    """A branch inherits a ``chat_memory: false`` and writes nothing (D53)."""
+    app, log, log_path = app_and_log
+    # The opt-out sits BELOW the cut, so the branch inherits it.
+    log.append_event("p1", "system", "user", {"event": "chat_memory", "enabled": False})
+    user = log.append_event("p1", "user", "user", {"text": "original text"})
+    log.fork_session("p1", at_seq=log.get_events("p1")[-1].seq, new_session_id="b1")
+
+    resp = _edit_from_fork(app, user.id, "revised text")
+
+    assert resp.status_code == 200
+    # The revision still appended (the log is the source of truth)…
+    assert [e for e in log.get_events("b1") if e.type == "revision"]
+    # …but the derived index was never touched, and no embed call was made.
+    assert "body" not in fake_embedder
+    assert _collections(log_path) == []
