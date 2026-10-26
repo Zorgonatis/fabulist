@@ -922,7 +922,11 @@ def _transcript(log: "EventLog", session_id: str, limit: int = 20) -> str:
 
 
 def _flow_parts(
-    interaction: str, log: "EventLog", session_id: str, user_text: str
+    interaction: str,
+    log: "EventLog",
+    session_id: str,
+    user_text: str,
+    request: Request | None = None,
 ) -> dict[str, Any]:
     """Best-effort engine parts for a non-narrate flow preview.
 
@@ -939,12 +943,27 @@ def _flow_parts(
             OOC_SYSTEM,
             facts_line_from_log,
             history_from_log,
+            interaction_vision,
         )
 
+        # Issue #79: OOC preview parity — resolve the OOC interaction's live
+        # vision capability exactly like the live OOC turn builder does, so a
+        # text-only OOC connection previews the bracketed caption marker rather
+        # than image parts. Missing registry wiring degrades to text-only.
+        registry = (
+            getattr(request.app.state, "registry", None)
+            if request is not None
+            else None
+        )
+        vision = (
+            interaction_vision(registry, log, "ooc", "narrator")()
+            if registry is not None
+            else False
+        )
         parts.update(
             {
                 "system": OOC_SYSTEM,
-                "history": history_from_log(log, session_id, limit=8),
+                "history": history_from_log(log, session_id, limit=8, vision=vision),
                 "facts": facts_line_from_log(log, session_id) or "",
                 "user_content": user_text,
             }
@@ -1078,7 +1097,7 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
         )
         mode = "degraded"
     else:
-        parts = _flow_parts(interaction, log, body.session_id, user_text)
+        parts = _flow_parts(interaction, log, body.session_id, user_text, request)
         flow_preset = preview_preset or active_preset(log)
         if flow_preset is not None:
             messages = compile_preset_flow(flow_preset, interaction, parts)
@@ -1086,5 +1105,14 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
             messages = compile_flow(interaction, DEFAULT_FLOWS[interaction], parts)
         mode = "flow"
 
+    # Issue #79: image history rows carry transient render metadata so a
+    # per-consumer seam can re-render them; it is engine bookkeeping and must
+    # never appear in the preview payload (preview parity is a stated contract).
+    from fabulist.media.images import MEDIA_META_KEY
+
+    messages = [
+        {key: value for key, value in message.items() if key != MEDIA_META_KEY}
+        for message in messages
+    ]
     chars = sum(len(str(message.get("content", ""))) for message in messages)
     return {"messages": messages, "chars": chars, "preview_mode": mode}

@@ -4465,6 +4465,7 @@ class NpcLaneFanout:
         request_profile_fn: Callable[[], dict | None] | None = None,
         decision: Any | None = None,
         provider_label_fn: Callable[[], str] | None = None,
+        lane_vision_fn: Callable[[], bool] | None = None,
     ) -> None:
         self.log = log
         self.build_messages = build_messages
@@ -4474,6 +4475,11 @@ class NpcLaneFanout:
         #: The model the lanes are bound to, read once per fan-out for the abort
         #: message a provider failure raises (``providers_errors``).
         self.provider_label_fn = provider_label_fn
+        #: Issue #79: the LANE connection's live vision capability. The shared
+        #: history is re-rendered per lane at this seam (the rows carry their
+        #: render inputs), so a lane bound differently from the narrator sees
+        #: ITS shape. ``None`` keeps the shared prefix exactly as built.
+        self.lane_vision_fn = lane_vision_fn
         # W9.24 §3.5: the shared d1-3b caller the ``decision`` dispatch strategy
         # asks. ``None`` keeps the strategy fail-open (today's lane set), so a
         # graph built without the wiring still turns.
@@ -4834,6 +4840,17 @@ class NpcLaneFanout:
         from fabulist.state.structured import StructuredFailure, structured_result
 
         shared = list(payload.get("shared") or [])
+        # Issue #79: per-stage rendering. The shared prefix was built for the
+        # NARRATOR's connection; this lane resolves ITS OWN vision capability
+        # and re-renders any image message for it (a text-only lane gets the
+        # bracketed caption marker the narrator may have rendered inline, and
+        # vice versa). Nothing is baked into the rows.
+        if self.lane_vision_fn is not None:
+            from fabulist.media.images import rerender_image_history
+
+            shared = list(
+                rerender_image_history(shared, bool(self.lane_vision_fn()))
+            )
         tail = (
             self.lane_messages(dict(payload), context)
             if self.lane_messages is not None
@@ -4994,6 +5011,7 @@ def make_npc_lanes_node(
     request_profile_fn: Callable[[], dict | None] | None = None,
     decision: Any | None = None,
     provider_label_fn: Callable[[], str] | None = None,
+    lane_vision_fn: Callable[[], bool] | None = None,
 ) -> NpcLaneFanout:
     """Build the ``npc_lanes`` DISPATCHER node — the head of the ``Send`` fan-out.
 
@@ -5005,7 +5023,9 @@ def make_npc_lanes_node(
     caller the ``decision`` dispatch strategy asks (W9.24 §3.5); without it that
     strategy fails open to today's lane set. ``provider_label_fn`` is the live
     reader of the model the lanes are bound to, for a provider failure's abort
-    message.
+    message. ``lane_vision_fn`` (issue #79) is the live reader of the LANE
+    connection's vision capability, used to re-render the shared history per
+    lane so each stage's model receives its own shape.
     """
     return NpcLaneFanout(
         log=log,
@@ -5016,6 +5036,7 @@ def make_npc_lanes_node(
         request_profile_fn=request_profile_fn,
         decision=decision,
         provider_label_fn=provider_label_fn,
+        lane_vision_fn=lane_vision_fn,
     )
 
 

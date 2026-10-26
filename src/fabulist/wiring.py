@@ -71,7 +71,15 @@ from fabulist.context.facts import (
     validation_notices,
 )
 from fabulist.context.roster import extract_cards, roster_line
-from fabulist.media.images import find_asset, is_image_narrative, sha256_hex
+from fabulist.media.images import (
+    CAPTION_EVENT,
+    build_image_turn_prefix,
+    connection_has_vision,
+    find_asset,
+    is_image_narrative,
+    render_image_history_message,
+    sha256_hex,
+)
 from fabulist.context.world_info import (
     WorldInfoError,
     activate,
@@ -816,6 +824,7 @@ def history_from_log(
     strip: bool = True,
     surfaces: dict | None = None,
     drop_current_user: bool = False,
+    vision: bool = False,
 ) -> list[dict]:
     """Fork-aware interleaved user/narrative history, DSL-stripped.
 
@@ -843,6 +852,17 @@ def history_from_log(
     own payload shapes (extract / summarize / caption / bts / attribution /
     assistant / preview) leave this off: their history is not the same
     projection-plus-live-ask shape.
+
+    ``vision`` (issue #79) is THIS consumer's live connection capability. ``True``
+    renders an image row as the native multipart ASSISTANT message; ``False``
+    (the default, and every unset connection) renders the uniform
+    ``[inline image caption: <text>]`` marker from the row's caption/prompt/text.
+    The decision is per call, never baked into the row: the same log renders
+    differently for a vision narrator and a text-only lane, and a rebind takes
+    effect on the next build. The returned image message carries transient
+    render metadata (:data:`fabulist.media.images.MEDIA_META_KEY`) so a second
+    consumer (an NPC lane) can re-render the SAME shared history for ITS
+    connection; ``build_request`` strips the key at the wire.
 
     D-F: a flagged turn's ``validation_notice`` rides history IMMEDIATELY AFTER the
     narrative it refers to (the builder's demand: the natural position, never the
@@ -901,6 +921,16 @@ def history_from_log(
     covered = covered_turn_seqs(chain_events)
     if covered:
         items = [item for item in items if item["seq"] not in covered]
+    # Issue #79: arrival captions fold from the SAME chain read. Later rows win
+    # (append-only log); no captioner call ever runs here — an uncaptioned
+    # legacy asset falls back to its row text or the terse placeholder.
+    captions: dict[str, str] = {}
+    for event in chain_events:
+        if event.type != "system" or event.payload.get("event") != CAPTION_EVENT:
+            continue
+        ref = event.payload.get("asset")
+        if isinstance(ref, str):
+            captions[ref] = str(event.payload.get("text") or "")
     history: list[dict] = []
     # The source row's seq for each history message, index-aligned with
     # ``history``: a validation notice is placed after the narrative message its
@@ -929,18 +959,27 @@ def history_from_log(
                 url = f"data:{mime};base64,{b64}"
                 prompt = payload.get("prompt") or payload.get("text", "")
                 kind = payload.get("kind") or asset_payload.get("kind") or "image"
-                if kind == "video":
-                    part = {"type": "input_video", "input_video": {"url": url}}
-                else:
-                    part = {"type": "image_url", "image_url": {"url": url}}
+                # The arrival text ALREADY exists (upload caption or imagegen
+                # prompt); a legacy asset without one falls back to whatever
+                # text it carries, then the terse placeholder. Never a captioner
+                # call inside a turn build.
+                fallback = (
+                    captions.get(str(image_asset_id))
+                    or prompt
+                    or asset_payload.get("note")
+                    or ""
+                )
                 history.append(
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "text", "text": "Now visible: " + prompt},
-                            part,
-                        ],
-                    }
+                    render_image_history_message(
+                        {
+                            "asset_id": str(image_asset_id),
+                            "url": url,
+                            "kind": kind,
+                            "fallback": fallback,
+                            "visible": prompt or fallback,
+                        },
+                        vision,
+                    )
                 )
                 message_seqs.append(item["seq"])
             continue
@@ -1254,6 +1293,36 @@ def narrate_window_budget(
     return resolve
 
 
+def narrate_vision(
+    registry: Registry, log: EventLog
+) -> Callable[[], bool]:
+    """Zero-arg live reader of the NARRATE connection's vision toggle (#79)."""
+
+    def resolve() -> bool:
+        return connection_has_vision(_narrate_connection(registry, log))
+
+    return resolve
+
+
+def interaction_vision(
+    registry: Registry, log: EventLog, interaction: str, fallback: str
+) -> Callable[[], bool]:
+    """Whether an INTERACTION's live connection accepts image parts (#79).
+
+    Per-connection and fully dynamic: the narrator, each NPC lane, OOC and the
+    previews each resolve THEIR OWN connection's ``vision`` toggle at build
+    time, so a rebind changes rendering on the next turn with no migration.
+    An unresolvable slot degrades to text-only (the safe default).
+    """
+
+    def resolve() -> bool:
+        return connection_has_vision(
+            _interaction_connection(registry, log, interaction, fallback)
+        )
+
+    return resolve
+
+
 def bts_window_budget(registry: Registry, log: EventLog) -> Callable[[], int | None]:
     """Zero-arg available prompt-token budget for the BTS slot (W9.25 §3.5.3).
 
@@ -1456,6 +1525,7 @@ def make_narrator_message_builder(
     toggles: Mapping[str, bool] | None = None,
     library_doc: str | None = None,
     window_budget_fn: Callable[[], int | None] | None = None,
+    vision_fn: Callable[[], bool] | None = None,
 ) -> Callable[[TurnState], list[dict]]:
     """Graph-facing message builder on the W2.1 directive compiler.
 
@@ -1471,6 +1541,13 @@ def make_narrator_message_builder(
     resolved per build so a rebind or hot-reload applies on the next turn. The
     effective directive budget becomes ``min(authored, available)``; omitted, the
     compiled prompt is byte-identical to the pre-W9.25 path.
+
+    ``vision_fn`` (issue #79): a zero-arg callable returning whether the
+    NARRATE connection accepts image parts, resolved ONCE per build. ``None``
+    means text-only — history renders the ``[inline image caption: ...]``
+    marker and the current-turn attachment rides as that same marker inside the
+    player's final message. Dynamic by construction: a rebind applies on the
+    next build, and no capability is baked into the log.
 
     W9.27/#16: the per-session component-set RESOLUTION is the FIRST thing
     ``build`` does (:func:`resolve_component_set`), and the library doc is
@@ -1631,12 +1708,18 @@ def make_narrator_message_builder(
         # this builder resolves — parity by construction); no preset = the
         # byte-faithful compiler path below, untouched.
         history_knobs = surfaces.get("history") or {}
+        # Issue #79: resolve THIS consumer's live vision capability once per
+        # build. The narrator's history renders inline for a vision connection
+        # and as the bracketed caption marker otherwise — per call, never baked
+        # into a row.
+        vision = bool(vision_fn()) if vision_fn is not None else False
         history_block = history_from_log(
             log,
             sid,
             limit=int(history_knobs.get("depth", 20)),
             strip=bool(history_knobs.get("strip_dsl", DEFAULT_HISTORY_STRIP_DSL)),
             surfaces=surfaces,
+            vision=vision,
             # The turn's own user row is already in the projection (the API
             # appends it before the graph runs) and the flow's `user`/`facts`
             # modules re-append the SAME turn as the final state-wrapped user
@@ -1806,24 +1889,30 @@ def make_narrator_message_builder(
                 envelope_at += 1
         image_url = state.get("image_url") or ""
         if image_url and messages:
-            # Native vision: the final user message becomes multipart — text
-            # plus the media content part (llama.cpp mtmd: image_url for
-            # images, input_video for videos at the server's video-fps).
-            kind = state.get("image_kind") or "image"
-            if kind == "video":
-                part = {"type": "input_video", "input_video": {"url": image_url}}
-            else:
-                part = {"type": "image_url", "image_url": {"url": image_url}}
             # Attach to the final USER message — with D22 the last message is
             # the recalled system turn, which must never carry image parts.
             last = next(
                 (m for m in reversed(messages) if m.get("role") == "user"),
                 messages[-1],
             )
-            last["content"] = [
-                {"type": "text", "text": str(last.get("content", ""))},
-                part,
-            ]
+            # Issue #79: the gate is the NARRATE connection's live vision
+            # toggle. A vision connection gets the native multipart message
+            # (llama.cpp mtmd: image_url for images, input_video for videos at
+            # the server's video-fps); a text-only one gets the already-computed
+            # arrival text as the uniform bracketed marker inside the message.
+            if vision:
+                kind = state.get("image_kind") or "image"
+                if kind == "video":
+                    part = {"type": "input_video", "input_video": {"url": image_url}}
+                else:
+                    part = {"type": "image_url", "image_url": {"url": image_url}}
+                last["content"] = [
+                    {"type": "text", "text": str(last.get("content", ""))},
+                    part,
+                ]
+            else:
+                marker = build_image_turn_prefix(str(state.get("image_text") or ""))
+                last["content"] = f"{marker}\n{last.get('content', '')}"
         # DYNAMIC TAIL (never the prefix — AGENTS #6). Everything that changes
         # per turn is ONE ephemeral ``assistant`` message — the engine envelope
         # composed above from, in contract order:
@@ -1936,7 +2025,11 @@ def facts_line_from_log(log: EventLog, session_id: str) -> str | None:
     return None
 
 
-def make_ooc_message_builder(log: EventLog) -> Callable[[str, str], list[dict]]:
+def make_ooc_message_builder(
+    log: EventLog,
+    *,
+    vision_fn: Callable[[], bool] | None = None,
+) -> Callable[[str, str], list[dict]]:
     """OOC turns see recent history + state facts; they just never advance.
 
     D18 completion: the OOC interaction compiles through its MODULE FLOW
@@ -1979,8 +2072,14 @@ def make_ooc_message_builder(log: EventLog) -> Callable[[str, str], list[dict]]:
             "system": OOC_SYSTEM,
             # Same duplication as narrate: the API pre-appended the OOC turn's
             # user row, and `user_content` below re-appends it flagged.
+            # Issue #79: OOC resolves ITS OWN connection's vision (the ``ooc``
+            # interaction, falling back to the narrator) per build.
             "history": history_from_log(
-                log, session_id, limit=8, drop_current_user=True
+                log,
+                session_id,
+                limit=8,
+                drop_current_user=True,
+                vision=bool(vision_fn()) if vision_fn is not None else False,
             ),
             "facts": "",
             # Issue #63: the same display step the transcript uses, so the OOC
@@ -2808,6 +2907,10 @@ def build_engine(
             lane_messages=_npc_flow_messages,
             decision=decision,
             provider_label_fn=_provider_label(registry, log, "npc", "extractor"),
+            # Issue #79: each lane resolves its OWN connection's vision and
+            # re-renders the shared history for it, so a text-only lane never
+            # inherits the narrator's inline image parts.
+            lane_vision_fn=interaction_vision(registry, log, "npc", "extractor"),
         )
 
     async def critic(evidence, session_id: str = ""):
@@ -2825,6 +2928,7 @@ def build_engine(
     build_messages = message_builder or make_narrator_message_builder(
         log,
         window_budget_fn=narrate_window_budget(registry, log),
+        vision_fn=narrate_vision(registry, log),
     )
 
     def _narrate_loop_capabilities() -> dict[str, bool] | None:
@@ -3081,7 +3185,9 @@ def build_engine(
         graph=graph,
         log=log,
         model=caller,
-        ooc_messages=make_ooc_message_builder(log),
+        ooc_messages=make_ooc_message_builder(
+            log, vision_fn=interaction_vision(registry, log, "ooc", "narrator")
+        ),
         recall_fn=recall_fn,
         graph_source=_graph_source,
     )
@@ -3356,9 +3462,12 @@ def build_app(
     memorizer = make_memorizer(registry, log_path)
     # ONE builder instance: the engine compiles through it AND the preview
     # endpoint reads it off app.state — preview parity by construction (D18).
+    # Issue #79: the builder resolves the NARRATE connection's live vision
+    # capability per build, so preview and the live turn render identically.
     message_builder = make_narrator_message_builder(
         log,
         window_budget_fn=narrate_window_budget(registry, log),
+        vision_fn=narrate_vision(registry, log),
     )
     # The off-turn seams the hooks below need (the historian's lane system); the
     # engine builds them because it owns their model bindings.

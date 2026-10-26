@@ -3,8 +3,9 @@
 Covers the three owned surfaces against the real ``EventLog`` (tmp SQLite):
 ``store_image`` round-trips bytes through an ``asset`` event, ``caption`` drains
 an injected fake ``ModelCaller`` into an ``image_caption`` system event, the
-``[image: ...]`` turn prefix format, and the router endpoints over httpx ASGI
-transport with a fake captioner (mirroring the sessions/settings router tests).
+uniform ``[inline image caption: ...]`` fallback format (issue #79), and the
+router endpoints over httpx ASGI transport with a fake captioner (mirroring the
+sessions/settings router tests).
 """
 
 from __future__ import annotations
@@ -160,9 +161,14 @@ def test_build_caption_messages_uses_payload_dict():
 
 
 def test_build_image_turn_prefix_format():
-    assert build_image_turn_prefix("a red door") == "[image: a red door]"
-    assert build_image_turn_prefix("  spaced caption \n") == "[image: spaced caption]"
-    assert build_image_turn_prefix("") == "[image: ]"
+    """Issue #79: ONE uniform bracketed marker for every image kind."""
+    assert build_image_turn_prefix("a red door") == "[inline image caption: a red door]"
+    assert (
+        build_image_turn_prefix("  spaced caption \n")
+        == "[inline image caption: spaced caption]"
+    )
+    # An empty arrival text renders the terse placeholder, never an empty marker.
+    assert build_image_turn_prefix("") == "[inline image caption: no caption available]"
 
 
 # ---------------------------------------------------------------------------

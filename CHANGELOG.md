@@ -14,6 +14,7 @@ detail; this file is an index, not a report. Versioning follows
 - Regenerate forks the current session at the message acted on, never a stale pivot (#74)
 - A failed preset or context read warns and leaves a `preset_degraded` notice instead of a silent wrong-model turn (#70)
 - A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
+- A per-connection Vision toggle gates image parts at message build: vision stages receive images inline, text-only stages receive the uniform `[inline image caption: …]` marker from the same log rows (#79)
 
 ### Changed
 

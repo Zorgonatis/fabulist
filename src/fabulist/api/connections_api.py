@@ -10,7 +10,7 @@ door.
   PATCH  /api/connections/agents/{agent}  -> rebind one agent to an existing connection
   PATCH  /api/connections/{name}          -> model/sampling/extra_body/timeout/api_key(_env)/note
                                           + typed fields (context_window/thinking/streaming/
-                                          return_thinking/reasoning_effort)
+                                          return_thinking/reasoning_effort/vision)
   POST   /api/connections/{name}          -> create a new entry (201)
   POST   /api/connections/{name}/key      -> paste a literal key into ``.env``
   DELETE /api/connections/{name}          -> remove an entry (409 while an agent binds it)
@@ -221,6 +221,9 @@ class ConnectionPatch(BaseModel):
     #: send NOTHING (the default). Validated by the registry's own cleaner, so the
     #: vocabulary lives in ONE place — a typo is a 400 naming the allowed values.
     reasoning_effort: str | None = None
+    #: Per-connection VISION toggle (issue #79): null/false = text-only (the
+    #: default), true = native image content parts. Resolved live at build time.
+    vision: StrictBool | None = None
     #: W8.4: explicit provider-capability overrides (bool values only). The store
     #: merges these over the provider-profile default; an unmeasured capability
     #: stays false. Object fields replace wholesale, like ``sampling``.
@@ -254,6 +257,8 @@ class ConnectionCreate(BaseModel):
     return_thinking: StrictBool | None = None
     #: Reasoning depth (see :class:`ConnectionPatch`); null = send NOTHING.
     reasoning_effort: str | None = None
+    #: Per-connection VISION toggle (see :class:`ConnectionPatch`).
+    vision: StrictBool | None = None
 
 
 class AgentsPatch(BaseModel):
@@ -330,6 +335,8 @@ def _redact(conn: Connection, raw_entry: Any = None) -> dict[str, Any]:
         # Reasoning depth: null IS a value here too (send NOTHING), never a fake
         # default — the drawer must be able to show "not set".
         "reasoning_effort": conn.reasoning_effort,
+        # Vision toggle: null IS the value (text-only), never a fake default.
+        "vision": conn.vision,
     }
     if isinstance(raw_entry, dict) and isinstance(raw_entry.get("note"), str):
         out["note"] = raw_entry["note"]

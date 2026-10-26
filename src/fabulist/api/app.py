@@ -51,7 +51,7 @@ from fabulist.log.degradation import (
     append_degradation,
     degradation_reason,
 )
-from fabulist.media.images import find_asset, image_content_part
+from fabulist.media.images import find_asset, find_caption, image_content_part
 
 from .sse import HEARTBEAT_SECONDS, ReplayBuffer, event_stream
 
@@ -73,7 +73,17 @@ class TurnEngine(Protocol):
     """
 
     def run_turn(
-        self, session_id: str, content: str, kind: str, *, image_url: str | None = None
+        self,
+        session_id: str,
+        content: str,
+        kind: str,
+        *,
+        image_url: str | None = None,
+        image_kind: str = "image",
+        #: Issue #79: the asset's arrival text (upload caption or stored note).
+        #: Only a TEXT-ONLY narrate connection renders it; a vision one gets the
+        #: native content part instead.
+        image_text: str = "",
     ) -> AsyncIterator[StreamEvent]: ...
 
 
@@ -473,6 +483,7 @@ async def _drive_turn(
     regenerate: bool = False,
     image_url: str | None = None,
     image_kind: str = "image",
+    image_text: str = "",
 ) -> None:
     """Pump one engine turn into the buffer; cooperative-stop aware.
 
@@ -508,7 +519,7 @@ async def _drive_turn(
             )
         agen = engine.run_turn(
                 session.session_id, content, kind,
-                image_url=image_url, image_kind=image_kind,
+                image_url=image_url, image_kind=image_kind, image_text=image_text,
             )
         # D17 capture correctness: the pump drives the engine through per-event
         # ensure_future tasks, each copying THIS context — a contextvar set
@@ -1115,6 +1126,11 @@ def create_app(
         # turn starts (no burned turns on bad references).
         image_url: str | None = None
         image_kind: str = "image"
+        # Issue #79: the asset's ARRIVAL text — its stored caption when the
+        # upload path wrote one, else whatever text the asset carries (note).
+        # The text-only fallback marker uses it; no captioner call ever runs
+        # here (captioning is arrival-only).
+        image_text: str = ""
         if body.image_asset_id:
             asset = find_asset(log, session_id, body.image_asset_id)
             if asset is None:
@@ -1128,6 +1144,9 @@ def create_app(
             mime = payload.get("mime") or "application/octet-stream"
             image_url = f"data:{mime};base64,{payload.get('bytes_b64', '')}"
             image_kind = kind
+            image_text = find_caption(log, session_id, body.image_asset_id) or str(
+                payload.get("note") or ""
+            )
         turn.task = asyncio.create_task(
             _drive_turn(
                 turn,
@@ -1143,6 +1162,7 @@ def create_app(
                 body.regenerate,
                 image_url,
                 image_kind,
+                image_text,
             )
         )
         return _sse_response(

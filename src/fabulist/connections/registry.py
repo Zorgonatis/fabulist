@@ -21,7 +21,8 @@ Config shape::
           "thinking": false,                # optional bool | null; null/true = ON
           "streaming": false,               # optional bool | null; null/true = stream
           "return_thinking": true,          # optional bool | null; null = AUTO
-          "reasoning_effort": "high"        # optional str | null; null = NOT SENT
+          "reasoning_effort": "high",       # optional str | null; null = NOT SENT
+          "vision": false                   # optional bool | null; null/absent = OFF
         }
       },
       "agents": {"narrator": "name", "extractor": "name"}
@@ -29,7 +30,8 @@ Config shape::
 
 The typed runtime fields are owner-declared runtime facts, parsed into
 :class:`Connection` (unlike raw ``note``/``dims``, which ride the document only):
-four come from W9.25, plus ``reasoning_effort`` (issue #26 R5).
+four come from W9.25, plus ``reasoning_effort`` (issue #26 R5) and ``vision``
+(issue #79).
 
 * ``context_window`` — the owner-declared Context Size in tokens. ``null`` (or
   absent) means unknown: consumers keep today's fixed-budget behavior. NO
@@ -49,6 +51,16 @@ four come from W9.25, plus ``reasoning_effort`` (issue #26 R5).
   rides back verbatim. The rule itself lives at the loop's one decision point
   (:func:`fabulist.agents.loop.should_echo_reasoning`) — this field only
   carries the owner's setting.
+
+``vision``
+----------
+The per-connection VISION toggle (issue #79): whether this connection's model
+accepts image content parts. ``None``/absent/``false`` all mean TEXT-ONLY — the
+safe default, and what keeps every connection that has never declared vision on
+the caption-marker fallback. ``true`` is the only state that lets image bytes
+ride a request. The field is dynamic by design: consumers resolve it from the
+live connection at message-build time, so a rebind changes rendering on the
+next turn and nothing is baked into log rows.
 
 ``reasoning_effort``
 --------------------
@@ -320,6 +332,12 @@ class Connection:
     #: ``None`` = send NOTHING — the default, and what keeps every provider that
     #: does not document the field on a byte-identical request.
     reasoning_effort: str | None = None
+    #: Per-connection VISION toggle (issue #79). ``None``/absent/``False`` mean
+    #: TEXT-ONLY, the safe default: image-bearing content renders as the
+    #: ``[inline image caption: ...]`` marker. ``True`` is the only state that
+    #: permits native image content parts. Resolved live per build, never baked
+    #: into a log row, so a rebind changes rendering on the next turn.
+    vision: bool | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
     sampling: dict[str, Any] = field(default_factory=dict)
     #: Explicit provider-capability overrides (W8.4). Empty means "resolve from
@@ -502,6 +520,7 @@ CONNECTION_PATCH_FIELDS: frozenset[str] = frozenset(
         "streaming",
         "return_thinking",
         "reasoning_effort",
+        "vision",
     }
 )
 
@@ -649,7 +668,7 @@ def validate_connection_patch(name: str, patch: Any) -> dict[str, Any]:
         clean["context_window"] = _clean_context_window(
             patch["context_window"], f"{where}.context_window"
         )
-    for key in ("thinking", "streaming", "return_thinking"):
+    for key in ("thinking", "streaming", "return_thinking", "vision"):
         if key in patch:
             clean[key] = _clean_optional_bool(patch[key], f"{where}.{key}")
     if "reasoning_effort" in patch:
@@ -861,6 +880,11 @@ class RegistryStore:
                     else {}
                 ),
                 **(
+                    {"vision": parsed.vision}
+                    if parsed.vision is not None
+                    else {}
+                ),
+                **(
                     {"api_key_env": parsed.api_key_env}
                     if parsed.api_key_env is not None
                     else {}
@@ -1022,6 +1046,7 @@ def _parse_connection(name: str, raw: Any) -> Connection:
         reasoning_effort=clean_reasoning_effort(
             raw.get("reasoning_effort"), f"{where}.reasoning_effort"
         ),
+        vision=_clean_optional_bool(raw.get("vision"), f"{where}.vision"),
         extra_body=extra_body,
         sampling=sampling,
         capabilities=capabilities,

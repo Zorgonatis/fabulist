@@ -291,6 +291,11 @@ class TurnState(TypedDict):
     validation_errors: list[dict]
     image_url: str
     image_kind: str
+    #: Issue #79: the CURRENT-TURN attachment's arrival text (upload caption,
+    #: or the asset's stored note). Used ONLY when the narrate connection is
+    #: text-only: the message renders the uniform ``[inline image caption: ...]``
+    #: marker instead of a native image part.
+    image_text: str
     recall: str
     facts_hash: str
     rolls: str
@@ -380,6 +385,7 @@ def initial_turn_state(session_id: str, content: str, kind: str) -> TurnState:
         "validation_errors": [],
         "image_url": "",
         "image_kind": "image",
+        "image_text": "",
         "recall": "",
         "facts_hash": "",
         "rolls": "",
