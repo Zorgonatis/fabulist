@@ -5,6 +5,81 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-10-26
+
+### Added
+
+- **A fork carries the whole session state into the new chat.** A branch is no longer just a
+  pointer and a cut: `fork_session` writes one `session_state_snapshot` row inside the fork
+  transaction, holding the state fold (clock and forecast pin), the **entity registry in
+  full** (locations, tracks, relationships, meters, items, conditions, bodies, economy,
+  being→location assignments) and the plan when it is at or below the cut. Assembly uses only
+  existing reads through a cut view — `get_projection(at_seq=cut)`, the registry, the plan
+  fold — so there is no second fold and no hand-rolled chain walk. New reads
+  `get_state_snapshot` / `get_session_state` resolve the branch's own copy first and fall back
+  to chain walking, so branches made before this release keep working. Nothing above the cut
+  is copied: a fork below a newer plan row does not inherit it. Append-only and revisable
+  like every other row.
+
+- **The sidecar warms every model at container start.** The image ships no weights; each model
+  used to download inside the first turn that needed it, which stalled or failed that turn.
+  The entrypoint now starts the router, then asks the router to load each preset section
+  (`POST /models/load`, role-agnostic and free of inference), polls until every id reports
+  `loaded`, and only then writes its warm flag — so the compose healthcheck gates the engine
+  on a warm sidecar. Failures are logged per model and keep the container unhealthy; the
+  weight download moves to boot, while you set up connections. Opt out with
+  `FABULIST_SIDECAR_WARMUP=off`.
+
+### Changed
+
+- **The engine tail is never a system message.** Planner seed, planner repair, BTS action and
+  BTS reconcile all built `[system, user, system]`; stock Qwen-family Jinja templates raise
+  `System message must be at the beginning` on that shape, so the provider returned 500 and
+  the turn died in the seed phase. All four now carry their directive and palette as an
+  `assistant` message placed immediately **before** the final user message, using the
+  narrator's own `insert_engine_envelope` carrier and its provenance rails. The player message
+  space is untouched and nothing moved into the stable prefix.
+
+- **One central guard enforces message order.** `build_request` — the single chokepoint every
+  consumer rides — raises `SystemMessageOrderError` when any `system` message sits after index
+  0, naming the slot, the index and the rule. It raises; it never rewrites or repairs. Three
+  more shapes were the same defect and are fixed here so the strict rule can hold: the image
+  render's two leading system messages are folded into one; a turn's `<validation_notice>`
+  rides history as an `assistant` message instead of a `system` one; card
+  `post_history_instructions` keep their position before the reply but take the `assistant`
+  role. The narrator's stable prefix is byte-identical in all three, so prompt caching behaves
+  as before up to the moved row.
+
+- **The Studio opens popped out and larger.** It used to open docked at a fixed narrow width,
+  which left text inputs cramped. It now opens floated at 640×720 (clamped to the window),
+  clear of the session rail. Saved layouts are honoured exactly — no silent migration — and a
+  Reset layout button puts an existing layout back on the new defaults.
+
+- **One import door for cards.** The Studio had several import controls with different labels
+  and rules. Every place that imports keeps its location, but each now shows the single label
+  `Import` and runs one handler that detects the card type, so a persona, world, book or
+  assistant card goes in the same way from any tab.
+
+### Fixed
+
+- **Swiping back no longer strands the newer branch.** Regenerating forked a new chat, and
+  swiping back to the original left no forward target. The swipe group is now computed at the
+  fork pivot, so both directions list every reply at that position across both chains, in a
+  stable order. Compaction-era continuations stay out of the group.
+
+- **Macros render in the transcript and in the opening message.** Typing `{{user}}` showed the
+  literal token. Known macros (`{{user}}`, `{{char}}`, persona, world) now resolve for display
+  as well as for the prompt: transcript user rows carry a rendered reading beside the raw
+  stored text, the opening message renders, and the prompt path agrees. The log stays
+  append-only — nothing is rewritten — and an unknown token is left alone rather than blanked.
+
+- **A long state tab scrolls inside its own column.** It used to grow the document, so the
+  window scrolled as well as the chat and the resize edge became hard to grab.
+
+- **The post-turn notice list starts collapsed.** The items it lists were already repaired in
+  the same turn, so the list now shows a one-line count and expands on demand. The expanded
+  state is UI-only and never touches the event log.
+
 ## [0.0.3] - 2026-10-25
 
 ### Added
