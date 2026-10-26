@@ -6,6 +6,18 @@ One line per change, with a reference to the closed issue. The issue thread carr
 detail; this file is an index, not a report. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A missing event log announces itself at boot instead of silently recreating empty (#72)
+- Regenerate forks the current session at the message acted on, never a stale pivot (#74)
+- A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
+
+### Changed
+
+- Anti Injection OFF now removes the guard line and wrapping bounds too; content-framing tags stay (#77)
+
 ## [0.0.4] - 2026-10-26
 
 ### Added
@@ -22,7 +34,6 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Fixed
 
-- A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
 - NPC and proposal lanes keep their brief on the engine carrier (#73)
 - Swiping back no longer strands the newer branch; the swipe group is computed at the fork pivot (#59)
 - Macros render in the transcript and in the opening message (#63)
