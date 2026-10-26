@@ -71,7 +71,7 @@ import re
 import time
 import weakref
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -5433,6 +5433,16 @@ class AssetProposalFanout:
         counted and dropped SILENTLY (no event — the plan's contract). A failed
         lane returns no ``proposal_rows`` key at all (an empty one would reset a
         sibling lane's merge) and records its reason for the summary.
+
+        Issue #82: the CALL and its structured PARSE are ONE retried attempt
+        (``agents.loop.run_structured_call``), exactly like the plan refresh — a
+        malformed batch that clears on a re-send is a recovered lane, not a
+        dropped one. PROVIDER-class failures are NOT retried here: the lane's
+        caller rides ``PresetAgentCaller`` -> ``RegistryModelCaller``, whose
+        client seam already retries them (one owner per class, so one provider
+        failure still costs ``DEFAULT_MAX_ATTEMPTS`` calls, never their product).
+        After the retries exhaust, the lane degrades to its failed-lane row
+        exactly as before: no turn abort and no new event kind.
         """
         from fabulist.state.proposal_lanes import lane_spec, parse_proposal_batch
         from fabulist.state.structured import StructuredFailure, structured_result
@@ -5441,22 +5451,52 @@ class AssetProposalFanout:
         spec = lane_spec(lane_id)
         if spec is None:
             return self._failed(lane_id, "unknown lane")
-        try:
-            pool = _lane_pool(self.pool_size)
-            async with pool:
-                content, tool_args, finish_reason = await _drain_lane(
-                    self.caller, list(payload.get("messages") or []), None
-                )
-        except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
-            return self._failed(spec.lane, str(exc)[:300])
-        try:
+        messages = list(payload.get("messages") or [])
+        targets = payload.get("targets") or []
+
+        async def _call(
+            call_messages: list[dict], stream: bool = True, **kwargs: Any
+        ) -> AsyncIterator[dict]:
+            """One generator call under the lane pool, re-acquired PER ATTEMPT.
+
+            The pool is taken inside the attempt so the mechanism's backoff runs
+            OUTSIDE it: a retrying lane never holds a slot while it waits, so a
+            healthy sibling sharing the pool is never stalled.
+            """
+            async with _lane_pool(self.pool_size):
+                async for event in self.caller(call_messages, stream, **kwargs):
+                    yield event
+
+        def _parse(
+            content: str, tool_args: str, finish_reason: str | None
+        ) -> tuple[list[dict], list[dict]]:
+            """One reply -> ``(rows, dropped)``, or a PARSE-class failure (#82).
+
+            A malformed structured reply is INVISIBLE to the connections client
+            (the call succeeded), so the retry lives here, around both halves.
+            The reply's own text rides the failure, so an exhausted attempt
+            record can carry a truncated copy. Side-effect free on purpose: a
+            retried attempt runs this more than once, and
+            ``parse_proposal_batch`` only sorts rows into ``rows``/``dropped``.
+            """
             parsed = structured_result(
                 content=content, tool_args=tool_args, finish_reason=finish_reason
             )
             if isinstance(parsed, StructuredFailure):
-                raise ValueError(f"structured: {parsed.reason}")
-            rows, dropped = parse_proposal_batch(
-                parsed, spec, payload.get("targets") or []
+                raise StructuredParseFailure(
+                    f"structured: {parsed.reason}", raw=content or tool_args
+                )
+            return parse_proposal_batch(parsed, spec, targets)
+
+        try:
+            # Issue #82: a malformed proposal batch used to cost the lane on the
+            # FIRST bad reply. Now it retries (PARSE only) before the lane
+            # degrades to the ordinary failed row.
+            rows, dropped = await run_structured_call(
+                caller=_call,
+                messages=messages,
+                parse=_parse,
+                stage="Asset proposals",
             )
         except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
             return self._failed(spec.lane, str(exc)[:300])

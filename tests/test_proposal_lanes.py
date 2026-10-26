@@ -945,6 +945,151 @@ def test_a_lane_with_an_unexpected_finish_reason_files_nothing(log):
     assert "world" in [row["lane"] for row in merged["proposal_meta"]["failed"]]
 
 
+# -- issue #82: the lane's CALL+PARSE rides the bounded retry ----------------
+#
+# The proposal lane held the call and its structured parse together, but parsed
+# exactly ONCE: one malformed batch cost the lane on the first bad reply. It now
+# rides the ONE mechanism (``agents.loop.run_structured_call``), like the plan
+# refresh. It declares PARSE only — the provider class is retried at the client
+# seam this lane's caller already rides (one owner per class, never a product).
+
+
+def _rate_limited():
+    """A REAL ``openai.RateLimitError`` (429) as a registry caller sees it."""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "http://provider.example/v1/chat/completions")
+    body = {"error": {"message": "Rate limit reached for requests"}}
+    response = httpx.Response(429, request=request, json=body)
+    return openai.RateLimitError(
+        f"Error code: 429 - {body}", response=response, body=body
+    )
+
+
+class _SequencedGenerator:
+    """A generator that serves a QUEUE of replies per lane, repeating the last.
+
+    ``AssetProposalFanout.lane`` holds the call and the parse together, so a
+    retried PARSE attempt is a second CALL: a test says "bad, then good" and
+    pins the attempt count off :attr:`calls`.
+    """
+
+    def __init__(self, sequences):
+        self.sequences = {
+            lane: list(replies) for lane, replies in dict(sequences).items()
+        }
+        self.calls: list[str] = []
+
+    async def __call__(self, messages, stream=True, **kwargs):
+        lane = FakeGenerator.lane_of(messages)
+        self.calls.append(lane)
+        queue = self.sequences.get(lane) or [{"proposals": []}]
+        index = min(self.calls.count(lane) - 1, len(queue) - 1)
+        reply = queue[index]
+        if isinstance(reply, Exception):
+            raise reply
+        text = reply if isinstance(reply, str) else json.dumps(reply)
+        yield {"type": "content", "delta": text}
+
+
+class _RegistryStyleGenerator:
+    """A generator whose OPEN rides the REAL client retry seam (the caller's).
+
+    ``PresetAgentCaller`` -> ``RegistryModelCaller`` opens every request through
+    ``connections.client.call_with_retry``, which owns the PROVIDER class. This
+    fake does the same, so a test can prove the lane does NOT retry that class a
+    second time (which would be nine calls for one rate-limited lane).
+    """
+
+    def __init__(self, errors, *, batch=None):
+        self.errors = list(errors)
+        self.batch = batch if batch is not None else {"proposals": []}
+        self.calls = 0
+
+    async def __call__(self, messages, stream=True, **kwargs):
+        from fabulist.connections.client import call_with_retry
+
+        async def _open() -> str:
+            index = self.calls
+            self.calls += 1
+            if index < len(self.errors):
+                raise self.errors[index]
+            return json.dumps(self.batch)
+
+        text = await call_with_retry(_open, stage="model call (proposals)")
+        yield {"type": "content", "delta": text}
+
+
+def test_a_malformed_proposal_batch_retries_then_the_lane_files_its_rows(log):
+    """Issue #82: a batch that clears on a re-send is a RECOVERED lane.
+
+    Before the mechanism was wired here, one non-JSON reply made the lane
+    ``failed`` on the first attempt — the asset update the model did produce on
+    the next try was never asked for.
+    """
+    _seed_world(log)
+    state = _turn_state(log)
+    generator = _SequencedGenerator(
+        {"world": ["I think the mill is lovely.", {"proposals": [_world_row()]}]}
+    )
+    fanout = _fanout(log, generator=generator, decision=FakeDecision())
+    merged = run(drive(fanout, state))
+
+    assert generator.calls.count("world") == 2  # one retry, then the good batch
+    assert [row["kind"] for row in _proposal_rows(log)] == ["world"]
+    assert merged["proposal_meta"].get("failed") is None
+    assert [row["lane"] for row in _summary(log)["lanes"] if row["failed"]] == []
+
+
+def test_a_batch_that_never_parses_retries_the_bound_then_degrades_its_lane(log):
+    """Issue #82: exhaustion keeps the lane's OWN policy — the failed row.
+
+    The stage runs off-turn (historian), so the degrade row IS its contract: no
+    raise, no turn abort, no new event kind. Three attempts, then one
+    ``proposal_meta["failed"]`` reason, exactly as a single malformed reply used
+    to read.
+    """
+    _seed_world(log)
+    state = _turn_state(log)
+    generator = _SequencedGenerator({"world": ["I think the mill is lovely."]})
+    fanout = _fanout(log, generator=generator, decision=FakeDecision())
+    merged = run(drive(fanout, state))
+
+    assert generator.calls.count("world") == 3  # the first try plus two retries
+    assert _proposal_rows(log) == []
+    world = [row for row in _summary(log)["lanes"] if row["lane"] == "world"][0]
+    assert world["kept"] == 0
+    assert world["failed"] == ["structured: malformed"]
+    assert merged["proposal_meta"]["failed"] == [
+        {"lane": "world", "reason": "structured: malformed"}
+    ]
+
+
+def test_a_provider_failure_at_the_lane_seam_is_retried_once_class_wide(log):
+    """The scope rule: the lane retries PARSE, the caller seam retries PROVIDER.
+
+    If the lane ALSO claimed the provider class, its scope would suppress the
+    client's own loop and own the count itself — or, with no scope at all, the
+    two loops would multiply to nine calls for one rate-limited lane. Three is
+    the one-class-wide count.
+    """
+    _seed_world(log)
+    state = _turn_state(log)
+    generator = _RegistryStyleGenerator([_rate_limited() for _ in range(3)])
+    fanout = _fanout(log, generator=generator, decision=FakeDecision())
+    payload = next(
+        send.arg for send in _sends(fanout, state) if send.arg["lane"] == "world"
+    )
+
+    update = run(fanout.lane(payload))
+
+    assert generator.calls == 3  # the client's bounded count, not 3 x 3
+    failed = update["proposal_meta"]["failed"]
+    assert failed[0]["lane"] == "world"
+    assert "429" in failed[0]["reason"]
+
+
 # -- gate configurability (req. 20: the ONE question bank) ------------------
 
 
