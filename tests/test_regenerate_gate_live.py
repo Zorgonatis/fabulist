@@ -703,7 +703,9 @@ def _run_gate() -> int:
             # sent: that re-read is what arms the stale pointer at turn 1's user
             # seq, and it is the whole reason the bug was observable at all. Racing
             # it would let a background refresh mask a missing one in `retry()`.
-            reads_at_settle = sum(1 for kind, sid in timeline if kind == "projection" and sid == source_sid)
+            reads_at_settle = sum(
+                1 for kind, sid in timeline if kind == "projection" and sid == source_sid
+            )
             deadline = time.time() + 60
             while time.time() < deadline:
                 if sum(
@@ -856,7 +858,6 @@ def _run_gate() -> int:
             branch_row = log.session_row(branch_sid or "")
             user_seqs = [event["seq"] for event in users]
             previous_user_seq = user_seqs[-2] if len(user_seqs) > 1 else None
-            resolved = None
             resolve_deadline = time.time() + 30
             while time.time() < resolve_deadline and not branch_row.get("base_session"):
                 time.sleep(0.2)
