@@ -101,6 +101,60 @@ class _ReplyCaller:
         yield {"type": "content", "delta": self.content}
 
 
+class _SequenceCaller:
+    """A ModelCaller that RAISES queued errors, then yields ``content``.
+
+    Issue #76: models a provider that fails the first N attempts and answers on
+    the next, so a lane retry can be pinned by ``calls``.
+    """
+
+    def __init__(self, errors: list[BaseException], content: str) -> None:
+        self.errors = list(errors)
+        self.content = content
+        self.calls = 0
+
+    async def __call__(self, messages, stream=True, **kwargs):
+        index = self.calls
+        self.calls += 1
+        if index < len(self.errors):
+            raise self.errors[index]
+        yield {"type": "content", "delta": self.content}
+
+
+def _bad_request(status: int = 400, message: str = "bad shape"):
+    """A REAL ``openai`` status error (a 400 by default) as the SDK raises it."""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "http://provider.example/v1/chat/completions")
+    body = {"error": {"message": message}}
+    response = httpx.Response(status, request=request, json=body)
+    return openai.APIStatusError(
+        f"Error code: {status} - {body}", response=response, body=body
+    )
+
+
+def _filtered_1301():
+    """The z.ai content-filter shape: a coded ``ProviderRequestError`` (HTTP 400)."""
+    from fabulist.connections.client import ProviderRequestError
+
+    return ProviderRequestError(
+        code="1301",
+        status=400,
+        text="System detected potentially unsafe or sensitive content",
+    )
+
+
+#: A valid lane reply, for a retry that finally succeeds.
+_LANE_JSON = json.dumps(
+    {
+        "intent": "watch the door",
+        "narrative": "Marcus eyes the awning and says nothing.",
+        "lines": [{"text": "Well?", "tone": "terse"}],
+    }
+)
+
+
 def _plan(turn_seq: int = 0):
     from fabulist.graph.plans import Plan
 
@@ -402,19 +456,10 @@ def _world_state(log, *, venue=()):
     )
 
 
-def test_a_lane_provider_failure_aborts_the_turn(log):
-    _admit(log, "Marcus")
-    _world_state(log, venue=["Marcus"])
-    fanout = make_npc_lanes_node(
-        log=log,
-        build_messages=lambda state: [
-            {"role": "system", "content": "## PRIVATE — you are Marcus"}
-        ],
-        caller=_RaisingCaller(_rate_limited()),
-        provider_label_fn=lambda: "glm-4.6",
-    )
+def _one_lane(fanout):
+    """Drive the dispatcher, its Send route, and ONE lane; return the update."""
 
-    async def one_lane():
+    async def scenario():
         await fanout(_lane_state())
         rows = _lane_state()
         rows.update(await fanout(rows))
@@ -422,10 +467,172 @@ def test_a_lane_provider_failure_aborts_the_turn(log):
         assert len(sends) == 1
         return await fanout.lane(sends[0].arg)
 
-    with pytest.raises(PhaseCallError) as caught:
-        run(one_lane())
+    return run(scenario())
 
-    assert str(caught.value).startswith("NPC lanes failed: 429 from glm-4.6")
+
+def test_a_lane_provider_failure_degrades_instead_of_aborting_the_turn(log):
+    """Issue #76: a provider failure retries then SKIPS the lane — no abort.
+
+    The owner ruling: one member's rejected request must not drop the turn; the
+    lane is best-effort, so after ``LANE_MAX_ATTEMPTS`` it writes the ordinary
+    ``ok: false`` row and the turn proceeds to the narrator and commits.
+    """
+    _admit(log, "Marcus")
+    _world_state(log, venue=["Marcus"])
+    caller = _RaisingCaller(_rate_limited())
+    fanout = make_npc_lanes_node(
+        log=log,
+        build_messages=lambda state: [
+            {"role": "system", "content": "## PRIVATE — you are Marcus"}
+        ],
+        caller=caller,
+        provider_label_fn=lambda: "glm-4.6",
+    )
+
+    update = _one_lane(fanout)
+
+    assert caller.calls == 3  # the first attempt plus two retries
+    assert update["lane_meta"]["ran"] == 0
+    skipped = update["lane_meta"]["skipped"][0]
+    assert skipped["name"] == "Marcus"
+    assert "429" in skipped["reason"]
+
+
+def test_a_lane_400_twice_then_a_valid_reply_runs_the_lane(log):
+    """Issue #76: a transient 400 is retried, and a good third attempt wins."""
+    _admit(log, "Marcus")
+    _world_state(log, venue=["Marcus"])
+    caller = _SequenceCaller([_bad_request(400), _bad_request(400)], _LANE_JSON)
+    fanout = make_npc_lanes_node(
+        log=log,
+        build_messages=lambda state: [
+            {"role": "system", "content": "## PRIVATE — you are Marcus"}
+        ],
+        caller=caller,
+        provider_label_fn=lambda: "glm-4.6",
+    )
+
+    update = _one_lane(fanout)
+
+    assert caller.calls == 3
+    assert update["lane_meta"]["ran"] == 1
+    assert update["lane_meta"].get("skipped") in (None, [])
+    lanes = update["npc_lanes"]
+    assert len(lanes) == 1
+    assert next(iter(lanes.values()))["intent"] == "watch the door"
+
+
+def test_a_coded_filtered_error_is_retried_too(log):
+    """Owner override (#76): a content-filtered error is RETRIED, not skipped.
+
+    ``ProviderRequestError.filtered`` (z.ai ``1301``) carried the in-tree note
+    "retrying it unchanged cannot help"; the owner OVERRULED that for lanes — a
+    filter that clears on a re-send must not cost the member's lane. This pin
+    keeps anyone from narrowing the retry back.
+    """
+    _admit(log, "Marcus")
+    _world_state(log, venue=["Marcus"])
+    caller = _SequenceCaller([_filtered_1301(), _filtered_1301()], _LANE_JSON)
+    fanout = make_npc_lanes_node(
+        log=log,
+        build_messages=lambda state: [
+            {"role": "system", "content": "## PRIVATE — you are Marcus"}
+        ],
+        caller=caller,
+        provider_label_fn=lambda: "glm-4.6",
+    )
+
+    update = _one_lane(fanout)
+
+    assert caller.calls == 3
+    assert update["lane_meta"]["ran"] == 1
+
+
+def test_a_lane_shape_failure_is_skipped_on_the_first_attempt(log):
+    """Issue #76: an invalid reply SHAPE is not a provider failure — no retry."""
+    _admit(log, "Marcus")
+    _world_state(log, venue=["Marcus"])
+    caller = _SequenceCaller([], json.dumps({"intent": "", "narrative": "", "lines": []}))
+    fanout = make_npc_lanes_node(
+        log=log,
+        build_messages=lambda state: [
+            {"role": "system", "content": "## PRIVATE — you are Marcus"}
+        ],
+        caller=caller,
+    )
+
+    update = _one_lane(fanout)
+
+    assert caller.calls == 1
+    assert update["lane_meta"]["ran"] == 0
+    assert update["lane_meta"]["skipped"][0]["reason"] == "shape"
+
+
+def test_a_lane_400_exhausted_commits_the_turn_with_a_failed_lane_row(tmp_path):
+    """Issue #76: three 400s degrade the lane; the turn still commits prose.
+
+    Graph-level: the turn must reach the narrator and commit a narrative row —
+    NOT surface the engine's error frame — while the ``npc_lane`` row records
+    ``ok: false`` with a reason naming the 400.
+    """
+    from fabulist.graph import GraphTurnEngine, build_graph
+
+    log = EventLog(tmp_path / "events.db")
+    try:
+        _admit(log, "Marcus")
+        _world_state(log, venue=["Marcus"])
+
+        async def _extract(user_msg, prose):
+            return {"deltas": {}, "action_class": "dialogue"}
+
+        class _Narrator:
+            async def __call__(self, messages, stream=True):
+                yield {"type": "content", "delta": "Rain drums on the shutters."}
+
+        planner_payload = {
+            "strings": list(STRINGS),
+            "datetime": "Monday, June 02, 2025 at 19:40",
+            "weather": "light rain",
+            "forecast": "clearing before dawn",
+            "established": ["Mara owes the guild 40 silver"],
+        }
+        lane_caller = _RaisingCaller(_bad_request(400))
+        graph = build_graph(
+            model=_Narrator(),
+            extractor=_extract,
+            log=log,
+            planner=make_planner_node(
+                log=log, caller=_ReplyCaller(json.dumps(planner_payload))
+            ),
+            npc_lanes=make_npc_lanes_node(
+                log=log,
+                build_messages=lambda state: [
+                    {"role": "system", "content": "## PRIVATE — you are Marcus"}
+                ],
+                caller=lane_caller,
+                provider_label_fn=lambda: "glm-4.6",
+            ),
+            build_messages=lambda state: [
+                {"role": "user", "content": state["user_content"]}
+            ],
+        )
+        engine = GraphTurnEngine(graph=graph, log=log, model=_Narrator())
+        frames = run(_collect(engine.run_turn(SID, "I step inside.", "in_character")))
+
+        assert lane_caller.calls == 3
+        assert [f for f in frames if f.get("type") == "error"] == []
+        narratives = [e for e in log.get_events(SID) if e.type == "narrative"]
+        assert len(narratives) == 1
+        lane_rows = [
+            e
+            for e in log.get_events(SID)
+            if (e.payload or {}).get("event") == "npc_lane"
+        ]
+        assert len(lane_rows) == 1
+        assert lane_rows[0].payload["ok"] is False
+        assert "400" in lane_rows[0].payload["reason"]
+    finally:
+        log.close()
 
 
 def test_a_lane_content_failure_is_still_a_skipped_lane(log):

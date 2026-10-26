@@ -22,6 +22,7 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Fixed
 
+- A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
 - NPC and proposal lanes keep their brief on the engine carrier (#73)
 - Swiping back no longer strands the newer branch; the swipe group is computed at the fork pivot (#59)
 - Macros render in the transcript and in the opening message (#63)
