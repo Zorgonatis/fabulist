@@ -20,6 +20,11 @@ Audit-verified defects this file pins, each against the real code path:
    account or model name) and ``build_engine``'s narrator snapshot no longer
    crashes BOOT — a turn with nothing bound reports the readable
    ``ConnectionConfigError`` text instead of a 500.
+7. A MISSING event log is a first run too (issue #72): ``EventLog`` warns ONCE
+   per process (the first construction creates the file), naming the path and
+   the constant ``NEW_LOG_WARNING`` — while ``:memory:`` never warns. The
+   DERIVED stores (vector memory D5, checkpoints ADR-003) say the same thing at
+   DEBUG, not WARNING: they are rebuildable from the log.
 """
 
 from __future__ import annotations
@@ -49,6 +54,11 @@ from fabulist.connections.registry import (
     load_registry,
     write_env_key,
 )
+from fabulist.graph import open_sqlite_checkpointer
+from fabulist.graph.graph import NEW_CHECKPOINT_DEBUG
+from fabulist.log import EventLog
+from fabulist.log.repo import NEW_LOG_WARNING
+from fabulist.memory.store import NEW_LOG_DEBUG, MemoryStore
 from fabulist.wiring import build_app
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -323,3 +333,72 @@ def test_serve_creates_the_config_directory_it_resolves_and_documents_the_neutra
     assert "configs/connections.example.json" in serve.FIRST_RUN_HINT
     assert "api_key_env" in serve.FIRST_RUN_HINT
     assert "127.0.0.1:8080" in serve.FIRST_RUN_HINT
+
+
+# --- 8. a missing event log is a first run, and it says so (issue #72) -------
+
+
+def test_a_missing_event_log_warns_and_names_the_path(tmp_path, caplog):
+    missing = tmp_path / "events.db"
+
+    with caplog.at_level(logging.WARNING, logger="fabulist.log.repo"):
+        log = EventLog(missing)
+    log.close()
+
+    assert NEW_LOG_WARNING in caplog.text
+    assert str(missing) in caplog.text
+    assert missing.exists()  # the constructor created it
+
+
+def test_a_second_event_log_on_the_same_path_is_silent(tmp_path, caplog):
+    """The first construction creates the file, so later ones in the boot are quiet.
+
+    Three EventLogs per boot must produce ONE line — asserted here rather than
+    adding dedupe state to the constructor.
+    """
+    path = tmp_path / "events.db"
+    EventLog(path).close()  # the first construction creates the file
+    caplog.clear()  # caplog spans the whole test; only the later boots matter here
+
+    with caplog.at_level(logging.WARNING, logger="fabulist.log.repo"):
+        EventLog(path).close()
+        EventLog(path).close()
+
+    assert NEW_LOG_WARNING not in caplog.text
+
+
+def test_an_in_memory_event_log_never_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger="fabulist.log.repo"):
+        log = EventLog(":memory:")
+    log.close()
+
+    assert NEW_LOG_WARNING not in caplog.text
+
+
+def test_the_memory_store_logs_at_debug_not_warning(tmp_path, caplog):
+    path = tmp_path / "memory.db"
+
+    with caplog.at_level(logging.DEBUG, logger="fabulist.memory.store"):
+        store = MemoryStore(path)
+    store.close()
+
+    records = [r for r in caplog.records if r.name == "fabulist.memory.store"]
+    assert any(NEW_LOG_DEBUG in r.getMessage() for r in records)
+    assert any(str(path) in r.getMessage() for r in records)
+    assert not [r for r in records if r.levelno >= logging.WARNING]
+
+
+def test_the_checkpointer_logs_at_debug_not_warning(tmp_path, caplog):
+    path = tmp_path / "ckpt.db"
+
+    async def scenario():
+        async with open_sqlite_checkpointer(path) as _saver:
+            pass
+
+    with caplog.at_level(logging.DEBUG, logger="fabulist.graph.graph"):
+        run(scenario())
+
+    records = [r for r in caplog.records if r.name == "fabulist.graph.graph"]
+    assert any(NEW_CHECKPOINT_DEBUG in r.getMessage() for r in records)
+    assert any(str(path) in r.getMessage() for r in records)
+    assert not [r for r in records if r.levelno >= logging.WARNING]

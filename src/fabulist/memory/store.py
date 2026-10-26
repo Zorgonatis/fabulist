@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MemoryStore", "MemoryStoreUnavailable"]
 
+#: First-run log line for the derived vector index (DEBUG: rebuildable, D5).
+NEW_LOG_DEBUG: str = (
+    "memory index not found - creating a NEW EMPTY index; it is derived and "
+    "rebuildable from the event log"
+)
+
 _CATALOG_DDL = """
 CREATE TABLE IF NOT EXISTS memory_collections (
     collection TEXT PRIMARY KEY,
@@ -107,6 +113,10 @@ class MemoryStore:
 
     def __init__(self, db_path: Path | str) -> None:
         if str(db_path) != ":memory:":
+            # A missing index file is a first run: it is DERIVED, droppable state
+            # (D5) rebuildable from the log, so this is DEBUG, not a warning.
+            if not Path(db_path).exists():
+                logger.debug("%s: %s", db_path, NEW_LOG_DEBUG)
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self._conn = sqlite3.connect(str(db_path))
