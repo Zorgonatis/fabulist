@@ -311,3 +311,41 @@ def test_query_many_skips_dim_mismatched_collection(tmp_path, caplog):
         assert [r["text"] for r in rows] == ["good"]  # sibling still returns
         assert "c_bad" in caplog.text
         assert "skipping" in caplog.text
+
+
+# -- per-session delete (issue #85) ----------------------------------------
+
+
+def test_delete_session_rows_spares_a_sibling_in_every_shared_collection(tmp_path):
+    """Per-row delete: one chat's rows go, its sibling's same-seq rows stay."""
+    with MemoryStore(tmp_path / "memory.db") as store:
+        store.upsert("w_world", 1, "user", "A-1", _a(0.0), session_id="chatA")
+        store.upsert("w_world", 2, "narrative", "A-2", _a(0.1), session_id="chatA")
+        store.upsert("w_world", 1, "user", "B-1", _a(0.0), session_id="chatB")
+        store.upsert("w_world", 2, "narrative", "B-2", _a(0.1), session_id="chatB")
+        store.upsert("a_alice", 7, "user", "A-7", _b(0.0), session_id="chatA")
+        store.upsert("a_alice", 7, "user", "B-7", _b(0.0), session_id="chatB")
+
+        assert store.session_ids() == ["chatA", "chatB"]
+        assert store.count_session_rows("chatA") == 3
+
+        assert store.delete_session_rows("chatA") == 3
+        assert store.count_session_rows("chatA") == 0
+        assert store.session_ids() == ["chatB"]
+
+        # The sibling's rows survive in BOTH shared collections, at the same
+        # per-chat seqs the deleted chat used (row keys are per-session).
+        world = {r["text"] for r in store.query("w_world", CLUSTER_A, k=100)}
+        assert world == {"B-1", "B-2"}
+        actor = {r["text"] for r in store.query("a_alice", CLUSTER_B, k=100)}
+        assert actor == {"B-7"}
+
+        # Idempotent: a second delete (or an empty id) is a no-op.
+        assert store.delete_session_rows("chatA") == 0
+        assert store.delete_session_rows("") == 0
+
+        # Slot rows are monotone bookkeeping, not orphans: they stay.
+        slots = store._conn.execute(
+            "SELECT session_id FROM memory_sessions WHERE session_id = 'chatA'"
+        ).fetchall()
+        assert slots == [("chatA",)]

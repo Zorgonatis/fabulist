@@ -23,6 +23,7 @@ detail; this file is an index, not a report. Versioning follows
 - Recall no longer returns the recent turns the narrator already carries; the unused recall-window floor is deleted (#84)
 - A branch keeps the books, component set and persona it was cut from, and its summary and drawers read them from the chain like the engine does (#86)
 - A failed message save keeps the draft and the dialog open and shows the server's reason; the revision POST aborts after 30 seconds so a stalled request can never wedge the editor (#87)
+- Deleting a chat or pruning a branch removes its memory rows from shared layers, and a one-time prune clears old orphans (#85)
 
 ### Changed
 

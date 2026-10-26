@@ -29,7 +29,8 @@ Component-set selection (issues #16/#24) — PER-SESSION, a log fact:
 Renames are revision events (D10): a newer payload supersedes the old title and
 the original row stays queryable. Deletes are soft: they append a
 ``session_hidden`` system event; listing filters hidden sessions but every log
-row survives (no destructive deletes, D9).
+row survives (no destructive deletes, D9). The chat's derived memory-index rows
+ARE removed from the shared layers (D5, issue #85).
 
 Wiring (orchestrator-owned, one line)::
 
@@ -55,6 +56,8 @@ from fabulist.dsl.store import ComponentSetError, library_store
 from fabulist.graph.compaction import has_compaction_marker
 from fabulist.log.schema_gate import SET_SWAP_EVENT
 from fabulist.memory.actor import fold_actors
+
+from .memory_cleanup import delete_session_memory
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from fabulist.log import EventLog
@@ -349,13 +352,22 @@ async def rename_session(
 
 @router.delete("/api/sessions/{session_id}")
 async def hide_session(session_id: str, request: Request) -> dict:
-    """Soft-delete: hide from the list, never touch the underlying rows (D9)."""
+    """Soft-delete: hide from the list and drop its derived memory rows.
+
+    The event log keeps every row (D9). The vector index is derived and
+    droppable (D5), so this chat's rows are deleted from the shared layers
+    (issue #85) — best-effort, never failing the hide.
+    """
     log = _log_for(request)
     if _summarize(log, session_id) is None:
         raise HTTPException(status_code=404, detail="unknown session")
     log.append_event(
         session_id, "system", "user", {"event": "session_hidden"}
     )
+    # Issue #85: the hide is the delete for the user, so the chat's derived
+    # memory rows go with it. Best-effort: a missing store (memory off) is a
+    # no-op and a store failure never fails the delete.
+    delete_session_memory(request.app, session_id)
     return {"session_id": session_id, "hidden": True}
 
 # --- component-set selection (issues #16/#24) -------------------------------

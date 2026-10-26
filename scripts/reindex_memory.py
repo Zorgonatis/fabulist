@@ -17,9 +17,14 @@ The enumeration + batch now live in :mod:`fabulist.memory.reembed` so the API's
 background re-embed job (``POST /api/memory/reembed``) and this CLI script share
 ONE implementation. This script only adds progress printing + a dry run.
 
+Issue #85 adds ``--prune-orphans``: a one-time cleanup that deletes index rows
+whose session is hidden or absent from the log (the rows the per-row delete
+did not catch before it existed). It needs no embedder and never rebuilds.
+
 CLI::
 
     uv run python scripts/reindex_memory.py --log data/fabulist.db [--dry-run]
+    uv run python scripts/reindex_memory.py --log data/fabulist.db --prune-orphans [--dry-run]
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from pathlib import Path
 from fabulist.log import EventLog
 from fabulist.memory.reembed import (
     planned_sessions,
+    prune_orphan_sessions,
     reembed_all,
     resolve_embedder,
     visible_session_ids,
@@ -69,12 +75,43 @@ async def reindex_all(log_path: Path, registry: Registry, *, dry_run: bool = Fal
     return stats
 
 
+def prune_orphans(log_path: Path, *, dry_run: bool = False) -> dict:
+    """Delete index rows whose session is hidden or absent from the log."""
+    from fabulist.memory.store import MemoryStore
+
+    log = EventLog(log_path)
+    try:
+        store = MemoryStore(log_path.parent / "memory.db")
+        try:
+            stats = prune_orphan_sessions(log, store, dry_run=dry_run)
+        finally:
+            store.close()
+    finally:
+        log.close()
+    for session_id in stats["pruned"]:
+        print(f"  {session_id[:12]}… orphan{' [DRY]' if dry_run else ' — deleted'}")
+    return stats
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", default="data/fabulist.db")
     parser.add_argument("--config", default="configs/connections.json")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--prune-orphans",
+        action="store_true",
+        help="delete rows whose session is hidden or absent from the log, then exit",
+    )
     args = parser.parse_args(argv)
+
+    if args.prune_orphans:
+        stats = prune_orphans(Path(args.log), dry_run=args.dry_run)
+        print(
+            f"\nprune: {stats['sessions']} orphan session(s), {stats['rows']} row(s)"
+            + (" [DRY RUN]" if args.dry_run else "")
+        )
+        return 0
 
     registry = Registry.load(Path(args.config))
     stats = asyncio.run(reindex_all(Path(args.log), registry, dry_run=args.dry_run))

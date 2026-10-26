@@ -485,6 +485,74 @@ class MemoryStore:
                         best[key] = row
         return sorted(best.values(), key=lambda r: float(r["distance"]))
 
+    # -- per-session delete (issue #85) ------------------------------------
+
+    def session_ids(self) -> list[str]:
+        """Distinct non-empty session ids carrying rows in any collection.
+
+        The meta table's ``session_id`` column is the authoritative index: a
+        shared layer (``w_<world>`` / ``a_<actor>``) carries rows from many
+        chats, and this is how a cleanup finds every chat that put rows there.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT session_id FROM memory_meta "
+            "WHERE session_id != '' ORDER BY session_id"
+        ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def count_session_rows(self, session_id: str) -> int:
+        """Count a session's rows across ALL collections (0 for an empty id)."""
+        if not session_id:
+            return 0
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM memory_meta WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def delete_session_rows(self, session_id: str) -> int:
+        """Delete ONE session's meta + vector rows across ALL its collections.
+
+        The rows live in shared layers, so this is a per-row delete, never a
+        collection drop: only row keys whose meta row carries ``session_id``
+        are removed, leaving a sibling chat's rows (even at the same per-chat
+        ``seq``) untouched. The composite ``row_key`` is per-collection, so the
+        meta index is read first and the vector rows are then deleted by that
+        key in each collection's own table.
+
+        ``memory_sessions`` slot rows are deliberately LEFT alone: they are
+        monotone bookkeeping (``wipe`` leaves them too), not orphans.
+
+        Returns the number of rows deleted (0 for a missing/empty session).
+        """
+        if not session_id:
+            return 0
+        rows = self._conn.execute(
+            "SELECT collection, row_key FROM memory_meta WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+        by_collection: dict[str, list[int]] = {}
+        for collection, row_key in rows:
+            by_collection.setdefault(str(collection), []).append(int(row_key))
+        with self._conn:
+            for collection, row_keys in by_collection.items():
+                found = self._table_for(collection)
+                if found is not None:
+                    table_name, _ = found
+                    placeholders = ",".join("?" for _ in row_keys)
+                    self._conn.execute(
+                        f"DELETE FROM {table_name} WHERE seq IN ({placeholders})",
+                        row_keys,
+                    )
+                placeholders = ",".join("?" for _ in row_keys)
+                self._conn.execute(
+                    f"DELETE FROM memory_meta WHERE collection = ? "
+                    f"AND row_key IN ({placeholders})",
+                    (collection, *row_keys),
+                )
+        return len(rows)
+
     # -- teardown / rebuild (D5) -------------------------------------------
 
     def drop_collection(self, collection: str) -> None:
