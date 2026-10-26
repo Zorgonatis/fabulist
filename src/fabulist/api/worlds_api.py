@@ -447,7 +447,11 @@ async def session_world_route(session_id: str, request: Request) -> dict:
     """
 
     log = _log_for(request)
-    events = log.get_events(session_id)
+    # Fork-aware read (issue #86): the world_ref snapshot, the chat's
+    # ``session_books`` registration and the card seed are all session-constant
+    # context that arrives through the chain on a branch. Own rows alone made a
+    # branch answer "no world, no books" while the narrator rendered both.
+    events = log.get_chain_events(session_id)
     if not events:
         raise HTTPException(status_code=404, detail="unknown session")
 

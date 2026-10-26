@@ -115,10 +115,23 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
     (both carry ``persona_id: None``): it is True only when the latest
     ``chat_persona`` row carries the ``cleared: true`` marker written by
     :func:`fabulist.personas.registry.clear_persona`.
+
+    TWO reads, by design (issue #86): the session-CONSTANT config half (persona,
+    world, memory toggle) folds over the fork-aware chain, so a branch lists the
+    values its parent had at the cut -- the same values the engine already
+    resolves (:func:`fabulist.personas.registry.chat_persona_state`,
+    :mod:`fabulist.context.facts`), so the rail badge and the prompt agree. The
+    title/visibility/turn-count half stays OWN-row: ``_title_event`` is the
+    rename revision's TARGET, and a rename on a branch must supersede the
+    branch's own title carry row, never the parent's (#86 constraint).
     """
     events = log.get_events(session_id)
     if not events:
         return None
+    # The config half is session-constant context: chain-walked like the engine.
+    # Reserved-anchor rows (``__personas__`` etc.) never appear here -- the walk
+    # is over this session's fork ancestry only.
+    chain = log.get_chain_events(session_id)
 
     title = ""
     hidden = False
@@ -167,20 +180,6 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
             kind = event.payload.get("event")
             if kind == "session_hidden":
                 hidden = True
-            elif kind == "chat_persona":
-                # A real id sets the assignment; an explicit clear
-                # (``persona_id: null`` + ``cleared: true``) leaves ``persona_id``
-                # ``None`` (same as never-set) and flags ``persona_cleared``.
-                persona_cleared = event.payload.get("cleared") is True
-                value = event.payload.get("persona_id")
-                persona_id = value if isinstance(value, str) else None
-            elif kind == "world_ref":
-                value = event.payload.get("world_id")
-                world_id = value if isinstance(value, str) and value else None
-            elif kind == "chat_memory":
-                enabled = event.payload.get("enabled")
-                if isinstance(enabled, bool):
-                    memory_enabled = enabled
             elif kind in _TITLE_EVENTS and isinstance(event.payload.get("title"), str):
                 title = event.payload["title"]
                 title_event = event
@@ -191,6 +190,28 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
                 title = revised["title"]
                 title_event = event
                 title_payload = dict(revised)
+
+    # Chain-walked config: latest-wins across the inherited rows (at/below the
+    # fork cut) and the branch's own rows (a carried row or a branch-local
+    # write), in seq order.
+    for event in chain:
+        if event.type != "system" or not isinstance(event.payload, dict):
+            continue
+        kind = event.payload.get("event")
+        if kind == "chat_persona":
+            # A real id sets the assignment; an explicit clear
+            # (``persona_id: null`` + ``cleared: true``) leaves ``persona_id``
+            # ``None`` (same as never-set) and flags ``persona_cleared``.
+            persona_cleared = event.payload.get("cleared") is True
+            value = event.payload.get("persona_id")
+            persona_id = value if isinstance(value, str) else None
+        elif kind == "world_ref":
+            value = event.payload.get("world_id")
+            world_id = value if isinstance(value, str) and value else None
+        elif kind == "chat_memory":
+            enabled = event.payload.get("enabled")
+            if isinstance(enabled, bool):
+                memory_enabled = enabled
 
     return {
         "session_id": session_id,
