@@ -243,10 +243,47 @@ def test_the_snapshot_reads_without_walking_the_parent(
     assert snapshot["state"] == expected["state"]
     assert snapshot["registry"].keys() == expected["registry"].keys()
 
-    # The public read prefers it too, and says so.
+    # The base is what the fork carried; it is not the live read. Un-patch the
+    # chain so the public read may fold the branch's tip (issue #78).
+    monkeypatch.undo()
+    tip = max(event.seq for event in log.get_chain_events("branch"))
     state = log.get_session_state("branch")
     assert state["persisted"] is True
+    # Tip-resolved, not the frozen cut: at_seq resolves to the branch's tip.
+    assert state["at_seq"] == tip
+    assert state["state"]["time"] == "18:20"
     assert state["plan"]["strings"] == ["the lender names a price"]
+
+
+def test_a_snapshot_branch_reads_its_tip_after_its_own_deltas(log: EventLog) -> None:
+    """The snapshot is a BASE: deltas above the cut win on every read (#78)."""
+    _seed_state(log, SESSION)
+    cut = _turn(log, SESSION)
+    log.fork_session(SESSION, cut, "branch")
+    base = _snapshot_row(log, "branch")
+    assert base.payload["at_seq"] == cut
+    assert base.payload["state"]["time"] == "18:20"
+
+    # The branch moves on: two state-deltas above its own snapshot.
+    log.append_event("branch", "state-delta", "extractor", {"time": "21:30"})
+    delta = log.append_event(
+        "branch", "state-delta", "extractor", {"time": "21:30", "forecast": "clear"}
+    )
+
+    state = log.get_session_state("branch")
+    assert state["persisted"] is True
+    assert state["state"]["time"] == "21:30"
+    assert state["state"]["forecast"] == "clear"
+    assert state["at_seq"] == delta.seq  # the resolved tip, not the cut
+    # Invariants the base still supplies: registry and plan ride through.
+    assert [t["name"] for t in state["registry"]["threads"].values()] == [
+        "The unpaid debt"
+    ]
+    assert state["plan"]["strings"] == ["the lender names a price"]
+    # The row itself is untouched: it stays the state AT the cut.
+    assert _snapshot_row(log, "branch").payload["state"]["time"] == "18:20"
+    # And the projection the read folds agrees with it.
+    assert log.get_projection("branch")["state"]["time"] == "21:30"
 
 
 def test_a_pre_change_branch_still_reads_from_the_chain(log: EventLog) -> None:
