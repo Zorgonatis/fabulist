@@ -445,7 +445,7 @@
 
 	/**
 	 * Issue #81: WHICH row owns the branch controls — and the only row that has
-	 * them.
+	 * them — and whether the loaded `branch` group actually describes it.
 	 *
 	 * A failed turn commits its user row and no narrative, so `lastReplyIndex`
 	 * names the PREVIOUS reply and the ↻ pointed at the wrong turn. Walk back over
@@ -454,17 +454,36 @@
 	 * and it is the trailing UNANSWERED turn — the row a failed turn lives on, and
 	 * where the controls belong. Every other tail keeps v1: the last reply only.
 	 * No other unanswered row can match, so the controls never multiply.
+	 *
+	 * `group` is FALSE there on purpose (#81 follow-up). An unanswered turn stored
+	 * no reply, so a `branch` the page did load describes an EARLIER pivot — its
+	 * `index`/`count` would be that turn's, and `swipe()` cannot step a group the
+	 * turn does not have. Only the ↻ applies, and it needs no group at all: it
+	 * forks at the newest user row (the page re-reads the projection first). A
+	 * fresh chat whose FIRST turn fails has no branch context whatsoever, which is
+	 * exactly the case that used to render nothing.
 	 */
-	const branchRowIndex = $derived.by(() => {
+	const branchOwner = $derived.by((): { index: number; group: boolean } => {
 		const list = entries;
 		let i = list.length - 1;
 		while (i >= 0 && (list[i].system || isEmptyFailedReply(list[i]))) i -= 1;
-		if (i < 0) return -1;
-		return list[i].role === 'user' ? i : lastReplyIndex;
+		if (i < 0) return { index: -1, group: false };
+		if (list[i].role === 'user') return { index: i, group: false };
+		return { index: lastReplyIndex, group: true };
 	});
 
-	const showBranch = $derived(branch !== null);
-	const hasAlternates = $derived(branch !== null && branch.count > 1);
+	/** The group data a row may render: only the owner row's, and only when the
+	 *  owner IS the last reply. An unanswered tail stored no reply, so any group
+	 *  the page holds describes an EARLIER pivot — rendering its `index / count`
+	 *  there would label one turn with another turn's alternates. */
+	const ownerBranch = $derived(branchOwner.group ? branch : null);
+	/** Whether the owner row renders a control at all: the ↻ always does; the
+	 *  swipe group only when the page actually loaded one (legacy = never). */
+	const ownerHasControls = $derived(
+		branchOwner.index >= 0 && (branchOwner.group ? branch !== null : true)
+	);
+
+	const hasAlternates = $derived(ownerBranch !== null && ownerBranch.count > 1);
 
 	// --- W9.26 §2.5: the era boundary ------------------------------------------
 	//
@@ -1593,10 +1612,10 @@
 				</button>
 			{/if}
 			{#if entry.role === 'narrator'}
-				{#if hasAlternates && branch && index === lastReplyIndex}
+				{#if hasAlternates && ownerBranch && index === lastReplyIndex}
 					<span class="branch-chip" title="This reply has alternate branches">
 						<span class="chip-glyph" aria-hidden="true">⑂</span>
-						{branch.index} / {branch.count}
+						{ownerBranch.index} / {ownerBranch.count}
 					</span>
 				{/if}
 				{#if entry.reasoning}
@@ -1793,9 +1812,9 @@
 			{#if entry.error}
 				<p class="error">{entry.error}</p>
 			{/if}
-			{#if showBranch && branch && index === branchRowIndex}
+			{#if ownerHasControls && index === branchOwner.index}
 				<BranchControls
-					{branch}
+					branch={ownerBranch}
 					busy={branchBusy || entry.streaming}
 					onPrev={() => onSwipe?.(-1)}
 					onNext={() => onSwipe?.(1)}
