@@ -24,9 +24,12 @@ payload is the state of the session at the CUT, folded through the existing
 projection reads (never a second fold, never a hand-rolled chain walk): the
 projection's ``state``, the entity registry (:func:`fabulist.state.entities.registry`)
 and the latest plan (:func:`fabulist.graph.plans.load_last_plan`), each read
-through :class:`_CutView` so nothing above the cut can leak in. The branch then
-resolves its state from its OWN snapshot first and falls back to the parent
-chain (an older branch without a snapshot keeps reading the chain unchanged).
+through :class:`_CutView` so nothing above the cut can leak in. That snapshot is
+a BASE, written once at fork time and never rewritten: every state read folds
+the branch's own rows ABOVE it (its own ``state-delta`` rows, registry writes,
+plans) to the tip, exactly as :meth:`get_projection` does -- the snapshot is
+where the branch starts, not where it stops (issue #78). An older branch
+without a snapshot row reads the same fold off the parent chain unchanged.
 
 Projections are always rebuilt from raw events (the log is truth, D9/D11);
 superseded content is resolved latest-wins and the originals stay queryable.
@@ -740,14 +743,19 @@ class EventLog:
         }
 
     def get_state_snapshot(self, session_id: str) -> dict | None:
-        """The session's OWN persisted state snapshot, or ``None``.
+        """The session's OWN persisted state snapshot as the fork's BASE, or ``None``.
 
-        Session-local by construction (``get_events``): this is the read a
-        branch does FIRST, and it never touches the parent chain, so a fork's
-        state survives its parent's later writes and costs no ancestor walk.
-        Revisions are applied latest-wins (ADR-002), so a corrected snapshot
-        reads as corrected. A pre-#62 branch owns no snapshot row and gets
-        ``None`` -- callers fall back to :meth:`get_session_state`.
+        The snapshot is written ONCE at fork time (issue #62) and is the state
+        the branch was cut from -- a base, not a live view: it is frozen at its
+        ``at_seq`` by construction. Every read folds the branch's own rows above
+        it to the tip, so this payload is deliberately the state *at the cut*.
+
+        Session-local by construction (``get_events``): this read never touches
+        the parent chain, so a fork's base survives its parent's later writes
+        and costs no ancestor walk. Revisions are applied latest-wins (ADR-002),
+        so a corrected snapshot reads as corrected. A pre-#62 branch owns no
+        snapshot row and gets ``None`` -- :meth:`get_session_state` then folds
+        the chain alone, which is the same answer it always gave.
         """
         own_rows = self.get_events(session_id)
         own = [event for event in own_rows if is_state_snapshot_event(event)]
@@ -765,21 +773,28 @@ class EventLog:
         return snapshot
 
     def get_session_state(self, session_id: str) -> dict:
-        """A session's state, snapshot FIRST and parent chain as fallback.
+        """A session's state at its TIP, with the snapshot as the BASE (issue #78).
 
-        The read contract issue #62 lands: a branch resolves the state it
-        persisted at its cut; a legacy (pre-#62) session and a root session have
-        no snapshot row, so the same dict is folded from the chain as before --
-        old branches keep working, they just pay the walk they always paid.
-        ``persisted`` names which path answered, so a caller (or a test) can
-        tell them apart without guessing.
+        Lifecycle, precisely: the snapshot is written ONCE at fork time and is a
+        base; every read folds the branch's own rows ABOVE it to the tip -- the
+        same fold :meth:`get_projection` performs, where the snapshot lands at
+        its own ``seq`` (fork cut + 1), above the inherited rows it was built
+        from and below anything the branch wrote after the fork. So the branch's
+        own ``state-delta`` rows win over the cut's, and ``at_seq`` reports the
+        resolved position (the tip), not the cut the snapshot froze.
+
+        This is a thin read over the existing machinery, not a second fold:
+        :meth:`build_state_snapshot` at the tip already assembles ``state``
+        (the projection fold, snapshot included), ``registry`` and ``plan`` over
+        one cut view. A legacy (pre-#62) branch owns no snapshot row and gets
+        the identical fold off the parent chain -- ``persisted`` names which of
+        the two row sets answered, so a caller (or a test) can tell them apart
+        without guessing.
         """
-        snapshot = self.get_state_snapshot(session_id)
-        if snapshot is not None:
-            return {**snapshot, "persisted": True}
+        persisted = self.get_state_snapshot(session_id) is not None
         chain = self.get_chain_events(session_id)
         tip = max((event.seq for event in chain), default=0)
-        return {**self.build_state_snapshot(session_id, tip), "persisted": False}
+        return {**self.build_state_snapshot(session_id, tip), "persisted": persisted}
 
     def _carry_config(
         self, source_session: str, new_session_id: str, at_seq: int

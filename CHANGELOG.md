@@ -14,6 +14,7 @@ detail; this file is an index, not a report. Versioning follows
 - Regenerate forks the current session at the message acted on, never a stale pivot (#74)
 - A failed preset or context read warns and leaves a `preset_degraded` notice instead of a silent wrong-model turn (#70)
 - A lane that hits a provider error retries twice, then degrades; the turn still commits (#76)
+- A branch's session state reads its own tip: the fork snapshot is a base and later deltas win (#78)
 
 ### Changed
 
