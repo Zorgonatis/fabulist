@@ -23,9 +23,16 @@ failure takes — so the reader is told which phase fell over and why.
 
 Scope — WHICH phases may abort:
 
-* PRE-COMMIT (planner seed/refresh, the NPC lanes, the narrator draft): a
-  provider failure is FATAL. The turn has not been kept yet, so aborting costs
-  the reader nothing they had, and carrying on would hide the cause.
+* PRE-COMMIT, FATAL (planner seed/refresh, the narrator draft): a provider
+  failure is FATAL. The turn has not been kept yet, so aborting costs the
+  reader nothing they had, and carrying on would hide the cause.
+* PRE-COMMIT, DEGRADE (the NPC lanes — issue #76): a lane is BEST-EFFORT, so
+  every other lane and the narrator still have a turn to deliver. A provider
+  failure there is RETRIED a bounded number of times and then the lane drops
+  to a skipped ``ok: false`` row; the turn proceeds and commits. The lane
+  exception NARROWS this rule rather than repealing it — the planner and the
+  narrator keep aborting; only the per-member lane call degrades. (The retry
+  deliberately INCLUDES content-filtered errors, per the owner's #76 ruling.)
 * POST-COMMIT (critic, the tracker's world-state pass, the HUD, attribution,
   the post-turn hooks): containment stays EXACTLY as it is, and those nodes do
   not call this module. Past the commit barrier the turn is already kept, so a

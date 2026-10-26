@@ -4162,6 +4162,17 @@ def validate_lane_payload(payload: Any) -> dict | None:
 #: never a whole runaway completion stored in the log.
 LANE_RAW_MAX_CHARS = 800
 
+#: Attempts per lane model call (issue #76): the first try plus up to two
+#: retries of a PROVIDER-class failure, before the lane degrades to a skipped
+#: row and the turn commits. A lane is best-effort by design, so a transient
+#: 400/429/5xx that clears on a retry must not cost the turn.
+LANE_MAX_ATTEMPTS = 3
+
+#: Fixed pause between lane attempts (seconds). Deliberately small: the lane
+#: semaphore is re-acquired per attempt, so this backoff never holds a pool slot
+#: and cannot stall healthy siblings sharing the same pool.
+LANE_RETRY_BACKOFF_SECONDS = 0.2
+
 
 class _LaneShapeError(ValueError):
     """A lane reply parsed but failed :func:`validate_lane_payload`'s shape check.
@@ -4664,28 +4675,56 @@ class NpcLaneFanout:
     ) -> tuple[bool, str, dict, str]:
         """One member's model call inside the lane pool: ``(ok, reason, lane, raw)``.
 
-        The pool is held for the CALL only, and a CONTENT failure here never
-        raises into the graph: a lane that could not answer is a skipped lane.
-        ``raw`` is the CLIPPED model text a shape failure carries ("" for every
-        other failure) so the flush can record what the model actually said.
+        The pool is held for the CALL only (re-acquired per attempt), and a
+        CONTENT failure here never raises into the graph: a lane that could not
+        answer is a skipped lane. ``raw`` is the CLIPPED model text a shape
+        failure carries ("" for every other failure) so the flush can record what
+        the model actually said.
 
-        A PROVIDER failure (429/401/403/5xx, connection/transport) is the one
-        exception: it aborts the turn instead of dropping the lane, because every
-        other lane and the narrator ride the same dead connection — skipping one
-        lane would leave the reader to meet the wall at the narrator with no
-        phase named (:mod:`fabulist.graph.provider_errors`).
+        A PROVIDER-class failure (429/401/403/5xx, connection/transport) is
+        RETRIED up to :data:`LANE_MAX_ATTEMPTS` total attempts (issue #76), then
+        the lane DEGRADES to the ordinary skipped row instead of aborting the
+        turn. The lane exception NARROWS the :mod:`fabulist.graph.provider_errors`
+        fatal-on-provider rule: the planner and narrator still abort pre-commit,
+        but a lane is best-effort, so one member's rejected request must not cost
+        the whole turn. Per the owner's ruling the retry INCLUDES content-filtered
+        errors (``ProviderRequestError.filtered``, z.ai ``1301``): the provider
+        may clear it on a re-send, so the lane tries again anyway. An invalid
+        reply SHAPE stays a first-attempt skip — retrying it unchanged cannot help.
         """
         pool = _lane_pool(int(payload.get("max_lanes") or self.pool_size))
-        try:
-            async with pool:
-                return True, "", await self._request(payload, context), ""
-        except _LaneShapeError as exc:  # a parsed reply that failed the shape
-            return False, str(exc)[:300], {}, _clip_lane_raw(exc.raw)
-        except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
-            _raise_if_provider_failure(
-                "NPC lanes", exc, _provider_label(self.provider_label_fn)
-            )
-            return False, str(exc)[:300], {}, ""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                # The pool is re-acquired per attempt: the backoff below runs
+                # OUTSIDE it, so a retrying lane never stalls healthy siblings.
+                async with pool:
+                    return True, "", await self._request(payload, context), ""
+            except _LaneShapeError as exc:  # a parsed reply that failed the shape
+                return False, str(exc)[:300], {}, _clip_lane_raw(exc.raw)
+            except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
+                fatal = phase_failure(
+                    "NPC lanes", exc, provider=_provider_label(self.provider_label_fn)
+                )
+                if fatal is None:
+                    # Content-class: no retry, contained exactly as before.
+                    return False, str(exc)[:300], {}, ""
+                # Owner ruling: one WARNING line per failed attempt, carrying the
+                # provider status and a body/message excerpt, so the next 400 is
+                # diagnosable from the engine log.
+                logger.warning(
+                    "NPC lane attempt %d/%d failed: %s",
+                    attempt,
+                    LANE_MAX_ATTEMPTS,
+                    fatal,
+                )
+                if attempt >= LANE_MAX_ATTEMPTS:
+                    # Exhausted: DEGRADE, never abort (issue #76). The ordinary
+                    # failed-lane result writes the ``ok: false`` lane row and the
+                    # turn proceeds to the narrator and commits.
+                    return False, str(exc)[:300], {}, ""
+                await asyncio.sleep(LANE_RETRY_BACKOFF_SECONDS)
 
     async def _request(self, payload: Mapping, context: Mapping) -> dict:
         """Append the lane's private tail to the shared prefix, call, validate."""
