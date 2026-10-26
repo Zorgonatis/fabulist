@@ -4,6 +4,29 @@
 
 But I do care about it, and hope you will too. Please submit your issues and PRs if you'd like to contribute!
 
+## First look
+
+The narrator does more than write. Mid-scene it can put a working phone, a security monitor
+or a social feed into the story as a real panel — and the engine checks every panel before it
+renders. Attach an image — a map, a portrait, a screenshot — and a vision-capable narrator sees
+it directly in the turn; an older model gets a written description instead. And a draft that
+breaks the rules never reaches you: the engine hands it back, and the narrator repairs its own
+work.
+
+<p align="center">
+  <img src="docs/images/firstlook-component-phone.png" width="30%" alt="Phone panel — messages inside the story">
+  <img src="docs/images/firstlook-component-monitor.png" width="34%" alt="Monitor panel — an error screen mid-scene">
+  <img src="docs/images/firstlook-component-social.png" width="34%" alt="Social post panel — a feed card">
+</p>
+
+Behind that, each turn is one compiled [LangGraph](https://langchain-ai.github.io/langgraph/)
+run: context gathered, the scene written, drafts validated and repaired, a tracker agent
+keeping the world's books. Places, items, relationships and meters are tracked out of the
+prose and handed back to the narrator as facts — the story never has to narrate its own
+bookkeeping. One local event log owns every turn; the transcript, the state panel and memory
+recall are all views of it. The rest of the tour is below: [What it is](#what-it-is), then
+[Architecture](#architecture).
+
 ## What it is
 
 A personal roleplay narrative engine — a MUD with an LLM narrator. It takes the parts
