@@ -3243,6 +3243,7 @@ def make_memorizer(registry: Registry, log_path: Path) -> "Memorizer | None":
         gather_candidates,
         recall_block,
         scene_query_from_log,
+        visible_turn_seqs,
     )
     from fabulist.memory.scope import resolve_scope
     from fabulist.memory.store import MemoryStore
@@ -3280,6 +3281,13 @@ def make_memorizer(registry: Registry, log_path: Path) -> "Memorizer | None":
             exclusion scoped to this chat when a shared layer carries many
             chats. Opted-out chats (``chat_memory`` off) recall NOTHING.
 
+            Issue #84: the exclusion SET is this chat's visible-history seqs —
+            the trailing narrative turns the narrator already carries in its
+            history prompt (:func:`fabulist.memory.recall.visible_turn_seqs`,
+            the ``[-2:]`` narrative window). Recall stops returning prose the
+            model can already see, freeing the block's slots for real memory;
+            older turns stay recallable (it is the tail, not the history).
+
             Never raises: recall is an enhancement, not a dependency.
             """
             try:
@@ -3298,6 +3306,11 @@ def make_memorizer(registry: Registry, log_path: Path) -> "Memorizer | None":
                     if cfg.query_mode == "message+scene"
                     else None
                 )
+                # Issue #84: wire the per-chat trim the store already supports.
+                # The seqs are THIS chat's recent-turn tail (the prose already
+                # visible in the narrator's history); the session id scopes them
+                # so a shared layer's other chats keep their colliding seqs.
+                visible_seqs = visible_turn_seqs(log.get_projection(session_id))
                 return await recall_block(
                     store,
                     embedder.endpoint,
@@ -3308,6 +3321,7 @@ def make_memorizer(registry: Registry, log_path: Path) -> "Memorizer | None":
                     scene_query=scene_query,
                     rerank_endpoint=reranker.endpoint,
                     rerank_model=reranker.model,
+                    exclude_seqs=visible_seqs,
                     exclude_session_id=session_id,
                     layers=_scope_read_layers(scope),
                     # The log, explicitly: the recalled fragments are tagged by

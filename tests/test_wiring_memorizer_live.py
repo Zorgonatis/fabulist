@@ -20,6 +20,7 @@ import pytest
 from fabulist.connections.registry import RegistryStore
 from fabulist.log import EventLog
 from fabulist.memory import indexer
+from fabulist.memory.recall import RecallResult
 from fabulist.wiring import make_memorizer
 
 DIM = 4
@@ -162,6 +163,35 @@ def test_search_api_key_read_at_call_time(tmp_path, recorder, monkeypatch):
     del recorder[:]
     run(memorizer.search("s-1", "q"))
     assert recorder[0]["auth"] == "Bearer after"
+
+
+def test_recall_fn_excludes_the_recent_visible_turns(tmp_path, recorder):
+    """Issue #84: the live caller supplies the chat's visible-tail seqs to recall.
+
+    Three committed turns: the narrator already carries the last two, so recall
+    must not return them again. The oldest turn stays recallable.
+    """
+    config = _write_registry(tmp_path / "connections.json", first_key=None)
+    log_path = tmp_path / "events.db"
+    memorizer = make_memorizer(RegistryStore(config), log_path)
+    assert memorizer is not None
+
+    log = EventLog(log_path)
+    try:
+        for n in (1, 2, 3):
+            log.append_event("s-1", "user", "user", {"text": f"ask {n}"})
+            log.append_event("s-1", "narrative", "narrator", {"prose": f"tale {n}"})
+            run(memorizer.index_tail("s-1"))  # one turn per index pass
+    finally:
+        log.close()
+
+    result = run(memorizer.recall_fn("s-1", "what happened?"))
+    assert isinstance(result, RecallResult)
+    texts = [str(row.get("text", "")) for row in result.rows]
+    assert "tale 1" in texts  # older turn still recallable
+    assert "tale 2" not in texts  # inside the visible window
+    assert "tale 3" not in texts  # inside the visible window
+    assert recorder  # the embedder was really driven
 
 
 def test_search_returns_empty_on_embedder_failure(tmp_path, monkeypatch):
