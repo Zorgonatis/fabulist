@@ -136,7 +136,9 @@ from fabulist.agents.loop import (
     LoopTool,
     _echoed_reasoning,
     _injection_messages,
+    drain_reply,
     run_agent_loop,
+    run_structured_call,
 )
 from fabulist.dsl import (
     component_signatures,
@@ -146,6 +148,14 @@ from fabulist.dsl import (
 )
 from fabulist.log.degradation import append_preset_degraded
 from fabulist.log.schema_gate import CLOCK_PROPOSAL_EVENT, VALIDATION_NOTICE_EVENT
+from fabulist.retry import (
+    PARSE,
+    PROVIDER,
+    AttemptRecord,
+    StructuredParseFailure,
+    records_of as retry_records_of,
+    run_with_retry,
+)
 
 __all__ = [
     "DEFAULT_CONFIG_SNAPSHOT",
@@ -3900,7 +3910,7 @@ def make_planner_node(
                     "stage": stage,
                 },
             )
-        # -- phase 2: the unchanged plan call ----------------------------
+        # -- phase 2: the plan call, CALL+PARSE as ONE retried attempt ----
         try:
             from fabulist.state.structured import StructuredFailure, structured_result
 
@@ -3919,15 +3929,40 @@ def make_planner_node(
                 profile=profile,
                 turn_seq=turn_seq,
             )
-            content, tool_args, finish_reason = await _drain_lane(caller, messages, profile)
-            parsed = structured_result(
-                content=content, tool_args=tool_args, finish_reason=finish_reason
+
+            def _parse_plan(content: str, tool_args: str, finish_reason: str | None):
+                """One reply -> the plan payload, or a PARSE-class failure (#82).
+
+                A malformed structured reply is INVISIBLE to the connections
+                client (the call succeeded), so the retry lives here, around both
+                halves. The reply's own text rides the exception, so an exhausted
+                ``plan_refresh_failed`` row can carry a truncated copy.
+                """
+                parsed = structured_result(
+                    content=content, tool_args=tool_args, finish_reason=finish_reason
+                )
+                if isinstance(parsed, StructuredFailure):
+                    raise StructuredParseFailure(
+                        f"structured: {parsed.reason}", raw=content or tool_args
+                    )
+                return validate_planner_payload(
+                    parsed, fields, turn_seq=turn_seq, created_from="graph"
+                )
+
+            # Issue #82: ONE malformed reply used to drop the plan for the turn
+            # and make the NEXT turn pay a full planning bootstrap. Now a reply
+            # that parses on the second or third attempt is a recovered stage.
+            # Provider-class failures are NOT retried here: the caller seam below
+            # this node already retried them (one owner per class).
+            plan = await run_structured_call(
+                caller=caller,
+                messages=messages,
+                parse=_parse_plan,
+                stage="Planning",
+                request_profile=profile,
             )
-            if isinstance(parsed, StructuredFailure):
-                raise ValueError(f"structured: {parsed.reason}")
-            plan = validate_planner_payload(
-                parsed, fields, turn_seq=turn_seq, created_from="graph"
-            )
+            # Effects apply ONCE, on the returned plan: a retried attempt never
+            # writes a second plan event or a second set of scene seeds.
             save_plan(log, session_id, plan)
             update.update(_seed_plan_state(log, session_id, state, plan))
             update["plan"] = render_plan_for_prompt(plan)
@@ -3935,14 +3970,21 @@ def make_planner_node(
             _raise_if_provider_failure(
                 "Planning", exc, _provider_label(provider_label_fn)
             )
+            failure: dict = {
+                "event": "plan_refresh_failed",
+                "error": str(exc)[:500],
+            }
+            # Issue #82 item 4: every failed attempt's status and TRUNCATED raw
+            # payload rides the event, so a deterministic malformed reply is
+            # diagnosable from the log instead of needing a re-run.
+            records = retry_records_of(exc)
+            if records:
+                failure["attempts"] = [record.as_payload() for record in records]
             log.append_event(
                 session_id,
                 "system",
                 PLAN_ACTOR,
-                {
-                    "event": "plan_refresh_failed",
-                    "error": str(exc)[:500],
-                },
+                failure,
             )
         _emit_stage(writer, "plan", "done")
         return update
@@ -4255,15 +4297,13 @@ def validate_lane_payload(payload: Any) -> dict | None:
 LANE_RAW_MAX_CHARS = 800
 
 #: Attempts per lane model call (issue #76): the first try plus up to two
-#: retries of a PROVIDER-class failure, before the lane degrades to a skipped
-#: row and the turn commits. A lane is best-effort by design, so a transient
-#: 400/429/5xx that clears on a retry must not cost the turn.
+#: retries of a PROVIDER-class (or, since issue #82, PARSE-class) failure, before
+#: the lane degrades to a skipped row and the turn commits. A lane is
+#: best-effort by design, so a transient 400/429/5xx that clears on a retry must
+#: not cost the turn. The pause between attempts is the mechanism's
+#: (:data:`fabulist.retry.RETRY_BACKOFF_SECONDS`), and it runs OUTSIDE the lane
+#: pool, so a backing-off lane never holds a slot a healthy sibling wants.
 LANE_MAX_ATTEMPTS = 3
-
-#: Fixed pause between lane attempts (seconds). Deliberately small: the lane
-#: semaphore is re-acquired per attempt, so this backoff never holds a pool slot
-#: and cannot stall healthy siblings sharing the same pool.
-LANE_RETRY_BACKOFF_SECONDS = 0.2
 
 
 class _LaneShapeError(ValueError):
@@ -4791,49 +4831,65 @@ class NpcLaneFanout:
         the model actually said.
 
         A PROVIDER-class failure (429/401/403/5xx, connection/transport) is
-        RETRIED up to :data:`LANE_MAX_ATTEMPTS` total attempts (issue #76), then
-        the lane DEGRADES to the ordinary skipped row instead of aborting the
-        turn. The lane exception NARROWS the :mod:`fabulist.graph.provider_errors`
-        fatal-on-provider rule: the planner and narrator still abort pre-commit,
-        but a lane is best-effort, so one member's rejected request must not cost
-        the whole turn. Per the owner's ruling the retry INCLUDES content-filtered
-        errors (``ProviderRequestError.filtered``, z.ai ``1301``): the provider
-        may clear it on a re-send, so the lane tries again anyway. An invalid
-        reply SHAPE stays a first-attempt skip — retrying it unchanged cannot help.
+        RETRIED up to the mechanism's bound (:data:`LANE_MAX_ATTEMPTS` total
+        attempts — issue #76), then the lane DEGRADES to the ordinary skipped row
+        instead of aborting the turn. The lane exception NARROWS the
+        :mod:`fabulist.graph.provider_errors` fatal-on-provider rule: the planner
+        and narrator still abort pre-commit, but a lane is best-effort, so one
+        member's rejected request must not cost the whole turn. Per the owner's
+        ruling the retry INCLUDES content-filtered errors
+        (``ProviderRequestError.filtered``, z.ai ``1301``): the provider may clear
+        it on a re-send, so the lane tries again anyway. An invalid reply SHAPE
+        stays a first-attempt skip — it is in the mechanism's unrecoverable set,
+        because retrying it unchanged cannot help.
+
+        Issue #82: this loop is no longer its own implementation — it is ONE call
+        to the shared mechanism (:func:`fabulist.retry.run_with_retry`), which
+        also owns the per-attempt records and the retry classes. A MALFORMED
+        structured reply
+        now retries too (class ``PARSE``): the lane held call+parse together, so a
+        JSON reply that clears on a re-send is a recovered lane, not a drop.
         """
-        pool = _lane_pool(int(payload.get("max_lanes") or self.pool_size))
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                # The pool is re-acquired per attempt: the backoff below runs
-                # OUTSIDE it, so a retrying lane never stalls healthy siblings.
-                async with pool:
-                    return True, "", await self._request(payload, context), ""
-            except _LaneShapeError as exc:  # a parsed reply that failed the shape
-                return False, str(exc)[:300], {}, _clip_lane_raw(exc.raw)
-            except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
-                fatal = phase_failure(
+
+        async def _attempt() -> dict:
+            # The pool is re-acquired per attempt (inside the attempt): the
+            # mechanism's backoff runs OUTSIDE it, so a retrying lane never holds
+            # a pool slot while it waits and never stalls healthy siblings.
+            async with _lane_pool(int(payload.get("max_lanes") or self.pool_size)):
+                return await self._request(payload, context)
+
+        def _log_attempt(record: AttemptRecord, exc: BaseException) -> None:
+            # Owner ruling: one WARNING line per failed attempt, carrying the
+            # provider status and a body/message excerpt, so the next 400 is
+            # diagnosable from the engine log.
+            logger.warning(
+                "NPC lane attempt %d/%d failed: %s (payload: %s)",
+                record.attempt,
+                LANE_MAX_ATTEMPTS,
+                phase_failure(
                     "NPC lanes", exc, provider=_provider_label(self.provider_label_fn)
                 )
-                if fatal is None:
-                    # Content-class: no retry, contained exactly as before.
-                    return False, str(exc)[:300], {}, ""
-                # Owner ruling: one WARNING line per failed attempt, carrying the
-                # provider status and a body/message excerpt, so the next 400 is
-                # diagnosable from the engine log.
-                logger.warning(
-                    "NPC lane attempt %d/%d failed: %s",
-                    attempt,
-                    LANE_MAX_ATTEMPTS,
-                    fatal,
-                )
-                if attempt >= LANE_MAX_ATTEMPTS:
-                    # Exhausted: DEGRADE, never abort (issue #76). The ordinary
-                    # failed-lane result writes the ``ok: false`` lane row and the
-                    # turn proceeds to the narrator and commits.
-                    return False, str(exc)[:300], {}, ""
-                await asyncio.sleep(LANE_RETRY_BACKOFF_SECONDS)
+                or record.error,
+                record.payload,
+            )
+
+        try:
+            lane = await run_with_retry(
+                _attempt,
+                stage="NPC lanes",
+                classes=frozenset({PARSE, PROVIDER}),
+                max_attempts=LANE_MAX_ATTEMPTS,
+                on_attempt_failure=_log_attempt,
+            )
+            return True, "", lane, ""
+        except _LaneShapeError as exc:  # a parsed reply that failed the shape
+            return False, str(exc)[:300], {}, _clip_lane_raw(exc.raw)
+        except Exception as exc:  # noqa: BLE001 - a lane never fails the turn
+            # Exhausted, content-class, or unrecoverable: DEGRADE, never abort
+            # (issue #76). The ordinary failed-lane result writes the
+            # ``ok: false`` lane row and the turn proceeds to the narrator and
+            # commits.
+            return False, str(exc)[:300], {}, ""
 
     async def _request(self, payload: Mapping, context: Mapping) -> dict:
         """Append the lane's private tail to the shared prefix, call, validate."""
@@ -4890,7 +4946,13 @@ class NpcLaneFanout:
             content=content, tool_args=tool_args, finish_reason=finish_reason
         )
         if isinstance(parsed, StructuredFailure):
-            raise ValueError(f"structured: {parsed.reason}")
+            # Issue #82: a MALFORMED reply is the PARSE class — the lane's retry
+            # (call+parse held together here) may get a usable one next attempt.
+            # The model's own text rides the failure so an exhausted attempt
+            # record can carry a truncated copy.
+            raise StructuredParseFailure(
+                f"structured: {parsed.reason}", raw=content or tool_args
+            )
         lane = validate_lane_payload(parsed)
         if lane is None:
             # W25.5 (defect D-A): keep what the model actually returned so the
@@ -5084,26 +5146,11 @@ async def _drain_lane(
 ) -> tuple[str, str, str | None]:
     """Drain one lane call into ``(content, tool_args, finish_reason)``.
 
-    Tier A tool-call deltas win over content (the ``collect_structured`` rule);
-    a ``finish_reason=length`` error frame is surfaced so ``structured_result``
-    refuses a truncated payload. No ``tool_choice`` is forced anywhere (R29 is
-    an open defect), so this is correct with or without function calling.
+    One implementation: :func:`fabulist.agents.loop.drain_reply` (issue #82 moved
+    it beside the retrying call+parse wrapper that consumes it). The name stays —
+    every lane-side caller and its tests read this spelling.
     """
-    tool_parts: list[str] = []
-    content_parts: list[str] = []
-    finish_reason: str | None = None
-    kwargs = {} if request_profile is None else {"request_profile": request_profile}
-    async for event in caller(messages, True, **kwargs):
-        kind = event.get("type")
-        if kind == "tool_call":
-            tool_parts.append(event.get("delta", ""))
-        elif kind == "content":
-            content_parts.append(event.get("delta", ""))
-        elif kind == "error":
-            meta = event.get("meta") or {}
-            if meta.get("finish_reason"):
-                finish_reason = str(meta["finish_reason"])
-    return "".join(content_parts), "".join(tool_parts), finish_reason
+    return await drain_reply(caller, messages, request_profile)
 
 
 def default_npc_lane_messages(context: Mapping) -> list[dict]:

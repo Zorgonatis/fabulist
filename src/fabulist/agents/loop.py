@@ -177,6 +177,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from fabulist import retry as _retry
 from fabulist.log.schema_gate import AGENT_LOOP_EVENT, validate_agent_loop_payload
 
 logger = logging.getLogger(__name__)
@@ -193,8 +194,10 @@ __all__ = [
     "LoopTool",
     "is_transport_timeout",
     "loop_request_profile",
+    "drain_reply",
     "normalise_reasoning_presence",
     "run_agent_loop",
+    "run_structured_call",
     "should_echo_reasoning",
 ]
 
@@ -443,6 +446,95 @@ def loop_request_profile(
     if not tools or not (capabilities or {}).get("function_calling"):
         return None
     return {"tools": [tool.declaration() for tool in tools], "tool_choice": "auto"}
+
+
+async def drain_reply(
+    caller: Callable[..., Any],
+    messages: list[dict[str, Any]],
+    request_profile: dict[str, Any] | None = None,
+) -> tuple[str, str, str | None]:
+    """Drain ONE caller stream into ``(content, tool_args, finish_reason)``.
+
+    Tier A tool-call deltas win over content (the ``collect_structured`` rule);
+    a ``finish_reason=length`` error frame is surfaced so ``structured_result``
+    refuses a truncated payload. No ``tool_choice`` is forced anywhere (R29 is
+    an open defect), so this is correct with or without function calling.
+
+    This is the CALL half of :func:`run_structured_call`, and the reason that
+    helper lives here: the loop module already owns the caller event protocol,
+    so a seam that must retry CALL **and** PARSE together (issue #82) starts from
+    the same drain the lanes and the planner use.
+    """
+    tool_parts: list[str] = []
+    content_parts: list[str] = []
+    finish_reason: str | None = None
+    kwargs = {} if request_profile is None else {"request_profile": request_profile}
+    async for event in caller(messages, True, **kwargs):
+        kind = event.get("type")
+        if kind == "tool_call":
+            tool_parts.append(event.get("delta") or "")
+        elif kind == "content":
+            content_parts.append(event.get("delta") or "")
+        elif kind == "error":
+            meta = event.get("meta") or {}
+            if meta.get("finish_reason"):
+                finish_reason = str(meta["finish_reason"])
+    return "".join(content_parts), "".join(tool_parts), finish_reason
+
+
+async def run_structured_call(
+    *,
+    caller: Callable[..., Any],
+    messages: list[dict[str, Any]],
+    parse: Callable[[str, str, str | None], Any],
+    stage: str,
+    request_profile: dict[str, Any] | None = None,
+    classes: frozenset[str] = frozenset({_retry.PARSE}),
+    max_attempts: int = _retry.DEFAULT_MAX_ATTEMPTS,
+    on_attempt_failure: (
+        Callable[[_retry.AttemptRecord, BaseException], None] | None
+    ) = None,
+) -> Any:
+    """ONE call **and** its structured parse, retried as one attempt (issue #82).
+
+    A malformed structured reply is invisible at the connections client: the HTTP
+    call succeeded, so the transport has nothing to retry. The failure is only
+    visible to the seam that holds BOTH halves, so this helper wraps the drain and
+    the stage's parser into ONE retryable attempt: a reply that parses on the
+    second or third try is a recovered stage, not a dropped plan.
+
+    ``parse`` receives ``(content, tool_args, finish_reason)`` and returns the
+    stage's payload — or raises :class:`fabulist.retry.StructuredParseFailure`
+    (class ``PARSE``) when the reply is empty, unparseable or the wrong shape.
+    It must be SIDE-EFFECT FREE: a retried attempt runs it more than once, so the
+    stage applies its effects (save the plan, write a row) only on the returned
+    value.
+
+    ``classes`` defaults to ``PARSE`` only: a PROVIDER failure rides the caller
+    seam's own retry (``connections.client.call_with_retry``), and retrying it in
+    both layers would multiply the attempts. A seam that has no outer provider
+    retry for its caller (the lane loop, which degraded before this existed)
+    passes both classes and then owns the count itself.
+
+    On exhaustion the last failure is re-raised unchanged, carrying one record
+    per attempt (status + truncated raw payload) on
+    ``fabulist.retry.RECORDS_ATTR``. What happens next is the STAGE's policy,
+    unchanged: the lanes degrade, the planner continues planless.
+    """
+
+    async def _attempt() -> Any:
+        content, tool_args, finish_reason = await drain_reply(
+            caller, messages, request_profile
+        )
+        return parse(content, tool_args, finish_reason)
+
+    return await _retry.run_with_retry(
+        _attempt,
+        stage=stage,
+        classes=classes,
+        max_attempts=max_attempts,
+        on_attempt_failure=on_attempt_failure,
+    )
 
 
 async def run_agent_loop(

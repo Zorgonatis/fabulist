@@ -18,6 +18,7 @@ detail; this file is an index, not a report. Versioning follows
 - Regenerate after a failed turn forks at the failed turn's user message, not the previous one (#80)
 - A per-connection Vision toggle gates image parts at message build: vision stages receive images inline, text-only stages receive the uniform `[inline image caption: …]` marker from the same log rows (#79)
 - The regenerate control sits on the failed turn's own row: the trailing unanswered user row takes the branch controls (#81)
+- Every model call retries a provider failure or a malformed reply twice; a named unrecoverable set never retries (#82)
 
 ### Changed
 

@@ -30,6 +30,7 @@ import json
 
 import pytest
 
+from fabulist.connections.client import SystemMessageOrderError
 from fabulist.connections.registry import Registry
 from fabulist.graph.nodes import make_npc_lanes_node, make_planner_node
 from fabulist.graph.plans import load_last_plan, save_plan
@@ -901,3 +902,274 @@ def test_the_label_follows_the_interaction_not_the_callers_fallback_slot(log):
     assert _provider_label(registry, log, "npc", "extractor")() == "glm-5.3"
     # …and the extraction interaction still names its own connection.
     assert _provider_label(registry, log, "extract", "extractor")() == "deepseek-flash"
+
+
+# -- issue #82: ONE bounded-retry mechanism, two classes ---------------------
+#
+# Only the lanes retried (#76) and a parse failure got no retry anywhere: one
+# malformed structured plan reply dropped the plan, and the NEXT turn paid a full
+# planning bootstrap. The mechanism (``fabulist.retry``) retries TWO classes and
+# they live at two layers:
+#
+# * PARSE — the reply arrived (the HTTP call succeeded) and cannot be parsed.
+#   Invisible at the client, so the seam holding CALL **and** PARSE retries it
+#   (``agents.loop.run_structured_call``, used by the plan refresh).
+# * PROVIDER — the provider refused or never answered. Visible at the client, so
+#   the caller seam retries it (``connections.client.call_with_retry``), which
+#   covers every non-loop one-shot call (the extractor's own client) too.
+#
+# The per-stage EXHAUSTION POLICY is unchanged: the lanes degrade and the turn
+# commits (the #76 pins above), the planner continues planless.
+#
+# Fake models and fake transports only — no live inference.
+
+
+def _plan_reply() -> str:
+    """A valid planner payload, as the plan phase expects it."""
+    return json.dumps(
+        {
+            "strings": list(STRINGS),
+            "datetime": "Monday, June 02, 2025 at 19:40",
+            "weather": "light rain",
+            "forecast": "clearing before dawn",
+            "established": ["Mara owes the guild 40 silver"],
+        }
+    )
+
+
+class _ReplySequence:
+    """A ModelCaller yielding one queued CONTENT payload per call, in order.
+
+    The last payload repeats once the queue is spent, so a test can say "bad,
+    bad, then good" and pin the attempt count that follows.
+    """
+
+    def __init__(self, replies: list[str]) -> None:
+        self.replies = list(replies)
+        self.calls = 0
+
+    async def __call__(self, messages, stream=True, **kwargs):
+        index = min(self.calls, len(self.replies) - 1)
+        self.calls += 1
+        yield {"type": "content", "delta": self.replies[index]}
+
+
+def _seeded_planner(log, caller, monkeypatch, modes: list[str]):
+    """A planner node whose SEED phase is stubbed, recording the mode it ran in."""
+
+    async def phase(**kwargs):
+        modes.append(kwargs["mode"])
+
+    from fabulist.state import planner_bootstrap
+
+    monkeypatch.setattr(planner_bootstrap, "run_planner_tool_phase", phase)
+    return make_planner_node(
+        log=log,
+        caller=caller,
+        request_profile_fn=lambda: {"tools": [], "tool_choice": "auto"},
+    )
+
+
+def test_a_malformed_plan_reply_twice_then_valid_writes_the_plan(log, monkeypatch):
+    """AC1: a malformed structured plan retries twice; recovery writes the plan.
+
+    The motivating live failure: session 537aac5e, seq 55, ``plan_refresh_failed``
+    with ``structured: malformed``. One bad reply used to drop the plan for the
+    turn AND make the next turn pay a full planning bootstrap.
+    """
+    modes: list[str] = []
+    caller = _ReplySequence(["not a plan, just prose", "still not a plan", _plan_reply()])
+    node = _seeded_planner(log, caller, monkeypatch, modes)
+
+    update = run(node(_state(log)))
+
+    assert caller.calls == 3  # the first try plus two retries
+    plan = load_last_plan(log, SID)
+    assert plan is not None and plan.strings == STRINGS
+    assert update["plan"].startswith("PLAN (turn 0)")
+    # No failure row: the stage RECOVERED, nothing was contained.
+    assert _planner_failure_rows(log) == []
+    # Turn 1 seeded; the recovered plan means turn 2 REPAIRS, never re-seeds.
+    assert modes == ["bootstrap"]
+    run(node(_state(log)))
+    assert modes == ["bootstrap", "repair"]
+
+
+def test_a_plan_that_never_parses_continues_planless_with_the_payload(log):
+    """AC4 + exhaustion policy: three malformed replies keep the turn, and the
+    failure event carries each attempt's status and TRUNCATED raw payload."""
+    from fabulist.retry import PAYLOAD_MAX_CHARS
+
+    garbage = "not a plan " + ("x" * 900)
+    caller = _ReplySequence([garbage])
+    node = make_planner_node(log=log, caller=caller)
+
+    update = run(node(_state(log)))  # no raise: the turn continues
+
+    assert caller.calls == 3
+    assert "plan" not in update  # planless, exactly as before
+    rows = _planner_failure_rows(log)
+    assert len(rows) == 1
+    attempts = rows[0].payload["attempts"]
+    assert [attempt["attempt"] for attempt in attempts] == [1, 2, 3]
+    assert all(attempt["class"] == "parse" for attempt in attempts)
+    # The raw payload is truncated, not a body dump.
+    captured = attempts[0]["payload"]
+    assert captured.startswith("not a plan xxx")
+    assert len(captured) <= PAYLOAD_MAX_CHARS + 1
+    assert captured.endswith("…")
+
+
+def test_an_unrecoverable_class_skips_the_retry_on_the_first_attempt(log):
+    """AC3: a class in the named set is not retried — one call, then the policy.
+
+    ``SystemMessageOrderError`` is the wire REFUSING the request: the same bytes
+    fail identically, so the planner does not pay two more calls before aborting.
+    """
+    caller = _RaisingCaller(SystemMessageOrderError("narrate", 2, 3))
+    node = make_planner_node(log=log, caller=caller)
+
+    with pytest.raises(PhaseCallError):
+        run(node(_state(log)))
+
+    assert caller.calls == 1
+
+
+def test_the_unrecoverable_set_is_one_named_extensible_place():
+    """AC3's set: one frozenset in one module, seeded from today's semantics."""
+    from fabulist.retry import (
+        PARSE,
+        PROVIDER,
+        UNRECOVERABLE,
+        UNRECOVERABLE_CLASSES,
+        StructuredParseFailure,
+        classify_failure,
+    )
+
+    assert {
+        "laneshapeerror",
+        "systemmessageordererror",
+        "modelcalldeadlineexceeded",
+        "connectionconfigerror",
+    } <= UNRECOVERABLE_CLASSES
+
+    assert classify_failure(SystemMessageOrderError("narrate", 2, 3)) == UNRECOVERABLE
+    assert classify_failure(StructuredParseFailure("structured: malformed")) == PARSE
+    # The #76 owner ruling survives the consolidation: a content-filtered 1301 is
+    # RETRYABLE, so it is NOT in the unrecoverable set.
+    assert classify_failure(_filtered_1301()) == PROVIDER
+    assert classify_failure(_rate_limited()) == PROVIDER
+
+
+def test_a_lane_facing_an_unrecoverable_still_degrades_on_the_first_attempt(log):
+    """AC3 at the lane: an unrecoverable is skipped AND still contained."""
+    _admit(log, "Marcus")
+    _world_state(log, venue=["Marcus"])
+    caller = _RaisingCaller(SystemMessageOrderError("npc", 2, 3))
+    fanout = make_npc_lanes_node(
+        log=log,
+        build_messages=lambda state: [
+            {"role": "system", "content": "## PRIVATE — you are Marcus"}
+        ],
+        caller=caller,
+    )
+
+    update = _one_lane(fanout)
+
+    assert caller.calls == 1
+    assert update["lane_meta"]["ran"] == 0
+
+
+def test_a_non_loop_one_shot_call_retries_provider_failures():
+    """AC5's other half: a one-shot seam that never rides the agent loop.
+
+    The extractor drives the synchronous ``openai`` client directly, so nothing
+    in the loop or the graph would retry it — the client seam does, and a
+    rate-limited extraction recovers on the third attempt.
+    """
+    from pathlib import Path
+
+    import httpx2
+
+    from fabulist.connections import load_registry
+    from fabulist.state import LLMExtractor
+
+    EXAMPLE_CONFIG = (
+        Path(__file__).resolve().parents[1] / "configs" / "connections.example.json"
+    )
+    statuses = [429, 429, 200]
+    calls: list[int] = []
+
+    def handler(request: "httpx2.Request") -> "httpx2.Response":
+        calls.append(len(calls))
+        status = statuses[min(len(calls) - 1, len(statuses) - 1)]
+        if status != 200:
+            return httpx2.Response(
+                status, json={"error": {"message": "Rate limit reached for requests"}}
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "your-model-id",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Δ[weather: light rain]\naction: travel",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    registry = load_registry(EXAMPLE_CONFIG)
+    extractor = LLMExtractor(
+        registry=registry,
+        http_client=httpx2.Client(
+            transport=httpx2.MockTransport(handler),
+            base_url="http://localhost:4444/v1",
+        ),
+    )
+
+    result = extractor("I walk into the rain", "Rain soaks the street.")
+
+    assert len(calls) == 3  # the first try plus two retries
+    assert result.deltas == {"weather": "light rain"}
+
+
+def test_one_provider_failure_is_never_retried_twice_by_two_layers():
+    """The scope rule: an OUTER mechanism owning a class suppresses the inner one.
+
+    Without it a lane that retries provider failures (3) would sit on a client
+    that also retries them (3) — nine calls for one rate-limited member.
+    """
+    from fabulist.connections.client import call_with_retry_sync
+    from fabulist.retry import PARSE, PROVIDER, run_with_retry_sync
+
+    attempts: list[int] = []
+
+    def one_call() -> str:
+        attempts.append(len(attempts))
+        raise _rate_limited()
+
+    with pytest.raises(Exception) as caught:
+        run_with_retry_sync(
+            lambda: call_with_retry_sync(one_call, stage="inner"),
+            stage="outer",
+            classes=frozenset({PARSE, PROVIDER}),
+        )
+
+    assert len(attempts) == 3  # the OUTER loop's count, not 3 x 3
+    # The failure keeps its type and its provider status through exhaustion.
+    assert isinstance(caught.value, Exception)
+    assert failure_status(caught.value) == 429

@@ -701,7 +701,10 @@ def test_profile_is_passed_to_the_call(log):
     node = _planner(log, model, request_profile_fn=lambda: profile)
     run(node(_state(log)))
 
-    assert len(model.calls) == 2  # the seed phase, then the plan
+    # Issue #82: the seed phase, then the plan call AND its two PARSE-class
+    # retries — a malformed reply is retried now, so a failing plan phase is
+    # three calls, not one.
+    assert len(model.calls) == 4  # the seed phase, then the plan (+2 retries)
     phase_profile = model.calls[0]["kwargs"]["request_profile"]
     assert phase_profile["tool_choice"] == "auto"
     assert phase_profile != profile
