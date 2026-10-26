@@ -107,14 +107,15 @@ the derived ``genre`` (scene trait, R8) and the derived ``conds`` line (§3.6).
 
 Hygiene: nothing here imports the API or graph layers (the cast/presence
 pattern) — this is a pure projection over the fork-aware chain, like
-:func:`fabulist.state.cast.roster`.
+:func:`fabulist.state.cast.roster`. A branch reads the state it PERSISTED at its
+cut before walking anything (issue #62): see :func:`registry`.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Iterable, Sequence
 
@@ -674,6 +675,39 @@ class Registry:
     off_screen_ref: str | None = None
     legacy: LegacyWorld = field(default_factory=LegacyWorld)
 
+    @classmethod
+    def from_dict(cls, data: object) -> "Registry":
+        """Rebuild a registry from a persisted snapshot's ``registry`` (issue #62).
+
+        The inverse of ``dataclasses.asdict`` for the fork state snapshot: a
+        branch reads the objects it PERSISTED instead of re-folding an ancestor
+        prefix, so a parent that keeps playing (or is revised) cannot move it.
+        Absent/unknown keys are ignored (the snapshot is ordinary log data, so a
+        newer writer may carry more than this reader knows); a body's
+        ``clothing`` comes back as a tuple because the layers are one ordered
+        value.
+        """
+        if not isinstance(data, dict):
+            return cls()
+        raw_assignments = data.get("assignments")
+        return cls(
+            locations=_decode_map(data.get("locations"), Location),
+            threads=_decode_map(data.get("threads"), Thread),
+            relationships=_decode_map(data.get("relationships"), Relationship),
+            meters=_decode_map(data.get("meters"), Meter),
+            items=_decode_map(data.get("items"), Item),
+            conditions=_decode_map(data.get("conditions"), Condition),
+            bodies=_decode_map(data.get("bodies"), Body),
+            economy=_decode_record(data.get("economy"), Economy),
+            assignments=(
+                {str(key): str(value) for key, value in raw_assignments.items()}
+                if isinstance(raw_assignments, dict)
+                else {}
+            ),
+            off_screen_ref=_clean(data.get("off_screen_ref")) or None,
+            legacy=_decode_record(data.get("legacy"), LegacyWorld) or LegacyWorld(),
+        )
+
 
 # -- small helpers -----------------------------------------------------------
 
@@ -694,12 +728,77 @@ def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _decode_record(raw: object, record_cls: type) -> Any:
+    """One frozen record from its ``asdict`` shape (``None`` when absent)."""
+    if not isinstance(raw, dict):
+        return None
+    kwargs: dict[str, Any] = {}
+    for item in fields(record_cls):
+        if item.name not in raw:
+            continue
+        value = raw[item.name]
+        if item.name == "clothing" and isinstance(value, list):
+            value = tuple(value)
+        kwargs[item.name] = value
+    return record_cls(**kwargs)
+
+
+def _decode_map(raw: object, record_cls: type) -> dict[str, Any]:
+    """An ``id -> record`` map from its persisted ``asdict`` shape."""
+    if not isinstance(raw, dict):
+        return {}
+    decoded: dict[str, Any] = {}
+    for key, value in raw.items():
+        record = _decode_record(value, record_cls)
+        if record is not None:
+            decoded[str(key)] = record
+    return decoded
+
+
+def _event_seq(event: Any) -> int:
+    """An event's ``seq`` as an int (0 when the shape has none) — Event or dict."""
+    seq = event.get("seq") if isinstance(event, dict) else getattr(event, "seq", 0)
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        return seq
+    return 0
+
+
 def _chain_events(log: "EventLog", session_id: str) -> list[Any]:
     """Fork-aware chain, preferring the public walk (no private re-walk)."""
     get_chain = getattr(log, "get_chain_events", None)
     if callable(get_chain):
         return list(get_chain(session_id))
     return list(log.get_events(session_id))
+
+
+def _snapshot_state(log: "EventLog", session_id: str) -> dict[str, Any] | None:
+    """The session's OWN persisted state snapshot, or ``None`` (issue #62).
+
+    Duck-typed like :func:`_chain_events`: a port without the read (a bare event
+    iterable, a test double, the cut view used to BUILD a snapshot) has no
+    snapshot, so the chain fold answers exactly as it always did.
+    """
+    getter = getattr(log, "get_state_snapshot", None)
+    if not callable(getter):
+        return None
+    snapshot = getter(session_id)
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _own_events_after(log: "EventLog", session_id: str, cut: object) -> list[Any]:
+    """The session's OWN rows above ``cut`` — what it wrote since the fork.
+
+    Session-local by design (``get_events``, never the chain): the snapshot
+    already answers for the inherited prefix, so only the branch's own later
+    appends can change the registry. That is how a snapshot-first read keeps a
+    branch's tracker writes instead of freezing it at the cut.
+    """
+    if not isinstance(cut, int) or isinstance(cut, bool):
+        return []
+    getter = getattr(log, "get_events", None)
+    if not callable(getter):
+        return []
+    return [event for event in getter(session_id) if _event_seq(event) > cut]
 
 
 def _objects(holder: Any, kind: str) -> dict[str, Any]:
@@ -1030,9 +1129,13 @@ def _fold_retire(fold: _Fold, payload: dict[str, Any]) -> None:
         _drop_object(fold, kind, object_id)
 
 
-def _fold_events(events: Sequence[Any]) -> _Fold:
-    """Seq-ordered latest-wins fold, one ``system`` payload family (§5)."""
-    fold = _Fold()
+def _fold_events(events: Sequence[Any], fold: _Fold | None = None) -> _Fold:
+    """Seq-ordered latest-wins fold, one ``system`` payload family (§5).
+
+    ``fold`` seeds the walk with an already-folded baseline (the objects a fork
+    persisted, issue #62); the given events then apply on top in order.
+    """
+    fold = _Fold() if fold is None else fold
     for event in events:
         if event.type != "system" or not isinstance(event.payload, dict):
             continue
@@ -1069,7 +1172,9 @@ def _merge_by_name(prior: list[dict[str, str]], incoming: list[dict[str, str]]) 
     return merged
 
 
-def _legacy_world(events: Sequence[Any]) -> LegacyWorld:
+def _legacy_world(
+    events: Sequence[Any], prior: LegacyWorld | None = None
+) -> LegacyWorld:
     """Fold the legacy ``world_state`` lane beneath the registry (§11.1).
 
     Same accumulation as ``api/state_api._fold_world_state`` (D45) — checkpoint
@@ -1080,12 +1185,25 @@ def _legacy_world(events: Sequence[Any]) -> LegacyWorld:
     cast filter is NOT applied here: this is the tracker's own view, and hiding
     an unaccepted candidate is a user-facing read decision (D38 vocabulary),
     not a registry fact.
+
+    ``prior`` seeds the walk with an already-folded lane (the legacy shim a
+    fork persisted, issue #62); the given events then accumulate on top.
     """
-    state: dict[str, dict[str, dict[str, str]]] = {}
-    venue: dict[str, dict[str, str]] = {}
-    off_screen: list[dict[str, str]] = []
-    threads: list[dict[str, str]] = []
-    tension: dict[str, Any] = {}
+    state: dict[str, dict[str, dict[str, str]]] = (
+        copy.deepcopy(prior.state) if prior is not None else {}
+    )
+    venue: dict[str, dict[str, str]] = (
+        copy.deepcopy(prior.venue) if prior is not None else {}
+    )
+    off_screen: list[dict[str, str]] = (
+        copy.deepcopy(prior.off_screen) if prior is not None else []
+    )
+    threads: list[dict[str, str]] = (
+        copy.deepcopy(prior.threads) if prior is not None else []
+    )
+    tension: dict[str, Any] = (
+        copy.deepcopy(prior.tension) if prior is not None else {}
+    )
     for event in events:
         if event.type != "system" or not isinstance(event.payload, dict):
             continue
@@ -1124,16 +1242,58 @@ def _legacy_world(events: Sequence[Any]) -> LegacyWorld:
 # -- the projection ----------------------------------------------------------
 
 
+def _fold_from(registry: "Registry") -> _Fold:
+    """Seed a fold with the objects a fork persisted (issue #62).
+
+    ``established`` is rebuilt from each live record's own ``established_seq``:
+    it is not a :class:`Registry` field, and only a resurrected object's original
+    ``seq`` rides on it. The mappings are copied so folding never mutates the
+    decoded snapshot.
+    """
+    fold = _Fold(
+        locations=dict(registry.locations),
+        threads=dict(registry.threads),
+        relationships=dict(registry.relationships),
+        meters=dict(registry.meters),
+        items=dict(registry.items),
+        conditions=dict(registry.conditions),
+        bodies=dict(registry.bodies),
+        economy=registry.economy,
+        assignments=dict(registry.assignments),
+        off_screen_ref=registry.off_screen_ref,
+    )
+    for kind in _ALL_KINDS:
+        for object_id, record in _objects(fold, kind).items():
+            fold.established[object_id] = record.established_seq
+    return fold
+
+
 def registry(log: "EventLog", session_id: str) -> Registry:
-    """Fold the entity lane (fork-aware) and merge the legacy shim beneath it.
+    """Fold the entity lane and merge the legacy shim beneath it.
 
     Registry-first everywhere: an assignment the registry holds wins for that
     being, a meter wins per ``key``, and the legacy ``world_state`` fold fills
     only the gaps — name-only, no ids (§11.1). ``loc_off_screen`` is always
     present and always live (req. 2).
+
+    Precedence (issue #62): a branch reads its OWN persisted state snapshot
+    first — the registry the fork carried — and then folds only its own later
+    rows on top, in seq order, exactly as :meth:`EventLog.get_projection` folds
+    the snapshot into ``state``. The branch therefore cannot be moved by a
+    parent that keeps playing or that is revised afterwards. A root session and
+    a pre-#62 branch own no snapshot row, so the fork-aware chain fold is still
+    the fallback, unchanged.
     """
-    events = _chain_events(log, session_id)
-    fold = _fold_events(events)
+    snapshot = _snapshot_state(log, session_id)
+    if snapshot is None:
+        events = _chain_events(log, session_id)
+        fold = _fold_events(events)
+        legacy = _legacy_world(events)
+    else:
+        baseline = Registry.from_dict(snapshot.get("registry"))
+        events = _own_events_after(log, session_id, snapshot.get("seq"))
+        fold = _fold_events(events, _fold_from(baseline))
+        legacy = _legacy_world(events, prior=baseline.legacy)
     locations = dict(fold.locations)
     bucket = locations.get(OFF_SCREEN_LOCATION_ID)
     if bucket is None:
@@ -1154,7 +1314,7 @@ def registry(log: "EventLog", session_id: str) -> Registry:
         economy=fold.economy,
         assignments=dict(fold.assignments),
         off_screen_ref=fold.off_screen_ref,
-        legacy=_legacy_world(events),
+        legacy=legacy,
     )
 
 

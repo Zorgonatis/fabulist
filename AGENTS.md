@@ -64,6 +64,9 @@ you are working in a clone, that directory will not exist; do not recreate it.
 ALL session-constant context (persona/cast/world/modules/macros/memory scope) must walk the
 chain. `get_projection` = fork- AND revision-aware (history, state). Using `get_events` for
 context assembly silently starves branch turns (fixed in 4e59afd — do not reintroduce).
+`get_state_snapshot` / `get_session_state` = the state a fork CARRIED into the new chat: a
+branch's registry and plan reads resolve its own snapshot first, and the chain is the fallback
+for a root session or a pre-#62 branch.
 
 ## Vocabulary
 

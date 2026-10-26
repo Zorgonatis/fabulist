@@ -14,10 +14,13 @@ so :func:`load_last_plan` simply folds the stream and the latest non-ephemeral p
 wins. Ephemeral plans (abandoned swipe branches, W2.2) are ignored exactly like
 every other ephemeral event.
 
-Fork discipline (W9.20 §2 / M2 — deliberate behavior change): the fold reads the
-**fork-aware chain** (:meth:`EventLog.get_chain_events`), so a branch inherits its
-parent's plan instead of rendering none. Plan history is session-constant context,
-which is what the AGENTS.md fork rule requires; this is not a bug to "fix" back.
+Fork discipline (W9.20 §2 / M2, amended by issue #62): a branch reads the plan
+it PERSISTED at its cut — the state snapshot's ``plan`` — and folds only its own
+later plan rows on top; the fork-aware chain
+(:meth:`EventLog.get_chain_events`) is the fallback for a root session and for a
+pre-#62 branch, which own no snapshot row and so inherit their parent's plan
+exactly as before. Plan history is session-constant context, which is what the
+AGENTS.md fork rule requires; this is not a bug to "fix" back.
 
 The :func:`render_plan_for_prompt` string is what the compiler receives through its
 ``plan=`` seam (``compile(..., plan=...)``); it is deliberately tiny
@@ -145,7 +148,7 @@ def save_plan(log: Any, session_id: str, plan: Plan) -> Event:
 
 
 def load_last_plan(events_or_log: Any, session_id: str) -> Plan | None:
-    """Return the latest non-ephemeral plan on the CHAIN, or ``None``.
+    """Return the latest non-ephemeral plan, or ``None``.
 
     ``events_or_log`` may be an :class:`~fabulist.log.EventLog` (or any object
     exposing ``get_chain_events(session_id)`` / ``get_events(session_id)``) or an
@@ -153,28 +156,90 @@ def load_last_plan(events_or_log: Any, session_id: str) -> Plan | None:
     when a stream carries more than one plan, the one with the greatest ``seq``
     wins.
 
-    Two rules matter and are deliberate (W9.20 §2/M2, §3/M3):
+    Three rules matter and are deliberate (W9.20 §2/M2, §3/M3; issue #62):
 
-    * the log read is the fork-aware **chain** — a branch inherits its parent's
-      plan (today's session-local fold rendered no plan for a fork);
+    * a branch reads the plan its fork PERSISTED — the state snapshot's
+      ``plan`` — and then its own later plan rows, so a parent that keeps
+      planning (or is revised) cannot move the branch. A ``null`` snapshot plan
+      is an ANSWER, not a miss: a fork cut below the plan row inherits no plan
+      (the cut rule);
+    * a root session and a pre-#62 branch own no snapshot row, so the fork-aware
+      **chain** answers exactly as before — a branch inherits its parent's plan
+      (today's session-local fold rendered no plan for a fork);
     * a payload carrying the legacy beats/blocking/threads shape (no ``strings``
       key) counts as **absent**, so an upgraded session plans again on its next
       turn instead of steering from a plan the narrator cannot read.
     """
-    events = _coerce_events(events_or_log, session_id)
-    events = _sorted_by_seq(events)
+    snapshot = _own_snapshot(events_or_log, session_id)
+    if snapshot is not _MISSING:
+        return _plan_after_snapshot(events_or_log, session_id, snapshot)
+    latest = _latest_plan_payload(_coerce_events(events_or_log, session_id))
+    return None if latest is None else Plan.from_dict(latest)
 
+
+def _own_snapshot(events_or_log: Any, session_id: str) -> Any:
+    """The session's own persisted state snapshot, or :data:`_MISSING`.
+
+    ``_MISSING`` means "this port cannot answer / this session owns no snapshot"
+    (a bare event iterable, a root session, a pre-#62 branch): the chain fold
+    then answers exactly as it always did. A dict means the session PERSISTED its
+    state, so its ``plan`` (including ``null``) is the plan it carries.
+    """
+    getter = getattr(events_or_log, "get_state_snapshot", None)
+    if not callable(getter):
+        return _MISSING
+    snapshot = getter(session_id)
+    if not isinstance(snapshot, dict):
+        return _MISSING
+    return snapshot
+
+
+def _plan_after_snapshot(
+    events_or_log: Any, session_id: str, snapshot: dict
+) -> Plan | None:
+    """The persisted plan, overridden by plan rows the session wrote after it."""
+    plan = snapshot.get("plan")
+    persisted = Plan.from_dict(plan) if _is_plan_payload(plan) else None
+    cut = snapshot.get("seq")
+    get_events = getattr(events_or_log, "get_events", None)
+    if not isinstance(cut, int) or isinstance(cut, bool) or not callable(get_events):
+        return persisted
+    later = [event for event in get_events(session_id) if _seq_of(event) > cut]
+    latest = _latest_plan_payload(later)
+    return persisted if latest is None else Plan.from_dict(latest)
+
+
+def _is_plan_payload(plan: Any) -> bool:
+    """Whether a payload is a CURRENT-shape plan (legacy shapes read as absent)."""
+    return isinstance(plan, dict) and "strings" in plan
+
+
+def _seq_of(event: Any) -> int:
+    """An event's ``seq`` as an int (0 when the shape has none)."""
+    seq = _field(event, "seq", 0)
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        return seq
+    return 0
+
+
+def _latest_plan_payload(events: Any) -> dict | None:
+    """The latest current-shape plan payload in a stream, or ``None``.
+
+    Raw rows only (no revision resolution), which is what the plan fold has
+    always done: a plan correction is a new plan row, and a superseded plan row
+    keeps reading as the plan it stated (D9's append-only audit shape).
+    """
     latest: dict | None = None
-    for event in events:
+    for event in _sorted_by_seq(events):
         if _field(event, "type") != "system" or _field(event, "ephemeral"):
             continue
         payload = _field(event, "payload") or {}
-        if payload.get("event") != "plan":
+        if not isinstance(payload, dict) or payload.get("event") != "plan":
             continue
         plan = payload.get("plan")
-        if isinstance(plan, dict) and "strings" in plan:
+        if _is_plan_payload(plan):
             latest = plan
-    return None if latest is None else Plan.from_dict(latest)
+    return latest
 
 
 def plans_differ(a: Plan | None, b: Plan | None) -> bool:
@@ -263,8 +328,9 @@ def _coerce_events(events_or_log: Any, session_id: str) -> list[Any]:
     """Normalize a log or an event iterable to a list for ``session_id``.
 
     A log object is read through ``get_chain_events`` when it has one (fork-aware
-    — the W9.20 §2/M2 rule for every plan read); ``get_events`` is the fallback
-    for a session-local-only port.
+    — the W9.20 §2/M2 rule for the plan a session does not own); ``get_events``
+    is the fallback for a session-local-only port. A session that persisted its
+    own snapshot never reaches this fold (issue #62): its plan is the snapshot's.
     """
     get_chain_events = getattr(events_or_log, "get_chain_events", None)
     if callable(get_chain_events):
