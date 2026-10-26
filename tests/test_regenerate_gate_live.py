@@ -499,7 +499,8 @@ def _sid(page) -> str | None:
 def _rows(page) -> list[dict]:
     """Transcript rows in reading order, with the affordances each row carries."""
     return page.evaluate(
-        """(regen) => Array.from(document.querySelectorAll('.transcript article.turn')).map((a) => ({
+        """(regen) => Array.from(document.querySelectorAll('.transcript article.turn')).map((a, i) => ({
+            index: i,
             id: a.id || null,
             user: a.classList.contains('user'),
             text: (a.textContent || '').replace(/\\s+/g, ' ').trim(),
@@ -512,7 +513,20 @@ def _rows(page) -> list[dict]:
 
 
 def _rail(page) -> dict:
-    """The rail's connection surface, recorded as evidence (never asserted)."""
+    """The rail's connection surface, recorded as evidence (never asserted).
+
+    The state bar starts COLLAPSED on a fresh profile, and the status slot only
+    renders when it is open, so a collapsed bar is expanded first — the state a
+    failed turn leaves the rail in is exactly what this gate wants on the record.
+    """
+    if page.locator(RAIL_STATUS).count() == 0:
+        toggle = page.get_by_role("button", name="Expand state bar", exact=True)
+        if toggle.count() == 1:
+            toggle.click()
+            try:
+                page.wait_for_selector(RAIL_STATUS, timeout=15_000)
+            except Exception:  # noqa: BLE001 - evidence only
+                pass
     status = page.locator(RAIL_STATUS)
     cause = page.locator(RAIL_ERROR)
     return {
@@ -717,15 +731,26 @@ def _run_gate() -> int:
             # turn's reply (whose group the page happens to hold).
             controls = page.get_by_role("button", name=REGEN_NAME, exact=True)
             owner = [row for row in rows_after_failure if row["retry"]]
+            trailing_user = [row for row in rows_after_failure if row["user"]][-1]
             tail = rows_after_failure[-1]
             report.check(
-                "exactly ONE ↻, and it sits on the trailing user row that the failure left unanswered",
+                "exactly ONE ↻, and it sits on the trailing user row the failure left unanswered",
                 controls.count() == 1
                 and len(owner) == 1
                 and owner[0]["user"]
-                and owner[0]["id"] == tail["id"]
-                and TURN_2 in owner[0]["text"],
-                f"owner row: {owner[0] if owner else None}",
+                and owner[0]["index"] == trailing_user["index"]
+                and TURN_2 in owner[0]["text"]
+                and tail["index"] > owner[0]["index"]
+                and tail["user"] is False
+                and tail["errors"] == 1
+                and tail["retry"] == 0,
+                f"owner row {owner[0] if owner else None}, tail row {tail}",
+            )
+            report.check(
+                "the ↻ is ready to press while the rail names the provider's refusal",
+                controls.first.is_enabled()
+                and str(PROVIDER_STATUS) in rail_after_failure["cause"],
+                f"rail {rail_after_failure}",
             )
 
             # -- step 4: click it (real trusted input; strict locator) ----------
@@ -799,12 +824,20 @@ def _run_gate() -> int:
                 f"at_seq {wire_at}, response base_seq "
                 f"{(fork_responses[-1]['body'] if fork_responses else {})}",
             )
-            # Free (no browser time): the regenerated turn carried the RIGHT text.
-            branch_users = log.poll_user_events(branch_sid or "", 1)
+            # Free (no browser time): the branch's ask IS the failed turn's row —
+            # a regenerate appends no second user row (FORK-SEMANTICS F2), so the
+            # branch inherits the user row at ``base_seq`` — and the regenerate
+            # turn really ran ON the branch, not on the parent.
+            branch_narrative = log.poll_narrative(branch_sid or "")
+            inherited = [event for event in users if event["seq"] == branch_row.get("base_seq")]
             report.check(
-                "the regenerated turn re-sent the FAILED turn's own message",
-                branch_users[-1]["text"] == TURN_2,
-                f"branch user text {branch_users[-1]['text']!r}",
+                "the branch inherited the FAILED turn's message and its regenerate turn committed there",
+                len(inherited) == 1
+                and inherited[0]["text"] == TURN_2
+                and branch_narrative["seq"] > (branch_row.get("base_seq") or 0)
+                and log.narratives_after(source_sid, failed_user["seq"]) == [],
+                f"inherited row {inherited[0] if inherited else None}, "
+                f"branch narrative seq {branch_narrative['seq']}",
             )
 
             if page_errors:
