@@ -40,6 +40,18 @@ whose every agent slot points at a stub OpenAI-compatible server started inside
 this gate, and its own vite dev server on a spare port. Nothing under ``data/``
 or ``configs/`` is touched.
 
+The run is ordered so the pin actually discriminates: one turn SETTLES first and
+the page's own delayed transcript re-read is allowed to land, which is what arms
+``lastUserSeq`` at that turn — the stale value the bug forked at. Verified by
+mutation: with ``await refreshTranscript()`` removed from ``retry()`` the gate
+fails on the pin, on the wire body and on the branch's inherited message
+(``at_seq`` 2 instead of 22 — the previous turn's user seq). One thing it cannot
+discriminate, and says so rather than pretending: a pre-commit provider abort
+DOES leave the rail in ``error`` in this tree (``send()`` → ``failConnection``),
+so #80's own conditional guard — ``if (connection === 'error')`` — would also
+have refreshed here. That guard is therefore pinned only by the observable
+contract (the cut), not by its condition.
+
 Playwright only — real trusted input, actionability waits, strict locators
 (AGENTS.md: never synthetic ``.click()`` over raw CDP).
 
@@ -606,6 +618,7 @@ def _run_gate() -> int:
     api_5xx: list[str] = []
     fork_requests: list[dict] = []
     fork_responses: list[dict] = []
+    timeline: list[tuple[str, str]] = []  # (what, session id) in arrival order
 
     _free(API_PORT)
     _free(VITE_PORT)
@@ -648,6 +661,12 @@ def _run_gate() -> int:
             def on_response(response) -> None:
                 if "/api/" in response.url and response.status >= 500:
                     api_5xx.append(f"HTTP {response.status} {response.url}")
+                # The transcript read IS `GET /api/sessions/{id}/events`
+                # (frontend `ENDPOINTS.projection`).
+                if response.url.endswith("/events") and "/api/sessions/" in response.url:
+                    timeline.append(
+                        ("projection", response.url.split("/api/sessions/")[1].split("/")[0])
+                    )
                 if response.url.endswith("/fork"):
                     try:
                         body = response.json()
@@ -655,6 +674,9 @@ def _run_gate() -> int:
                         body = None
                     fork_responses.append(
                         {"url": response.url, "status": response.status, "body": body}
+                    )
+                    timeline.append(
+                        ("fork", response.url.split("/api/sessions/")[1].split("/")[0])
                     )
 
             page.on("request", on_request)
@@ -676,10 +698,33 @@ def _run_gate() -> int:
                 timeout=120_000,
             )
             user_1 = log.poll_user_events(source_sid, 1)[0]
+            # The seed turn's own delayed projection re-read (the page's
+            # `scheduleContextRefetch`, 5 s after `done`) must LAND before turn 2 is
+            # sent: that re-read is what arms the stale pointer at turn 1's user
+            # seq, and it is the whole reason the bug was observable at all. Racing
+            # it would let a background refresh mask a missing one in `retry()`.
+            reads_at_settle = sum(1 for kind, sid in timeline if kind == "projection" and sid == source_sid)
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if sum(
+                    1
+                    for kind, sid in timeline
+                    if kind == "projection" and sid == source_sid
+                ) > reads_at_settle:
+                    break
+                page.wait_for_timeout(100)
+            page.wait_for_function(
+                """() => {
+                    const rows = Array.from(document.querySelectorAll('.transcript article.turn'));
+                    return rows.length >= 2 && rows.every((a) => /^history-\\d+$/.test(a.id || ''));
+                }""",
+                timeout=60_000,
+            )
             report.evidence["turn_1"] = {
                 "user": user_1,
                 "narrative": first_narrative,
                 "rows": _rows(page),
+                "projection_reads": reads_at_settle + 1,
             }
             page.screenshot(path=str(work / "01-turn-1-settled.png"), full_page=True)
             report.check(
@@ -688,6 +733,12 @@ def _run_gate() -> int:
                 and first_narrative["seq"] > user_1["seq"]
                 and page.locator(ERROR_LINE).count() == 0,
                 f"user seq {user_1['seq']}, narrative seq {first_narrative['seq']}",
+            )
+            report.check(
+                "the seed turn's transcript re-read landed — the stale pointer names turn 1's user seq",
+                sum(1 for kind, sid in timeline if kind == "projection" and sid == source_sid)
+                > reads_at_settle,
+                f"{reads_at_settle} transcript reads before, stale user seq to beat: {user_1['seq']}",
             )
 
             # -- step 2: the provider starts refusing; turn 2 fails AT THE MODEL --
@@ -729,10 +780,19 @@ def _run_gate() -> int:
             # #81's half of the contract: a failed turn's empty reply placeholder
             # must not take the controls, or the ↻ would regenerate the previous
             # turn's reply (whose group the page happens to hold).
+            #
+            # The tail has two legitimate shapes, and BOTH put the ↻ on the user
+            # row: the optimistic empty placeholder is still there (no re-read has
+            # landed since the failure), or the page already reconciled and the
+            # user row IS the tail. Anything else is a real defect.
             controls = page.get_by_role("button", name=REGEN_NAME, exact=True)
             owner = [row for row in rows_after_failure if row["retry"]]
             trailing_user = [row for row in rows_after_failure if row["user"]][-1]
-            tail = rows_after_failure[-1]
+            after_owner = [
+                row
+                for row in rows_after_failure
+                if owner and row["index"] > owner[0]["index"]
+            ]
             report.check(
                 "exactly ONE ↻, and it sits on the trailing user row the failure left unanswered",
                 controls.count() == 1
@@ -740,11 +800,11 @@ def _run_gate() -> int:
                 and owner[0]["user"]
                 and owner[0]["index"] == trailing_user["index"]
                 and TURN_2 in owner[0]["text"]
-                and tail["index"] > owner[0]["index"]
-                and tail["user"] is False
-                and tail["errors"] == 1
-                and tail["retry"] == 0,
-                f"owner row {owner[0] if owner else None}, tail row {tail}",
+                and all(
+                    row["user"] is False and row["errors"] == 1 and row["retry"] == 0
+                    for row in after_owner
+                ),
+                f"owner row {owner[0] if owner else None}, rows after it {after_owner}",
             )
             report.check(
                 "the ↻ is ready to press while the rail names the provider's refusal",
@@ -752,12 +812,19 @@ def _run_gate() -> int:
                 and str(PROVIDER_STATUS) in rail_after_failure["cause"],
                 f"rail {rail_after_failure}",
             )
+            # Nothing re-read the transcript between the failure and the click, so
+            # the refresh INSIDE `retry()` is the one the cut depends on — the exact
+            # thing #80 changed.
+            reads_at_failure = sum(
+                1 for kind, sid in timeline if kind == "projection" and sid == source_sid
+            )
 
             # -- step 4: click it (real trusted input; strict locator) ----------
             # The provider answers again, so the forked regenerate turn can SUCCEED
             # and the page can switch to the branch (the fork itself is what the
             # assertion is about; the switch is the UI-visible completion).
             stub.arm(False)
+            timeline.append(("click", source_sid))  # the cut below is measured from HERE
             controls.first.click()
             deadline = time.time() + 180
             while time.time() < deadline and not fork_responses:
@@ -823,6 +890,36 @@ def _run_gate() -> int:
                 and (fork_responses[-1]["body"] or {}).get("base_seq") == failed_user["seq"],
                 f"at_seq {wire_at}, response base_seq "
                 f"{(fork_responses[-1]['body'] if fork_responses else {})}",
+            )
+            # Free (no browser time): the MECHANISM, in arrival order — the click
+            # re-read the CURRENT session's transcript BEFORE it forked it
+            # (issue #80's one change), and no other read slipped in between the
+            # failure and the click that could have re-pointed `lastUserSeq`.
+            click_index = timeline.index(("click", source_sid)) if ("click", source_sid) in timeline else -1
+            fork_index = next(
+                (
+                    index
+                    for index, (kind, sid) in enumerate(timeline)
+                    if kind == "fork" and sid == source_sid
+                ),
+                -1,
+            )
+            reads_between = [
+                index
+                for index, (kind, sid) in enumerate(timeline)
+                if kind == "projection" and sid == source_sid
+                and click_index < index < fork_index
+            ]
+            report.evidence["timeline"] = timeline
+            report.evidence["reads_at_failure"] = reads_at_failure
+            report.evidence["reads_between_click_and_fork"] = len(reads_between)
+            report.check(
+                "the click re-reads the CURRENT session's transcript before it forks it",
+                click_index >= 0
+                and fork_index > click_index
+                and len(reads_between) >= 1
+                and reads_at_failure >= 1,
+                f"{len(reads_between)} transcript read(s) between the click and the fork",
             )
             # Free (no browser time): the branch's ask IS the failed turn's row —
             # a regenerate appends no second user row (FORK-SEMANTICS F2), so the
