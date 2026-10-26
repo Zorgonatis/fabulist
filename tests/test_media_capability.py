@@ -340,6 +340,57 @@ def test_preview_parity_for_the_narrator_builder(tmp_path):
     assert all(MEDIA_META_KEY not in m for m in text_only + vision)
 
 
+def test_ooc_preview_parity_gates_on_the_ooc_connection(tmp_path):
+    """The OOC preview resolves the OOC interaction's OWN live connection.
+
+    Parity is a contract: a text-only OOC binding must preview the bracketed
+    marker, and a vision one the native part — from the SAME log rows, with the
+    capability read from the registry at preview time.
+    """
+    log_path = tmp_path / "ooc_preview.db"
+    app = create_app(FakeTurnEngine(), log_path)
+    app.include_router(prompts_router)
+    _seed_image_turn(app.state.log)
+
+    async def preview(vision: bool):
+        app.state.registry = Registry(
+            connections={
+                "c": Connection(
+                    name="c", base_url="http://host/v1", model="m", vision=vision
+                )
+            },
+            agents={"narrator": "c"},
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/prompts/preview",
+                json={
+                    "session_id": "s1",
+                    "user_text": "what is it?",
+                    "interaction": "ooc",
+                },
+            )
+        assert resp.status_code == 200
+        return resp.json()["messages"]
+
+    try:
+        text_only = run(preview(False))
+        vision = run(preview(True))
+    finally:
+        app.state.log.close()
+
+    assert any(
+        m.get("content") == "[inline image caption: a crow on a wire]" for m in text_only
+    )
+    assert any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") == "image_url" for part in m["content"])
+        for m in vision
+    )
+    assert all(MEDIA_META_KEY not in m for m in text_only + vision)
+
+
 # ---------------------------------------------------------------------------
 # (6) the fallback shape pin — ONE bracketed marker for every image kind
 # ---------------------------------------------------------------------------
