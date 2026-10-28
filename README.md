@@ -19,7 +19,8 @@ hands it back, and the narrator repairs its own work.
 minutes. No model ships in the box — bring a local server or an API key. The optional
 memory sidecar is a 2.7 GiB pull.
 
-Bug reports and pull requests are welcome.
+> ### This is an AI slop project, it will break.
+> But I do care about it, and hope you will too. Issues and PRs welcome.
 
 ---
 
