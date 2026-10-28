@@ -90,15 +90,15 @@
 	// block its own width and nothing else — and it follows the CHAT RAIL's rule
 	// (SessionDrawer): a stored choice wins, and with no stored choice the viewport
 	// decides. The threshold is arithmetic, not the rail's 1440px: the block needs
-	// the bar's floor (12rem), the fixed gap (0.75rem), the transcript's page
-	// padding (2rem) and the 46rem measure — 972px of thread — plus the collapsed
-	// rail (39.4px) = ~1012px of viewport. Below that the block cannot hold the
-	// measure, so the bar starts collapsed and prose keeps its 46rem.
+	// the bar's CAP (16rem = 256px), the fixed gap (0.75rem), the transcript's page
+	// padding (2rem) and the 46rem measure — 1036px of thread — plus the collapsed
+	// rail (39.4px) = ~1076px of viewport. Below that the block cannot hold the
+	// measure at full width, so the bar starts collapsed and prose keeps its 46rem.
 	//
 	// `true` is the initial value in BOTH worlds: SSR has no viewport, and a
 	// collapsed first paint pays the strip's width, never a bar's reflow.
 	const COLLAPSE_KEY = 'fabulist.statebar.collapsed';
-	const EXPAND_MIN_PX = 1012;
+	const EXPAND_MIN_PX = 1076;
 	/** True once the READER chose a state; an explicit choice outranks the viewport. */
 	let statebarChoice = false;
 
@@ -1330,9 +1330,13 @@
 		/* The floor: the narrowest bar that still reads at rest — a micro label, a
 		   value and the ✎ door on one line. */
 		min-width: 12rem;
-		/* The cap: past this a long thread title or place name would pull the bar
-		   wider than the measure it serves, so rows wrap instead. */
-		max-width: 13rem;
+		/* The cap, MEASURED (live, 1600px, a seeded session): the longest row a real
+		   pane produces — a 44-character thread name sharing its line with the state
+		   chip and the ✎ door — needs 16rem to read in two lines; at 13rem it took
+		   three, and a bar wider than this would start pulling space from the page
+		   for nothing. Past the cap a longer name wraps, which is the content's own
+		   problem, not the bar's width. */
+		max-width: 16rem;
 		/* Issue #66: the bar fills the height of the transcript area it stands beside
 		   (the reading block's row) and can shrink into it (`min-height: 0` — the flex
 		   item's default floor is its content, which is what let a long state tab
@@ -1603,12 +1607,6 @@
 		display: flex;
 		align-items: baseline;
 		gap: 0.4rem;
-		/* Issue #98: at the bar's content-derived width (a 13rem cap) a long place
-		   name or thread title cannot share one line with its status chip and ✎
-		   door, and squeezing all three turned the NAME into a third-line wrap. The
-		   row may wrap instead: the name takes the line it needs and the chip + door
-		   drop beneath it only when they truly do not fit. */
-		flex-wrap: wrap;
 	}
 	/* The location tree — indentation IS the hierarchy (a place carries its
 	   parent's name and its own path, and the pane does not repeat either). */
