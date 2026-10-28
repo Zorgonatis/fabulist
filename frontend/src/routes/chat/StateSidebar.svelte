@@ -1603,6 +1603,12 @@
 		display: flex;
 		align-items: baseline;
 		gap: 0.4rem;
+		/* Issue #98: at the bar's content-derived width (a 13rem cap) a long place
+		   name or thread title cannot share one line with its status chip and ✎
+		   door, and squeezing all three turned the NAME into a third-line wrap. The
+		   row may wrap instead: the name takes the line it needs and the chip + door
+		   drop beneath it only when they truly do not fit. */
+		flex-wrap: wrap;
 	}
 	/* The location tree — indentation IS the hierarchy (a place carries its
 	   parent's name and its own path, and the pane does not repeat either). */
