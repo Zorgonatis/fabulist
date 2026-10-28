@@ -907,9 +907,10 @@
 		<div class="rail-scroll">
 			<!-- USER PERSONA (#94, first position): WHO the open chat plays as, above
 			     the catalogs. ONE closed row (state line + name + chevron); the
-			     list, description, pin switch and Edit door live in the dropdown it
-			     opens, never inline in the rail. `PersonaControl` owns the catalog
-			     and the three assignment states (own / inherited / explicit none);
+			     list, description, pin switch and the "Manage personas" studio door
+			     live in the dropdown it opens, never inline in the rail.
+			     `PersonaControl` owns the catalog and the three assignment states
+			     (own / inherited / explicit none);
 			     the composer chip mounts the SAME component, so the two surfaces
 			     cannot disagree. It is not gated on an open chat: with none, it
 			     shows the pinned default and sets the pin a new chat will use. -->

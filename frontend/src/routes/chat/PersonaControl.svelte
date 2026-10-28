@@ -12,8 +12,9 @@
 	//     there is none) and opens a small panel on click.
 	//   * `variant="block"` — the rail's FIRST layer, above Worlds. ONE closed
 	//     row (state line + name + chevron); the list, description, pin switch and
-	//     Edit door live in a dropdown it opens, never inline (owner ruling: an
-	//     always-open list "lists every persona... again").
+	//     the "Manage personas" studio door live in a dropdown it opens, never
+	//     inline (owner ruling: an always-open list "lists every persona...
+	//     again").
 	//
 	// The body is ONE snippet rendered by both variants, and its state comes
 	// from ONE store (`#lib/userPersonaStore`), so the two surfaces cannot
@@ -343,7 +344,11 @@
 		}
 	}
 
-	/** Edit opens the studio's Persona pane (the single definition door, D51). */
+	/**
+	 * "Manage personas" opens the studio's Persona pane — the single definition
+	 * door (D51), where personas are created, edited and deleted, not just the
+	 * selected row.
+	 */
 	function editPersona(): void {
 		collapse();
 		onOpenStudio('persona', effectiveId ? { focusId: effectiveId } : {});
@@ -464,10 +469,11 @@
 		<button
 			type="button"
 			class="pc-btn"
-			title={effectiveId ? 'Edit this persona in the studio' : 'Open the persona studio'}
+			aria-label="Manage personas — create, edit or delete definitions"
+			title="Manage personas — create, edit or delete definitions"
 			onclick={editPersona}
 		>
-			Edit
+			Manage personas
 		</button>
 	</div>
 
@@ -512,7 +518,8 @@
 	</div>
 {:else}
 	<!-- The rail's first layer: ONE closed row. The list, description, pin switch
-	     and Edit door are a dropdown — never an always-open list in the rail. -->
+	     and the "Manage personas" studio door are a dropdown — never an
+	     always-open list in the rail. -->
 	<section class="pc pc-block" aria-label="User persona" bind:this={wrapEl}>
 		<button
 			type="button"
