@@ -11,8 +11,8 @@ Wherever you notice something, that's where you can change it.
 
 The story and the sidebar never disagree. You cannot wreck it.
 
-(Owner-approved front page, 2026-10-28. The README carries the same lines; the goals
-ladder is NOT canonical until separately ratified.)
+(Owner-approved front page, 2026-10-28. The README carries the same lines. The project's
+goals are background context, not a ranking rubric — owner ruling 2026-10-28.)
 
 Read this, then `docs/decisions/README.md` (the design rulings) before any work.
 
@@ -46,7 +46,12 @@ you are working in a clone, that directory will not exist; do not recreate it.
 - Every GitHub post is ASD-STE100. Short sentences. One idea per sentence. No emphasis markup, no essays.
 - An RCA post carries three things: the root cause, brief pointers to the relevant code paths, and reproduction steps. It carries no fix synthesis. A suggested fix inside an RCA gets low weight.
 - The fix synthesis is never posted before the owner and the orchestrator agree on the shape in session. The issue record is written after the decision, not during it.
-- When an issue moves to fix-bucket, present the top 2-3 solutions. For each: why it addresses the problem, and its strengths and weaknesses. The owner picks.
+- When an issue moves to fix-bucket, present the top 2-3 solutions. The menu comes from the
+  diagnosing lane, or from a lane given the landed RCA. Every option must FIX the reported
+  problem — an option that only mitigates is not an option. Rank by fix completeness, cost
+  and risk, and state the ranking reason. Project goals are background context only: they
+  guide fringe considerations and gap-spotting, never the ranking. If only one solution is
+  real, present one and say why. The owner picks.
 - One clean post per stage. Agree the content in session first. Do not amend a post repeatedly.
 
 ## Non-negotiables
