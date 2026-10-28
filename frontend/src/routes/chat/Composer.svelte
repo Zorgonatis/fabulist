@@ -22,8 +22,10 @@
 		runImageGen
 	} from '#lib/api/imagegen';
 	import { bumpInspectorRefresh } from '#lib/inspectorRefresh';
-	import { composerFill, sessionId, type TurnKind } from '#lib/stores';
+	import { composerFill, sessionId, sessions, type TurnKind } from '#lib/stores';
+	import type { StudioKind } from '#lib/studio/kinds';
 	import ImageGenStrip from './ImageGenStrip.svelte';
+	import PersonaControl from './PersonaControl.svelte';
 
 	let {
 		disabled = false,
@@ -38,7 +40,10 @@
 		onClearAttach,
 		assistantEnabled = false,
 		assistantPickerOpen = false,
-		onToggleAssistant
+		onToggleAssistant,
+		onOpenStudio,
+		onPersonaChanged,
+		personaRefreshToken = 0
 	}: {
 		disabled?: boolean;
 		streaming?: boolean;
@@ -68,7 +73,21 @@
 		assistantPickerOpen?: boolean;
 		/** Open/close the assistant picker — the door the collapsed strip lost. */
 		onToggleAssistant?: () => void;
+		/** The studio's one definition door — the persona chip's Edit opens the
+		 *  studio's Persona pane through it (#94). */
+		onOpenStudio: (
+			kind: StudioKind,
+			opts?: { focusId?: string | null; startNew?: boolean }
+		) => void;
+		/** Called after the persona chip writes, so the page refreshes its session
+		 *  list (the row the chip reads its state from). */
+		onPersonaChanged?: () => void;
+		/** Bumped by the page after a studio edit: the chip re-reads the catalog. */
+		personaRefreshToken?: number;
 	} = $props();
+
+	/** The open chat's row — the persona chip's own/inherited/explicit-none input. */
+	const personaSession = $derived($sessions.find((row) => row.id === $sessionId) ?? null);
 
 	let text = $state('');
 	let kind = $state<TurnKind>('in_character');
@@ -411,6 +430,22 @@
 		disabled={disabled}
 	></textarea>
 	<div class="actions">
+		<!-- Issue #94: the always-visible persona chip. It sits at the input line —
+		     the moment a player wonders "who am I in this chat?" — and opens the
+		     SAME panel the rail's first block renders (one component, one state).
+		     It shows the pinned default when no chat is open, so the control is
+		     reachable before the first turn. -->
+		<div class="persona-slot">
+			<PersonaControl
+				variant="chip"
+				sessionId={$sessionId}
+				personaId={personaSession?.persona_id ?? null}
+				personaCleared={personaSession?.persona_cleared === true}
+				refreshToken={personaRefreshToken}
+				{onOpenStudio}
+				onChanged={onPersonaChanged}
+			/>
+		</div>
 		<!-- Issue #22: the assistant door. With nothing pinned the strip above the
 		     composer is gone (UI-LANGUAGE §6: the disabled state collapses), so the
 		     door lives here, in the band the assistant actually belongs to. -->
@@ -533,6 +568,13 @@
 		justify-content: flex-end;
 		flex-wrap: wrap;
 		gap: 0.4rem;
+	}
+	/* The persona chip is the row's first item; `margin-right: auto` keeps the
+	   turn's verbs (attach, mic, send) pinned right while it stays left. */
+	.persona-slot {
+		display: flex;
+		margin-right: auto;
+		min-width: 0;
 	}
 	.actions button {
 		font: inherit;

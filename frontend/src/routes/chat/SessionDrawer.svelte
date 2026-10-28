@@ -6,13 +6,15 @@
 	// revision and a delete is a soft hide, so this component just reflects the
 	// refreshed list it is handed.
 	//
-	// Layering (D40): WORLDS -> PERSONAS -> USER PERSONA -> CHATS, driven by ONE
-	// scope. Selecting a world re-queries the list with `?world_id=`; selecting
+	// Layering (D40, #94): USER PERSONA -> WORLDS -> PERSONAS -> CHATS, driven by
+	// ONE scope. The user-persona block moved to the FIRST position (#94) and is
+	// rendered by `PersonaControl`, the same component the composer chip mounts.
+	// Selecting a world re-queries the list with `?world_id=`; selecting
 	// an actor re-queries with `?actor_id=` (the chats that actor is WITH, never
 	// the chats of the worlds it appears in). D53 split the two records: the
 	// actor (`actor_id` / `actor_ids`, folded from `chat_actor`) is the CAST the
 	// row is grouped and badged by; `persona_id` is now the USER persona only,
-	// read by the USER PERSONA slot + the per-row picker. Rows carry both, so no
+	// read by the user-persona block + the per-row picker. Rows carry both, so no
 	// per-session config fetch is needed.
 	//
 	// The unscoped "All chats" view keeps BOTH buckets: actor-attributed chats
@@ -20,33 +22,28 @@
 	// bucket). World-materialised chats carry no `chat_actor`, so a "known actor
 	// only" filter would make them vanish.
 	import { onMount } from 'svelte';
-	import type {
-		Book,
-		Persona,
-		SessionSummary,
-		SessionWorld,
-		SettingsCatalog,
-		World
-	} from '#lib/api';
+	import type { Book, Persona, SessionSummary, SessionWorld, World } from '#lib/api';
 	import {
-		assignChatPersona,
 		attachSessionBooks,
 		createSessionWithPersona,
 		getSessionWorld,
-		getSettings,
 		listBooks,
 		listPersonas,
 		listSessions,
 		listWorlds,
-		patchDefaultPersona,
 		setChatMemory,
 		startWorldChat
 	} from '#lib/api';
 	import DefinitionControls from '#lib/components/DefinitionControls.svelte';
+	// ONE shared assignment seam (#94): the rail's row picker writes through the
+	// same store the persona block reads, so the block and the composer chip
+	// cannot disagree about what was just written.
+	import { assignUserPersona } from '#lib/userPersonaStore';
 	// ONE kind registry (#lib/studio/kinds) — the drawer's doors and the rail's
 	// footer map name the same kinds as the studio shell.
 	import type { StudioKind } from '#lib/studio/kinds';
 	import BottomController from './BottomController.svelte';
+	import PersonaControl from './PersonaControl.svelte';
 
 	/** A door's optional targeting: focus one row, or jump to the create form. */
 	interface StudioOpenOptions {
@@ -64,6 +61,7 @@
 		onOpenStudio,
 		onStartWorldChat,
 		onStartPersonaChat,
+		onPersonaChanged,
 		refreshToken
 	}: {
 		sessions: SessionSummary[];
@@ -83,10 +81,12 @@
 		onStartWorldChat?: (sessionId: string) => void;
 		/** A persona row's "+" created a chat: the parent refreshes its session
 		 *  list, then opens it — the same order the world "+" uses. Optional — an
-		 *  unwired mount falls back to a plain `onSelect`. Without the refresh the
-		 *  persona picker cannot resolve `currentSession` and shows "No chat open"
-		 *  until the first turn refreshes the list. */
+		 *  unwired mount falls back to a plain `onSelect`. The refresh also lets the
+		 *  chat resolve its persona row straight away. */
 		onStartPersonaChat?: (sessionId: string) => void;
+		/** Called after the persona block / per-row picker writes an assignment, so
+		 *  the parent re-reads its session list (the row is the state's source). */
+		onPersonaChanged?: () => void;
 		/** Bumped by the parent after a studio edit: re-reads the rail's catalogs
 		 *  (personas / worlds / books) so a definition created in the studio shows
 		 *  up here without a page reload. */
@@ -158,12 +158,6 @@
 	// --- catalogs ---
 	let personas = $state<Persona[]>([]);
 	let worlds = $state<World[]>([]);
-	// Pinned global default persona (user request). New chats inherit it when no
-	// persona is supplied; the picker shows it as the effective value with an
-	// "inherited" marker rather than pretending it is this chat's own assignment.
-	let defaultPersonaId = $state<string | null>(null);
-	let defaultPersonaLabel = $state<string | null>(null);
-	let pinBusy = $state(false);
 	let status = $state('');
 	let personaBusy = $state<string | null>(null);
 	/** World id whose "+" (start world chat) is in flight — blocks double-starts. */
@@ -177,7 +171,6 @@
 		void loadPersonas();
 		void loadWorlds();
 		void loadBooks();
-		void loadSettings();
 	});
 
 	onMount(() => {
@@ -222,20 +215,6 @@
 		} catch (err) {
 			status = message(err);
 		}
-	}
-
-	/** Load the global settings surface (currently just the default-persona pin). */
-	async function loadSettings(): Promise<void> {
-		try {
-			applySettings(await getSettings());
-		} catch (err) {
-			status = message(err);
-		}
-	}
-
-	function applySettings(catalog: SettingsCatalog): void {
-		defaultPersonaId = catalog.default_persona_id ?? null;
-		defaultPersonaLabel = catalog.default_persona_label ?? null;
 	}
 
 	function worldName(worldId: string | null): string {
@@ -432,61 +411,16 @@
 				: 'No chats yet — start one above.'
 	);
 
-	// --- USER PERSONA slot ---
-	// Shows who the open chat plays as (D43 `{{user}}`). Assignment still rides
-	// each row's select; this slot's Edit/New are doors into the studio's Personas
-	// tab (D51), never a form.
+	// --- the open chat (the user-persona block's input) ---
+	// The block itself is `PersonaControl` (#94), which owns the catalog and the
+	// three assignment states; the rail only hands it the chat's own row. The
+	// chat's actor "+" and each chat row's picker stay here.
 	const currentSession = $derived(
 		(currentId ? sessions.find((session) => session.id === currentId) : undefined) ??
 			(currentId && scopedSessions
 				? scopedSessions.find((session) => session.id === currentId)
 				: undefined) ??
 			null
-	);
-
-	/** The persona this chat's own log assigns (never the inherited default). */
-	const currentAssignedPersonaId = $derived(
-		currentSession ? rowPersonaId(currentSession) : null
-	);
-
-	const currentPersona = $derived(
-		personas.find((persona) => persona.persona_id === currentAssignedPersonaId) ?? null
-	);
-
-	const defaultPersona = $derived(
-		personas.find((persona) => persona.persona_id === defaultPersonaId) ?? null
-	);
-
-	/** True when the chat carries an explicit "no persona" clear. */
-	const currentPersonaCleared = $derived(
-		currentSession ? rowPersonaCleared(currentSession) : false
-	);
-
-	/** True when the chat has no own persona and falls back to the pinned default.
-	 *  An explicit clear suppresses inheritance (clear = no persona). */
-	const personaInherited = $derived(
-		!currentAssignedPersonaId && !currentPersonaCleared && defaultPersona !== null
-	);
-
-	/** The persona the context actually uses: own assignment, else the default. */
-	const effectivePersona = $derived(currentPersona ?? (personaInherited ? defaultPersona : null));
-
-	/** A select value representing the inherited-default state (no own
-	 *  assignment, no explicit clear). Selecting it is a no-op — it exists so the
-	 *  picker can show "inherited from default" distinctly from "No persona". */
-	const INHERIT_VALUE = '__inherit__';
-
-	/** Picker value: the own assignment, else inherited, else explicit none. */
-	const personaPickerValue = $derived(
-		currentAssignedPersonaId ?? (personaInherited ? INHERIT_VALUE : '')
-	);
-
-	const currentPersonaLabel = $derived(
-		currentSession
-			? effectivePersona
-				? `${effectivePersona.name || 'Unnamed persona'}${personaInherited ? ' (default)' : ''}`
-				: 'No persona assigned'
-			: 'No chat open'
 	);
 
 	// --- row actions ---
@@ -543,26 +477,12 @@
 		}
 	}
 
-	/** Pin a persona as the global default (user request: "pin a Default"). */
-	async function setDefaultPersona(personaId: string | null): Promise<void> {
-		if (pinBusy) return;
-		pinBusy = true;
-		try {
-			applySettings(await patchDefaultPersona(personaId));
-			status = '';
-		} catch (err) {
-			status = message(err);
-		} finally {
-			pinBusy = false;
-		}
-	}
-
 	/** Reassign a chat to a persona; the empty value (the explicit "No persona"
 	 *  option) clears it. The clear is recorded as an EXPLICIT none, so it sticks
-	 *  even while a default is pinned (owner ruling). Selecting the inherited-
-	 *  default option is a no-op; reverts the optimistic override on failure. */
+	 *  even while a default is pinned (owner ruling). Writes through the shared
+	 *  `assignUserPersona` seam (#94), so the rail block and the composer chip see
+	 *  the new assignment immediately; reverts the optimistic override on failure. */
 	async function reassignPersona(session: SessionSummary, value: string): Promise<void> {
-		if (value === INHERIT_VALUE) return;
 		const prev = rowPersonaId(session);
 		const prevCleared = rowPersonaCleared(session);
 		const pid = value === '' ? null : value;
@@ -573,7 +493,8 @@
 		setRowOverride(session.id, { persona_id: pid, persona_cleared: pid === null });
 		rowBusy = { ...rowBusy, [session.id]: true };
 		try {
-			await assignChatPersona(session.id, pid);
+			await assignUserPersona(session.id, pid);
+			onPersonaChanged?.();
 			// A move can push the row out of the actor scope it was listed in.
 			if (scope.kind !== 'all') void reloadScoped();
 		} catch (err) {
@@ -873,7 +794,24 @@
 		</button>
 	</header>
 
-	{#if !railCollapsed}
+	{#if railCollapsed}
+		<!-- Issue #94: a collapsed rail (the default below 1440px) was the narrow
+		     window that hid the persona control entirely. The chip rides here too,
+		     picture-only, and opens the SAME panel the composer chip does. -->
+		<div class="rail-persona-chip">
+			<PersonaControl
+				variant="chip"
+				chipSide="right"
+				compact
+				sessionId={currentId}
+				personaId={currentSession ? rowPersonaId(currentSession) : null}
+				personaCleared={currentSession ? rowPersonaCleared(currentSession) : false}
+				refreshToken={refreshToken}
+				onOpenStudio={(kind, opts) => onOpenStudio(kind, opts)}
+				onChanged={onPersonaChanged}
+			/>
+		</div>
+	{:else}
 		<!-- Current chat's lore hint (D31/D32/D40, issue #40): the retired top-left
 		     import slot now carries the brief lore/context hint. The book list is the
 		     RESOLVED set the model receives — the union of the persona's books, the
@@ -967,6 +905,22 @@
 		{/if}
 
 		<div class="rail-scroll">
+			<!-- USER PERSONA (#94, first position): WHO the open chat plays as, above
+			     the catalogs. `PersonaControl` owns the catalog and the three
+			     assignment states (own / inherited / explicit none); the composer
+			     chip mounts the SAME component, so the two surfaces cannot disagree.
+			     It is not gated on an open chat: with none, it shows the pinned
+			     default and sets the pin a new chat will use. -->
+			<PersonaControl
+				variant="block"
+				sessionId={currentId}
+				personaId={currentSession ? rowPersonaId(currentSession) : null}
+				personaCleared={currentSession ? rowPersonaCleared(currentSession) : false}
+				refreshToken={refreshToken}
+				onOpenStudio={(kind, opts) => onOpenStudio(kind, opts)}
+				onChanged={onPersonaChanged}
+			/>
+
 			<!-- WORLDS (D40 + issue #53): the name scopes CHATS to that world; "✎" opens
 			     the studio's Worlds tab focused on that world (the same door persona rows
 			     use); "▸" materializes the world into a new chat (D51 — the door
@@ -1092,124 +1046,6 @@
 				{/if}
 			</section>
 
-			<!-- USER PERSONA (D40): WHO the open chat plays as — participation
-			     (assignment) only. Creating a persona is the PERSONAS layer's single
-			     "+": two doors opening the same create form from two layers was the
-			     duplicate the owner flagged, and a definition needs no chat open
-			     (AGENTS rule 7), so the catalog door above stays reachable without one. -->
-			<section class="layer" aria-label="User persona">
-				<div class="layer-head-row">
-					<h3 class="layer-head">User persona</h3>
-				</div>
-				{#if currentSession}
-					{@const assignedPersonaId = currentAssignedPersonaId}
-					<div class="user-persona">
-						<span class="up-name">{currentPersonaLabel}</span>
-						{#if personaInherited}
-							<p class="up-inherited">
-								No persona assigned — inheriting the pinned default.
-							</p>
-						{/if}
-						{#if effectivePersona?.scenario}
-							<p class="up-text">{effectivePersona.scenario}</p>
-						{/if}
-						<!-- PICKER (Bug 7): reference an existing persona, no clone. The
-						     write rides the SAME per-row seam as the cast select —
-						     `assignChatPersona` (POST/DELETE .../persona). "No persona" is an
-						     EXPLICIT clear (owner ruling: clear = no persona), kept distinct
-						     from the inherited-default option so a pinned default is visible
-						     but not forced. The catalog is the rail's `personas` state,
-						     reloaded on every `refreshToken` bump, so a studio-created
-						     persona appears here without a reload. -->
-						{#if personas.length === 0}
-							<p class="up-inherited">
-								No personas defined yet — use + in the Personas layer above.
-							</p>
-						{/if}
-						<select
-							class="up-picker"
-							title="Assign a persona to this chat"
-							aria-label="Assign a persona to this chat"
-							value={personaPickerValue}
-							disabled={rowBusy[currentSession.id]}
-							onchange={(event) =>
-								void reassignPersona(currentSession, (event.currentTarget as HTMLSelectElement).value)}
-						>
-							<!-- An EXPLICIT "No persona": recorded as a hard clear, so the
-							     chat stays local even while a default is pinned (owner
-							     ruling) — distinct from the inherited-default option below. -->
-							<option value="">No persona</option>
-							{#if personaInherited && defaultPersona}
-								<option value={INHERIT_VALUE}>
-									Inherited from default — {defaultPersonaLabel}
-								</option>
-							{/if}
-							{#each personas as persona (`user-persona-option:${persona.persona_id}`)}
-								<option value={persona.persona_id}>{persona.name || 'Unnamed persona'}</option>
-							{/each}
-						</select>
-						<div class="up-actions">
-							<button
-								type="button"
-								class="up-btn"
-								title="Edit the assigned persona"
-								disabled={!assignedPersonaId}
-								onclick={() => onOpenStudio('persona', { focusId: assignedPersonaId ?? null })}
-							>
-								Edit
-							</button>
-							<button
-								type="button"
-								class="up-btn"
-								title="Clear this chat's persona (explicit 'no persona')"
-								disabled={(!assignedPersonaId && !personaInherited) || rowBusy[currentSession.id]}
-								onclick={() => void reassignPersona(currentSession, '')}
-							>
-								Clear
-							</button>
-							<!-- Pin control (user request: "pin a Default"). One button:
-							     "Set as default" pins the selected persona; "Default ✓"
-							     clears it. When no persona is selected but one is pinned,
-							     the button still clears the pin (the picker stays
-							     honest: this chat's OWN assignment is "No persona"). -->
-							{#if assignedPersonaId && assignedPersonaId === defaultPersonaId}
-								<button
-									type="button"
-									class="up-btn up-default"
-									title="This persona is the pinned default — click to clear it"
-									disabled={pinBusy}
-									onclick={() => void setDefaultPersona(null)}
-								>
-									Default ✓
-								</button>
-							{:else if assignedPersonaId}
-								<button
-									type="button"
-									class="up-btn"
-									title="Pin this persona as the default for new chats"
-									disabled={pinBusy}
-									onclick={() => void setDefaultPersona(assignedPersonaId)}
-								>
-									Set as default
-								</button>
-							{:else if defaultPersonaId}
-								<button
-									type="button"
-									class="up-btn up-default"
-									title="Clear the pinned default persona"
-									disabled={pinBusy}
-									onclick={() => void setDefaultPersona(null)}
-								>
-									Default ✓
-								</button>
-							{/if}
-						</div>
-					</div>
-				{:else}
-					<p class="layer-empty">No chat open.</p>
-				{/if}
-			</section>
-
 			<!-- CHATS (D40/D53): the breadcrumb scopes the list; the root view keeps
 			     the "Chats" group so chats with no actor (plain or
 			     world-materialised) stay visible. -->
@@ -1289,6 +1125,14 @@
 	/* Collapsed rail (D40): a narrow strip holding only the toggle. */
 	.drawer.collapsed {
 		width: 2.4rem;
+	}
+	/* The collapsed rail keeps exactly one door to the persona control (#94):
+	   the chip, picture-only, panel opening to the right of the strip. */
+	.rail-persona-chip {
+		flex: none;
+		padding: 0.15rem 0.25rem 0.4rem;
+		display: flex;
+		justify-content: center;
 	}
 	.rail-head {
 		flex: none;
@@ -1582,78 +1426,6 @@
 		color: var(--accent-strong);
 	}
 	.row-new:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.user-persona {
-		display: flex;
-		flex-direction: column;
-		gap: 0.1rem;
-		margin: 0 0.25rem;
-	}
-	.up-name {
-		font-size: var(--font-small);
-		font-weight: 600;
-		color: var(--text);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.up-text {
-		margin: 0;
-		font-size: var(--font-micro);
-		line-height: 1.35;
-		color: var(--text-muted);
-	}
-	/* Inherited-default marker: this chat has no own persona and falls back to
-	   the pinned default (read-time). Muted so it reads as contextual. */
-	.up-inherited {
-		margin: 0;
-		font-size: var(--font-micro);
-		line-height: 1.35;
-		color: var(--text-muted);
-		font-style: italic;
-	}
-	/* The pin control: an active pin reads as accented. */
-	.up-default {
-		border-color: var(--accent-line);
-		color: var(--accent-strong);
-	}
-	/* Persona picker (Bug 7): a reference to an existing persona, written through
-	   the same `chat_persona` seam the per-row cast select uses. */
-	.up-picker {
-		font: inherit;
-		font-size: var(--font-micro);
-		margin: 0.15rem 0 0;
-		padding: 0.1rem 0.3rem;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		background: var(--bg-raised);
-		color: var(--text);
-		max-width: 100%;
-	}
-	/* Edit/New doors into the Design Studio's Personas tab (D51). */
-	.up-actions {
-		display: flex;
-		gap: 0.3rem;
-		margin: 0.15rem 0 0;
-	}
-	.up-btn {
-		font: inherit;
-		font-size: var(--font-micro);
-		padding: 0.1rem 0.45rem;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		background: var(--bg-raised);
-		color: var(--text-muted);
-		cursor: pointer;
-	}
-	.up-btn:hover:not(:disabled) {
-		border-color: var(--accent-line);
-		background: var(--bg-hover);
-		color: var(--accent-strong);
-	}
-	.up-btn:disabled {
 		opacity: 0.5;
 		cursor: default;
 	}
