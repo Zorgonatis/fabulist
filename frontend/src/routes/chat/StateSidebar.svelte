@@ -55,7 +55,8 @@
 		connection = 'idle',
 		connectionError = '',
 		onRetry,
-		sessionId = ''
+		sessionId = '',
+		collapsed = $bindable(true)
 	}: {
 		facts: Record<string, string>;
 		connection?: ConnectionStatus;
@@ -64,6 +65,12 @@
 		/** The recovery door: re-probe the session and re-run the failed turn. */
 		onRetry?: () => void;
 		sessionId?: string | null;
+		/**
+		 * Issue #98: the head's named door binds this to paint itself `active`, and
+		 * opens/closes the bar through `expand()` / `collapse()`. The bar still OWNS
+		 * the value, its persistence and its viewport rule.
+		 */
+		collapsed?: boolean;
 	} = $props();
 
 	/**
@@ -75,33 +82,74 @@
 	const retryDisabled = $derived(connection === 'connecting' || connection === 'streaming');
 
 	// --- collapse (T1) ---
-	// The D40 rail pattern (SessionDrawer): collapse lives entirely here. The
-	// bar's width is this component's own style, so `+page.svelte` never learns
-	// about it.
+	// Collapse lives entirely here: the bar's width is this component's own style,
+	// so `+page.svelte` never learns the geometry — it only binds the flag so its
+	// named door can say whether the state surface is open.
 	//
-	// The DEFAULT is COLLAPSED (issue #22): docked at 265px this pane's turn rows
-	// (time / date / location / weather) reprinted what the HUD station in the
-	// thread head already owns, and permanent left chrome is exactly what kept
-	// prose off its reading measure. Both states persist under the SAME key — an
-	// explicit expand writes '0' and is honoured, an absent key means "never
-	// chosen" and starts collapsed, so a fresh install pays ~38px, not 265px.
+	// Issue #98: the bar is the READING BLOCK's first column now, so it costs the
+	// block its own width and nothing else — and it follows the CHAT RAIL's rule
+	// (SessionDrawer): a stored choice wins, and with no stored choice the viewport
+	// decides. The threshold is arithmetic, not the rail's 1440px: the block needs
+	// the bar's floor (12rem), the fixed gap (0.75rem), the transcript's page
+	// padding (2rem) and the 46rem measure — 972px of thread — plus the collapsed
+	// rail (39.4px) = ~1012px of viewport. Below that the block cannot hold the
+	// measure, so the bar starts collapsed and prose keeps its 46rem.
+	//
+	// `true` is the initial value in BOTH worlds: SSR has no viewport, and a
+	// collapsed first paint pays the strip's width, never a bar's reflow.
 	const COLLAPSE_KEY = 'fabulist.statebar.collapsed';
-	let collapsed = $state(true);
+	const EXPAND_MIN_PX = 1012;
+	/** True once the READER chose a state; an explicit choice outranks the viewport. */
+	let statebarChoice = false;
 
-	function toggleCollapsed(): void {
-		collapsed = !collapsed;
-		// Persist best-effort; `window` is guarded because this can be reached from
-		// an event that also runs during hydration (SSR has no window).
+	/** Best-effort persist; `window` is guarded because an event can run during
+	 *  hydration (SSR has no window). */
+	function rememberCollapsed(): void {
 		if (typeof window !== 'undefined') {
 			window.localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
 		}
 	}
 
+	function toggleCollapsed(): void {
+		collapsed = !collapsed;
+		statebarChoice = true;
+		rememberCollapsed();
+	}
+
+	/** Open the docked bar from anywhere (the head's named door, issue #98). */
+	export function expand(): void {
+		if (!collapsed) return;
+		collapsed = false;
+		statebarChoice = true;
+		rememberCollapsed();
+	}
+
+	/** Close the bar back to its strip (the head door toggles the surface). */
+	export function collapse(): void {
+		if (collapsed) return;
+		collapsed = true;
+		statebarChoice = true;
+		rememberCollapsed();
+	}
+
 	onMount(() => {
 		if (typeof window === 'undefined') return;
-		// Only an explicit expand re-opens the dock; '1' and an absent key both
-		// leave it collapsed (the default above).
-		if (window.localStorage.getItem(COLLAPSE_KEY) === '0') collapsed = false;
+		const saved = window.localStorage.getItem(COLLAPSE_KEY);
+		// The reader's own choice first — '1' and '0' are both obeyed.
+		if (saved !== null) {
+			statebarChoice = true;
+			collapsed = saved !== '0';
+			return;
+		}
+		// Never chosen: follow the viewport, and keep following it until the reader
+		// operates the control (the rail's own rule).
+		const wide = window.matchMedia(`(min-width: ${EXPAND_MIN_PX}px)`);
+		collapsed = !wide.matches;
+		const onViewport = (event: MediaQueryListEvent): void => {
+			if (!statebarChoice) collapsed = !event.matches;
+		};
+		wide.addEventListener('change', onViewport);
+		return () => wide.removeEventListener('change', onViewport);
 	});
 
 	// --- the session tree ------------------------------------------------------
@@ -698,7 +746,13 @@
 	<header>
 		{#if !collapsed}<h2>State</h2>{/if}
 		<div class="head-right">
-			{#if !collapsed}
+			{#if collapsed}
+				<!-- Issue #98: the strip NAMES itself and keeps a live channel. One mark for
+				     one surface — the same ⊙ rides the head's State door — and its colour is
+				     the connection state's own rule, the one the status line already uses. -->
+				<span class="state-glyph" data-status={connection} aria-hidden="true">⊙</span>
+				<span class="state-word" aria-hidden="true">State</span>
+			{:else}
 				<span class="status" data-status={connection}>{statusLabel[connection]}</span>
 				<button
 					type="button"
@@ -1266,11 +1320,23 @@
 
 <style>
 	.sidebar {
-		width: 15rem;
-		/* Issue #66: the dock is a column of the 100vh shell, so the pane FILLS its
-		   height (flex-grow) and can shrink into it (`min-height: 0` — the flex
+		/* Issue #98: the bar is the reading block's FIRST COLUMN now, so its width is
+		   the width its own rows need — a floor and a cap measured from the real rows
+		   (place names, thread titles, meter rows, an open ✎ id, the retry row) —
+		   never the rail's 15rem convention. `border-box` makes the declared width
+		   the USED width, so the block arithmetic (bar + gap + measure) is exact. */
+		box-sizing: border-box;
+		width: auto;
+		/* The floor: the narrowest bar that still reads at rest — a micro label, a
+		   value and the ✎ door on one line. */
+		min-width: 12rem;
+		/* The cap: past this a long thread title or place name would pull the bar
+		   wider than the measure it serves, so rows wrap instead. */
+		max-width: 13rem;
+		/* Issue #66: the bar fills the height of the transcript area it stands beside
+		   (the reading block's row) and can shrink into it (`min-height: 0` — the flex
 		   item's default floor is its content, which is what let a long state tab
-		   grow the document instead of scrolling in here). `overflow-y: auto` above
+		   grow the document instead of scrolling in here). `overflow-y: auto` below
 		   then has a real box to scroll. */
 		flex: 1 1 auto;
 		min-height: 0;
@@ -1282,14 +1348,19 @@
 			width 160ms ease,
 			padding 160ms ease;
 	}
-	/* Collapsed state bar (T1): a narrow strip holding only the toggle, mirroring
-	   the D40 rail. The bar is a left-docked column, so width is the animated
-	   axis; everything but the header is dropped from view for the strip. */
+	/* Collapsed state bar (T1): a narrow strip holding the mark, the word and the
+	   toggle, mirroring the D40 rail. The bar is a column of the reading block, so
+	   width is the animated axis; everything but the header is dropped from view
+	   for the strip. */
 	.sidebar.collapsed {
 		width: 2.4rem;
+		/* The strip is exactly 2.4rem — the floor and the cap above are the
+		   EXPANDED bar's, and `min-width` would otherwise outrank this width. */
+		min-width: 2.4rem;
+		max-width: 2.4rem;
 		/* Vertical padding only: the collapsed strip is a 2.4rem column holding one
 		   toggle, so horizontal padding is chrome the reader pays for twice (the
-		   rail beside it is the same 2.4rem). Measured 39.4px, matching the rail —
+		   rail beside it is the same 2.4rem). Measured 38.4px, matching the rail —
 		   the pair is the 77-79px floor the density audit priced. */
 		padding: 0.85rem 0;
 		overflow: hidden;
@@ -1300,10 +1371,36 @@
 	.sidebar.collapsed header {
 		flex-direction: column;
 		align-items: center;
+		gap: 0.4rem;
 		/* The pane's undock button is absolutely positioned at the dock's
-		   top-right (z-index 5); keep the toggle below it so it stays
-		   clickable in the narrow collapsed strip. */
+		   top-right (z-index 5); keep the mark, the word and the toggle below it so
+		   they stay clickable in the narrow collapsed strip. */
 		padding: 1.8rem 0 0 0;
+	}
+	/* Issue #98: the strip's mark. Its colour IS the connection state — the same
+	   five-value `data-status` the expanded status line uses (ready/closed muted,
+	   connecting/streaming accent, error danger) — so the strip keeps a live
+	   channel instead of going dark. */
+	.state-glyph {
+		font-size: 1rem;
+		line-height: 1;
+		color: var(--text-muted);
+	}
+	.state-glyph[data-status='streaming'],
+	.state-glyph[data-status='connecting'] {
+		color: var(--accent-strong);
+	}
+	.state-glyph[data-status='error'] {
+		color: var(--danger-text);
+	}
+	/* The word is VERTICAL: the strip is 2.4rem wide, and the job is "this is the
+	   state bar" — a small word read down the column, not a label across it. */
+	.state-word {
+		writing-mode: vertical-rl;
+		font-size: var(--font-micro);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--text-dim);
 	}
 	header {
 		display: flex;
@@ -1322,6 +1419,9 @@
 		margin-left: auto;
 	}
 	.sidebar.collapsed .head-right {
+		flex-direction: column;
+		align-items: center;
+		gap: 0.3rem;
 		margin-left: 0;
 	}
 	.collapse-btn {

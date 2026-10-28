@@ -12,6 +12,10 @@ pins exactly that — no engine surface is involved:
 1. **Left.** The docked state pane is COLLAPSED by default and both of its states
    persist under the existing key; the session rail auto-collapses below 1440px
    but an EXPLICIT choice (a stored ``'1'``/``'0'``) is never overruled.
+   (Issue #98, owner-approved, refines this: the bar is the READING BLOCK's first
+   column now, so it follows the rail's `stored choice > viewport` rule with the
+   block's own arithmetic as the threshold — see
+   ``test_state_dock_collapse_follows_the_rail_rule``.)
 2. **Vertical.** The attach control is one of the composer's actions (the row
    exists only while a file is pending or an error is showing); the HUD is a band
    INSIDE the thread head rather than its own row; the DSL strip renders only
@@ -24,6 +28,9 @@ pins exactly that — no engine surface is involved:
    and the DSL strip shows the scene title only while a turn runs.
 4. **Measure.** The transcript's scroll area stays full-bleed and one centred
    column of 46rem holds every block, so the reclaimed width is symmetric gutter.
+   (Issue #98: the 46rem measure is the reading block's grid TRACK now, and the
+   docked bar is the block's first column — one box, one gap, so the gutter cannot
+   return; see ``test_transcript_is_one_centred_46rem_column``.)
 5. **No token touches.** The layout components' styles do not re-declare a theme
    token: the sheet in ``app.css`` (and the presets + wallpaper layer that
    ``tests/test_theme_contrast_ladder.py`` recomputes) is untouched by this pass.
@@ -93,24 +100,43 @@ def style_declarations(css: str, prop: str) -> list[str]:
 # --- 1. LEFT: the two persisted collapse defaults --------------------------------
 
 
-def test_state_dock_starts_collapsed_and_persists_both_states():
-    """The docked state pane is collapsed BY DEFAULT; both states persist."""
+def test_state_dock_collapse_follows_the_rail_rule():
+    """Issue #98 (owner-approved): the dock's collapse obeys the CHAT RAIL's rule.
+
+    A stored ``'1'``/``'0'`` is obeyed; with no stored choice the component follows
+    the viewport and keeps following it until the reader operates the control; the
+    control writes the choice, so the reader always wins. Both states persist under
+    the existing key.
+
+    This supersedes issue #22's "collapsed at every width" (which existed because a
+    265px LEFT column cost prose its measure): as the reading block's first column
+    the bar takes its width from the block it shares with the measure, and below the
+    block's own floor (~1012px of viewport) it still starts collapsed.
+    """
     src = read(STATE)
     assert "fabulist.statebar.collapsed" in src, "the dock's persistence key moved"
-    # Default collapsed: the reactive initialiser, not an onMount flag.
-    assert re.search(r"let collapsed = \$state\(true\)", src), (
-        "the state dock must START collapsed (issue #22): its turn rows duplicate the HUD"
+    # Collapsed is the initial value in both worlds (SSR has no viewport).
+    assert re.search(r"collapsed = \$bindable\(true\)", src), (
+        "the dock must start collapsed so the first paint never reflows"
     )
-    # An absent key means "never chosen" -> collapsed; only '0' re-opens it.
     mount = re.search(r"onMount\(\(\) => \{(.*?)\n\t\}\);", src, flags=re.DOTALL)
     assert mount, "the dock's onMount restore is gone"
     body = mount.group(1)
-    assert "getItem(COLLAPSE_KEY) === '0'" in body, (
-        "an explicit expand must be the only thing that re-opens the dock"
+    # The stored choice is honoured BEFORE the viewport rule is consulted...
+    assert body.index("getItem(COLLAPSE_KEY)") < body.index("matchMedia"), (
+        "a stored choice must outrank the viewport"
     )
-    assert "=== '1'" not in body, "a stored '1' must not be required to stay collapsed"
-    # Both states are written back on toggle.
+    # ...which is a media query, not a one-shot innerWidth read...
+    assert "matchMedia" in body, "auto-collapse must follow resizes"
+    assert "if (!statebarChoice) collapsed = !event.matches" in body, (
+        "a resize may only move the bar while the reader has not chosen"
+    )
+    # ...and both states are written back on every control, the head door included.
     assert "setItem(COLLAPSE_KEY, collapsed ? '1' : '0')" in src
+    assert "statebarChoice = true" in src
+    # The head's named door drives the same component-owned state.
+    assert re.search(r"export function expand\(\)", src)
+    assert re.search(r"export function collapse\(\)", src)
 
 
 def test_rail_auto_collapses_below_1440_unless_the_reader_chose():
@@ -309,17 +335,27 @@ def test_time_and_location_are_printed_once_each_across_the_chrome():
 
 def test_transcript_is_one_centred_46rem_column():
     css = style_block(TRANSCRIPT)
-    column = rule_bodies(css, ".transcript > *")
-    assert column, "the reading column rule is gone"
-    body = column[0]
-    assert "max-width: 46rem" in body, "the owner's measure is 46rem"
-    assert "margin-inline: auto" in body, "centring is what makes the cap BIND as a measure"
-    assert "width: 100%" in body
+    block = rule_bodies(css, ".reading-block")
+    assert block, "the reading block rule is gone"
+    body = block[0]
+    assert "minmax(0, 46rem)" in body, "the owner's measure is 46rem"
+    assert "justify-content: center" in body, "centring is what makes the cap BIND as a measure"
+    # Issue #98: the docked bar is the block's FIRST column and the gap is fixed,
+    # so the bar's edge and the prose's edge are one composition.
+    assert "column-gap: 0.75rem" in body
+    docked = rule_bodies(css, ".reading-block.docked")
+    assert docked, "the docked variant of the block is gone"
+    assert "auto minmax(0, 46rem)" in docked[0], (
+        "docked: a content-sized bar column, then the measure"
+    )
 
-    # ONE owner for the width: the rows no longer carry their own cap.
-    turn = rule_bodies(css, ".turn")
-    assert turn, ".turn lost its box model"
-    assert "max-width" not in turn[0], "the turn must not re-declare the reading measure"
+    # ONE owner for the width: the rows fill their column and carry no cap.
+    rows = rule_bodies(css, ".transcript > *")
+    assert rows, "the reading column rule is gone"
+    assert "width: 100%" in rows[0]
+    assert "max-width" not in rows[0], (
+        "the rows must not re-declare the reading measure (issue #98: the track owns it)"
+    )
     # The user indent is padding, so centring cannot be pushed off-centre.
     user = rule_bodies(css, ".turn.user")
     assert user, "the user-turn rule is gone"

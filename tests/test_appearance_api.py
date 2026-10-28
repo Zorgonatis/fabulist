@@ -596,7 +596,10 @@ def test_alignment_dom_and_measure_are_attribute_driven():
     transcript = (ROOT / "frontend" / "src" / "routes" / "chat" / "TranscriptList.svelte").read_text(
         encoding="utf-8"
     )
-    assert "max-width: 46rem" in transcript
+    # Issue #98: the 46rem measure is the reading block's grid TRACK (the docked
+    # state bar is the track beside it), still declared once and still moved by the
+    # ONE <html data-align> switch.
+    assert "minmax(0, 46rem)" in transcript
     assert "[data-align='left']" in transcript
     assert "[data-align='right']" in transcript
     drawer = DRAWER.read_text(encoding="utf-8")
