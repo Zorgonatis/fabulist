@@ -40,14 +40,6 @@ you are working in a clone, that directory will not exist; do not recreate it.
 - The changelog gets one line per change with a reference to its closed issue (`(#NN)`).
   The issue thread carries the detail — the changelog is an index, not a report.
 
-## GitHub communication (owner mandate 2026-10-26)
-
-- Every GitHub post is ASD-STE100. Short sentences. One idea per sentence. No emphasis markup, no essays.
-- An RCA post carries three things: the root cause, brief pointers to the relevant code paths, and reproduction steps. It carries no fix synthesis. A suggested fix inside an RCA gets low weight.
-- The fix synthesis is never posted before the owner and the orchestrator agree on the shape in session. The issue record is written after the decision, not during it.
-- When an issue moves to fix-bucket, present the top 2-3 solutions. For each: why it addresses the problem, and its strengths and weaknesses. The owner picks. The full menu contract lives in the orchestrator's private append, not here.
-- One clean post per stage. Agree the content in session first. Do not amend a post repeatedly.
-
 ## Non-negotiables
 
 1. **Verify live, not just with fakes.** Unit tests with mock transports have lied at every
