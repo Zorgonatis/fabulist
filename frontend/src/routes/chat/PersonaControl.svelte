@@ -125,8 +125,14 @@
 	);
 	const effectiveId = $derived(effectivePersona?.persona_id ?? null);
 	const effectiveName = $derived(effectivePersona?.name || 'Unnamed persona');
-	/** Is the effective persona the pinned default? (The switch's checked state.) */
-	const pinned = $derived(effectiveId !== null && effectiveId === catalog.defaultPersonaId);
+	/** Does a default exist for new chats? (The switch's checked state — the pin
+	 *  is global, so it stays readable/clearable from any chat, including a
+	 *  cleared one that has no persona of its own to pin.) */
+	const pinned = $derived(catalog.defaultPersonaId !== null);
+	/** Is the persona in effect also the pinned default? (The block's head tag.) */
+	const effectiveIsDefault = $derived(
+		effectiveId !== null && effectiveId === catalog.defaultPersonaId
+	);
 	const defaultName = $derived(
 		defaultPersona?.name || catalog.defaultPersonaLabel || 'your default persona'
 	);
@@ -147,9 +153,10 @@
 
 	/** The switch's explanation: always names the pin that actually applies. */
 	const pinNote = $derived.by(() => {
-		if (pinned) return `New chats start as ${effectiveName}.`;
-		if (catalog.defaultPersonaId) return `New chats start as ${defaultName}.`;
-		return 'No default — new chats start with no persona.';
+		if (catalog.defaultPersonaId === null)
+			return 'No default — new chats start with no persona.';
+		if (effectiveIsDefault) return `New chats start as ${effectiveName}.`;
+		return `New chats start as ${defaultName}.`;
 	});
 
 	// Once the host's refreshed list carries the value a write put in the
@@ -317,8 +324,7 @@
 						class="pc-row"
 						class:current={hasChat
 							? ownId === persona.persona_id
-							: persona.persona_id === effectiveId}
-						aria-pressed={hasChat
+							: persona.persona_id === effectiveId}						aria-pressed={hasChat
 							? ownId === persona.persona_id
 							: persona.persona_id === effectiveId}
 						onclick={() => void choose(persona.persona_id)}
@@ -410,7 +416,7 @@
 	<section class="pc pc-block" aria-label="User persona">
 		<div class="pc-head-row">
 			<h3 class="pc-head">User persona</h3>
-			{#if pinned}<span class="pc-head-tag">default</span>{/if}
+			{#if effectiveIsDefault}<span class="pc-head-tag">default</span>{/if}
 		</div>
 		{@render body()}
 	</section>
