@@ -1,17 +1,13 @@
 # Fabulist
 
-### This is an AI slop project, it will break.
+**SillyTavern, for people who want to edit the outcome instead of the prompt.**
 
-But I do care about it, and hope you will too. Please submit your issues and PRs if you'd like to contribute!
+### Wherever you notice something, that's where you can change it.
 
-## First look
-
-The narrator does more than write. Mid-scene it can put a working phone, a security monitor
-or a social feed into the story as a real panel — and the engine checks every panel before it
-renders. Attach an image — a map, a portrait, a screenshot — and a vision-capable narrator sees
-it directly in the turn; an older model gets a written description instead. And a draft that
-breaks the rules never reaches you: the engine hands it back, and the narrator repairs its own
-work.
+The narrator does more than write. Mid-scene it can put a working phone, a security
+monitor or a social feed into the story as a real panel — and the engine checks every
+panel before it renders. A draft that breaks the rules never reaches you: the engine
+hands it back, and the narrator repairs its own work.
 
 <p align="center">
   <img src="docs/images/firstlook-component-phone.png" width="30%" alt="Phone panel — messages inside the story">
@@ -19,254 +15,216 @@ work.
   <img src="docs/images/firstlook-component-social.png" width="34%" alt="Social post panel — a feed card">
 </p>
 
-Behind that, each turn is one compiled [LangGraph](https://langchain-ai.github.io/langgraph/)
-run: context gathered, the scene written, drafts validated and repaired, a tracker agent
-keeping the world's books. Places, items, relationships and meters are tracked out of the
-prose and handed back to the narrator as facts — the story never has to narrate its own
-bookkeeping. One local event log owns every turn; the transcript, the state panel and memory
-recall are all views of it. The rest of the tour is below: [What it is](#what-it-is), then
-[Architecture](#architecture).
+**What it takes to start:** Docker, one OpenAI-compatible endpoint, and about ten
+minutes. No model ships in the box — bring a local server or an API key. The optional
+memory sidecar is a 2.7 GiB pull.
+
+> ### This is an AI slop project, it will break.
+> But I do care about it, and hope you will too. Issues and PRs welcome.
+
+---
+
+## The story and the sidebar never disagree
+
+Places, items, relationships and meters are tracked out of the prose and handed back
+to the narrator as facts. One local event log owns every turn — the transcript, the
+state panel and memory recall are all views of it. Change a value on screen and it
+goes through the same validation the agents use. A value you pin is never overwritten
+by a render.
+
+<!-- image pending re-shoot -->
+
+## You cannot wreck it
+
+A correction keeps the original and records why. A fork costs nothing — it is a
+pointer, not a copy. An edit that would break a later turn is refused, with the
+violation named. A failed turn is repaired at the step that failed, not re-run from
+scratch.
+
+From here: [What it is](#what-it-is) · [the Studio tour](#the-studio-tour) · [Architecture](#architecture).
+
+---
+
+## Start here
+
+Three steps, about ten minutes. Everything optional is further down.
+
+1. **Two things.** Docker with Compose, and one OpenAI-compatible endpoint: `llama-server`, vLLM,
+   LM Studio, Ollama's OpenAI shim, OpenRouter, or any hosted API. Nothing is bundled. A narrator
+   wants a large model; extraction and judging are fine on something small.
+2. **Boot it.** Take the release's `Dockerfile` and `docker-compose.yml`. The image carries the
+   engine and the UI, so the host needs no Node or Python. Make the mount directories as your own
+   user first: the image runs as uid 1000, and Docker creates a missing bind mount root-owned, so
+   the first boot dies with `sqlite3.OperationalError: unable to open database file`.
+
+   ```sh
+   mkdir -p data configs
+   docker compose up -d
+   ```
+
+3. **Point it at a model.** Open <http://localhost:2727> and add a completion connection in the
+   Connections drawer. The sidecar answers embedding, reranking and the yes/no checks; it does not
+   write prose. The plain chat needs no persona, card or world, so type a line to take a turn. Then
+   open the Studio from the bottom rail and follow the tour.
+
+`./data:/app/data` holds the log, `./configs:/app/configs` your connections. Both are bind mounts:
+both must exist first, both survive a rebuild. A `.env` beside the compose file is optional and is
+where keys belong.
+
+## The Studio tour
+
+The Studio docks left, right or floats. Its tabs are grouped **Home · Assets · Engine** — the order
+a SillyTavern reader ends up caring about.
+
+Two doors come first, not stops. **Connections** points the engine at your endpoint, so the narrator
+can be your big local model while the smaller jobs run cheap. **Prompts** is the editor you already
+know.
+
+### 1. Flow — Home
+
+One turn is a list of steps, in the order they run, each with what it needs and what it provides.
+Hover a step and its prompt opens. Wire an illegal connection and the editor names the violation and
+refuses the save. This pane answers "what is this doing while I wait?" — and you may reorder the
+answer.
+
+*The turn is a list of steps, and you can reorder it — the editor refuses the change that would have broken your next turn.*
+
+### 2. Proposals — Home
+
+A queue of what your models proposed, waiting for a yes: accept, undo, reject. Below it the
+Historian block — its cadence, and **Run historian now**.
+
+*Nothing your models do quietly rewrites your story. It waits here until you say yes, and undo puts back exactly what was there.*
+
+### 3. Worlds — Assets
+
+The world list, with the row meta **N cast · N books**. Open a world for its slots, its image, and
+export/import on the header. You own every ingredient; this is the container for them.
+
+*A world is the cast plus the books it reads from — the thing you have been holding together with notes.*
+
+### 4. Books — Assets
+
+A book opens on its entries: comma-separated keys, a **constant** toggle, lore text, an optional
+label. Scroll a longer one and it is a real editor, not a viewer.
+
+*Your lorebooks come across as books — same keys, same entries, and now something owns them.*
+
+### 5. Profiles — Assets
+
+An exported profile shows what it will install — Name · World · Cast · Books · Preset — and carries
+a toggle for including assistants. This is what you send a friend instead of a zip of folders.
+
+*Your whole setup in one file: the world, the cast, the books, the prompt — the thing a card plus a preset plus a world plus a persona used to be.*
+
+### 6. Queries — Engine
+
+First the anti-slop table: phrase rows, each with a switch. Then a custom question, open: the
+instruction, what *yes* and *no* mean, the threshold, the probability. "I keep telling the model not
+to do that" becomes something you own.
+
+*Write down the things that ruin a scene. When one turns up, the turn gets sent back to be fixed instead of shipped to you.*
+
+### 7. Templates — Engine
+
+Templates are grouped by class. Open one for its name, what it **implements**, its prompt door and
+settings. Every step in Flow is made of one of these.
+
+*A step's behaviour is a template you can copy, rename and re-point — the list in Flow is made of these.*
+
+### 8. NPC lanes — Engine
+
+The switch, the "lanes running at once" width, and **This chat**, reporting what the lanes did last
+turn — not what you asked them to.
+
+*Turn the room's other voices on, then look at what they actually did last turn — not what you asked them to.*
+
+**The loop.** Back to Flow: inspect a turn, edit what you noticed, take the next one. Two exits, not
+stops: **Connections** (which model does which job) and **Prompts** (still yours).
 
 ## What it is
 
-A personal roleplay narrative engine — a MUD with an LLM narrator. It takes the parts
-SillyTavern-shaped clients emulate in prompt space (agent passes, out-of-band state tracking,
-generative UI, swipes and branches) and gives them real runtimes: an append-only event log, a
-LangGraph agent loop, and a component library the narrator composes panels from. Nothing is
-hosted here: Fabulist is self-hosted and local-first — your sessions, your log, your keys, your
-machine.
+A personal roleplay narrative engine: a MUD with an LLM narrator. SillyTavern-shaped clients fake
+agent passes, out-of-band state tracking, generative UI, swipes and branches in prompt space. Here
+they get runtimes: an append-only event log, a
+[LangGraph](https://langchain-ai.github.io/langgraph/) agent loop, and a component library the
+narrator builds panels from. Self-hosted and local-first: your sessions, your log, your keys.
 
-- **The event log owns everything.** One SQLite file is the source of truth for a session;
-  transcript, state panels, memory index and every agent's context are projections of it.
-  Corrections are revision events, replay is a swipe, a fork is a branch.
-- **Generative UI panels.** The narrator emits prose plus statements from a taught component
-  library (chat transcripts, phones, monitors, social posts, holograms, …), validated by the
-  engine before they render. One escape hatch component accepts authored HTML behind a policy
-  gate.
-- **Out-of-band state tracking.** A dedicated tracker agent maintains an entity registry —
-  places as a tree, items, threads, relationships, meters, conditions, money — with stable ids,
-  plus a clock that the model may propose to and the engine validates. The narrator never emits
-  state; it receives it as facts.
-- **Forks, swipes, revisions.** Message edits are appended revisions, branches are sibling
-  sessions, and a rejected variant costs nothing downstream.
-- **Local RAG memory.** Per-scope vector collections (world / actor / chat) over any
-  OpenAI-compatible embedding endpoint, with optional reranking and a re-embed job; the index is
-  derived and rebuildable.
-- **Voice input and attachments.** Optional speech-to-text input (faster-whisper, local) and
-  image/video/audio attachments normalised with ffmpeg; a vision-capable narrator sees images
-  directly.
-- **Per-agent model routing.** Connections are typed (`completion` / `embedding` / `decision`)
-  and resolved per call, so the narrator, the tracker, the critic and the embedder can each run
-  on a different endpoint — a local llama.cpp server, vLLM, LM Studio, OpenRouter, anything
-  OpenAI-compatible.
-- **Editable prompt surface.** Prompt modules, directive switches and the turn topology are
-  log-owned data edited in the UI, not code constants; a compiled preview shows exactly what
-  the model will see.
-- **Context management.** Per-turn window accounting against a declared context size, a
-  low-context notice, and compaction that summarises an era of turns and continues on a fork,
-  leaving the raw log intact.
-- **Inspection.** A turn inspector, a per-task context ledger, per-agent usage rows and a
-  graph view of the turn itself.
+- **One log owns the story.** One SQLite file per session is the truth; transcript, state panel,
+  memory index and every agent's context are views of it. A correction is a revision that keeps the
+  original and records why. A replay is a swipe. A fork points at the same log instead of copying
+  it. Every narrative keeps the config snapshot it was written with.
+- **Panels are a checked contract.** The narrator writes prose and statements. Statements come from
+  a library generated from the real UI components, and the engine checks each before it renders. One
+  that cannot render stays tagged text, never a broken panel. What a panel displays writes back into
+  the log through the same checks the agents use.
+- **The world keeps its own books.** A tracker agent keeps the registry: places as a tree, items,
+  threads, relationships, meters, conditions, money, cast, the player. Each is a typed event, and an
+  id is minted once. Presence follows location, so it is deterministic. The narrator receives facts
+  and never emits state, so story, sidebar and prompt cannot drift apart.
+- **Turns heal themselves, and failures are named.** The engine validates, then repairs at the step
+  that found the problem. A clean turn costs one completion; a failed turn is never re-run from
+  scratch. A provider failure stops at the step that owns it and names the phase, the status and the
+  provider's own words. That covers failures the engine can name: validation, format, provider, gate.
+  A turn that is merely unsatisfying is still yours to edit.
+- **Cards in, cards out.** Character Card V2 JSON or a PNG `chara` chunk comes in; flat V1 is
+  tolerated. One file can seed the persona and the world. Cards export to V2 and PNG with the
+  original `data` passed through, so unknown keys survive. Lorebooks import as books. Chat logs do
+  not come across.
+- **Memory, voice, attachments.** Vector collections per scope (world / actor / chat) over any
+  OpenAI-compatible embedding endpoint, with optional reranking and a re-embed job. Local
+  speech-to-text. Media attachments normalised with ffmpeg, and a vision-capable narrator sees
+  images in the turn.
+- **Per-agent connections.** Each agent in a turn — narrator, tracker, critic, embedder, decision —
+  can point at its own connection, resolved by type. You supply every endpoint; the context size you
+  declare drives warnings, the compaction threshold and prompt headroom.
+- **The prompt is no longer the only lever.** Prompt modules, rule switches and the turn order are
+  data you edit in the UI, with a compiled preview of what the model will see. Not a deeper prompt
+  editor than SillyTavern's Prompt Manager — a second place to reach for.
 
 ## 18+ · adult content notice
 
-Fabulist is not a content filter: the engine's output is whatever the models you configure
-produce. Some functions it ships with can encourage the generation of adult / 18+ content — the
-NSFW Content directive (off by default), user presets and imported character cards among them.
-Enabling and using them is the user's responsibility, as are the terms of any model provider
-the engine is pointed at.
+Fabulist is not a content filter. The output is whatever the models you configure produce. Some
+things it ships with can encourage adult / 18+ generation: the NSFW Content directive (off by
+default), user presets, imported cards. Using them is your responsibility, and so are the terms of
+any provider the engine is pointed at.
 
 ## Requirements
 
-- Python **3.12** and [uv](https://docs.astral.sh/uv/)
-- Node **>= 22.6** and npm (to build the web UI)
-- At least one **OpenAI-compatible endpoint**: llama.cpp's `llama-server`, vLLM, LM Studio,
-  Ollama's OpenAI shim, OpenRouter, or any hosted API. A narrator wants a large, capable model;
-  extraction and judging are happy on something small.
-- **ffmpeg** (+ `ffprobe`) if you want to attach audio or video
-- Linux, macOS or WSL; no GPU is required by the engine itself — the model server owns the
-  hardware question
+- Docker with Compose, and one **OpenAI-compatible endpoint**.
+- Python **3.12** with [uv](https://docs.astral.sh/uv/), and Node **>= 22.6** with npm — only to
+  build from source or work on the UI.
+- **ffmpeg** (+ `ffprobe`) for audio or video attachments.
+- Linux, macOS or WSL. The engine needs no GPU; the model server owns that question.
 
-## Quickstart
+## Install
 
-### Docker (primary)
+### Docker
 
-Each release ships a `Dockerfile` and a `docker-compose.yml` next to the source, and the
-image carries the engine **and** the built UI — no Node, Python or uv needed on the host. Unpack
-the release and create the host-side mount directories **as your own user** before the first
-boot. The image runs as uid 1000, and Docker creates a missing bind-mount directory root-owned,
-which makes the engine die with `sqlite3.OperationalError: unable to open database file`:
+With an empty `./configs` the engine boots and asks you to add a connection in the Connections
+drawer. Nothing is needed up front except one completion endpoint: the sidecar serves embedding,
+reranking and the decision model, and no prose is written until a narrator is bound.
 
-```sh
-mkdir -p data configs
-docker compose up -d
-```
+`.env` beside the compose file becomes container environment; `.env.example` is the commented
+template. Compose builds only when the `fabulist:latest` tag is missing, so run
+`docker compose build fabulist` if an earlier attempt left an image behind. Voice input is a build
+arg, not a default; the compose file shows the line.
 
-That is the whole first run: with an empty `./configs` the engine boots and tells you to create a
-connection in the Connections drawer (or over the API) — a `connections.json` is not required
-up front, but a **completion** connection is: the sidecar serves only embedding, reranking and
-the decision model, so nothing writes prose until you point an agent at an OpenAI-compatible
-endpoint. The engine and the built UI are served together at <http://localhost:2727>. `./data`
-holds the event log, `./configs` holds your connections — both are active bind mounts in the
-compose file (`./data:/app/data`, `./configs:/app/configs`), both must exist first, and both
-survive a rebuild. A `.env` beside the compose file is passed in as container environment —
-optional, and where cloud API keys belong; `.env.example` is the commented template. Compose
-only builds when the `fabulist:latest` tag is absent, so run `docker compose build fabulist`
-explicitly if an image from an earlier attempt is already there. Voice input is not installed in
-the image by default; the compose file shows the one-line build arg that adds it.
+### The models sidecar
 
-### Models sidecar
+The default compose file starts **`fabulist-models`** too: one llama.cpp server in Vulkan router
+mode. It serves three auxiliary models — `embeddinggemma-2` for memory embeddings, `qwen3-reranker`
+for recall reranking, `d1-3b` for the yes/no checks.
 
-The default compose file also starts **`fabulist-models`**: one llama.cpp server (Vulkan build,
-router mode) serving the three models the engine's memory and decision paths use:
+Nothing ships in the image. The compose file names each model as a HuggingFace reference, and your
+first request downloads it: **~2.7 GiB, once** (2.73 GiB measured). It lands in the named volume
+`fabulist-model-cache`, so a rebuild never pays twice. At boot the engine pins the three roles, but
+only into empty slots, and never touches the narrator.
 
-| model id | route | role |
-|---|---|---|
-| `embeddinggemma-2` | `POST /v1/embeddings` | memory index + recall embeddings |
-| `qwen3-reranker` | `POST /v1/rerank` | recall reranking (on by default) |
-| `d1-3b` | `POST /v1/systemone` | native decision model |
-
-The weights are **not in the image** and there is no download step: the compose file names
-them as HuggingFace references, and **your first request for a model downloads it**. The router
-starts with all three unloaded; the child it spawns for a model fetches that model's files, then
-serves it. All three repos are public and ungated, so nothing asks for a token.
-
-| model id | weights (HuggingFace) | size |
-|---|---|---|
-| `d1-3b` | [`LiquidAI/d1-3B-GGUF`](https://huggingface.co/LiquidAI/d1-3B-GGUF) → `d1-3B-Q4_K_M.gguf` | 1.56 GiB |
-| `embeddinggemma-2` | [`unsloth/embeddinggemma-2-GGUF`](https://huggingface.co/unsloth/embeddinggemma-2-GGUF) → `embeddinggemma-2-Q8_0.gguf` + `mmproj-Q8_0.gguf` | 295 MiB + 529 MiB |
-| `qwen3-reranker` | [`Voodisss/Qwen3-Reranker-0.6B-GGUF-llama_cpp`](https://huggingface.co/Voodisss/Qwen3-Reranker-0.6B-GGUF-llama_cpp) → `Qwen3-Reranker-0.6B-Q4_K_M.gguf` | 378 MiB |
-
-**~2.7 GiB, once** — 2.73 GiB measured on a fresh cache (1.56 GiB d1 + 0.30 GiB embedder +
-0.53 GiB projector + 0.38 GiB reranker). The pull lands in llama.cpp's HuggingFace cache —
-`LLAMA_CACHE=/cache`, backed by the compose named volume `fabulist-model-cache` (per-project
-name: `<project>_fabulist-model-cache`). It persists across `docker compose down`, `up`, image
-pulls and recreates, so the download is paid exactly once; the first request after a fresh
-volume is slow (a few minutes on a home connection), every later one is a normal cold model
-load. `docker compose down -v` (or `docker volume rm <project>_fabulist-model-cache`) is how you
-force a fresh pull. Bind a host directory at `/cache` instead if you would rather see the
-blobs. The embedder's projector is picked by llama.cpp from the same repo, quant-matched to the
-model file (`mmproj-Q8_0.gguf`); the d1 section turns that auto-pick **off** because its repo
-ships projectors the decision route never uses (543 MiB it would otherwise drag in).
-
-The reranker's repo is chosen for its **conversion**, not its popularity: a reranker GGUF must
-carry the sequence-classification head (`qwen3.classifier.output_labels`, `cls.output.weight`),
-and several widely mirrored "Qwen3-Reranker" conversions silently drop it — the server then
-scores a generative model's logits and ranks the wrong document first while still looking
-healthy. The pinned file is byte-identical to the artifact the maintainer's own deployment had
-verified; `deploy/sidecar/models.ini` names the trap and the measurement.
-
-`deploy/sidecar/models.ini` is the manifest: one section per model id, `hf-repo` + an exact
-`hf-file`, then the owner's serving flags. The entrypoint validates the **form** of every
-reference at boot (and that the cache directory is writable) rather than looking for files that
-do not exist yet; a fetch that fails — network, disk, a repo that turned gated — surfaces as
-llama.cpp's own error in `docker compose logs fabulist-models`, naming repo and file.
-
-**Offline / your own weights.** `./models` is still mounted read-only at `/models` as the
-local-weights override: put GGUFs there and bind a preset that names them, i.e. replace a
-section's `hf-repo`/`hf-file` pair with `model = /models/your-model.gguf` (+ `mmproj = ...`).
-Point at it without editing the repo files:
-
-```sh
-# .env beside docker-compose.yml
-FABULIST_MODELS_DIR=/data/models          # host directory mounted at /models
-FABULIST_SIDECAR_PRESET=./deploy/sidecar/models.local.ini   # host path of your preset
-```
-
-The entrypoint check changes shape for those sections: a local `model`/`mmproj` path must
-exist, and a missing one is one boot error naming the file instead of a router that fails on the
-first turn. `HF_TOKEN` is passed through to the sidecar (llama.cpp reads it natively, as the
-`--hf-token` default) but is not needed for the three shipped refs; it sends no header when
-empty.
-
-Point the engine at it. Inside the compose network the sidecar is
-`http://fabulist-models:8080/v1` — a service name, so `FABULIST_HOST_ALIAS` never rewrites it.
-The compose file sets `FABULIST_SIDECAR_URL` to that URL, so **the engine pins the roles for
-you at boot**: it asks the sidecar which model ids it serves, creates
-`sidecar-embed`/`sidecar-rerank`/`sidecar-decision` through the normal connection store, and
-binds each one — but only when the agent slot is **empty** and the model is served. A role that
-already points somewhere is never touched (and the narrator is never touched at all), deleting a
-pin stays deleted across reboots, and a partial or unreachable sidecar pins what it can and logs
-one notice instead of failing the boot.
-
-Two separate things keep the boot race from costing you the pins. First, the compose file
-starts the engine only after the sidecar reports **healthy** (`depends_on: fabulist-models:
-condition: service_healthy`). That healthcheck requests `/v1/models`, which the router answers
-as soon as it listens — with every model `unloaded` — so it is a real "the router parsed its
-preset" check that never loads a model, never downloads a weight, and never waits for a Vulkan
-model load. Second, if the probe is unreachable anyway (a sidecar restarted behind a running
-engine, the host-network variant, or a first boot slower than the healthcheck's start period),
-the engine keeps re-probing on a **bounded repeating schedule**: every ~25 s, at most 24
-attempts (about ten minutes), stopping at the first probe that answers. Each failed attempt
-logs one notice, a spent budget logs one final giving-up line, and boot never waits for any of
-it. The snippet below is the manual fallback for a custom setup (another host, a different
-port, no compose).
-
-Three connections, one per role:
-
-```json
-{
-  "connections": {
-    "sidecar-embed":    { "base_url": "http://fabulist-models:8080/v1", "model": "embeddinggemma-2", "timeout": 120 },
-    "sidecar-rerank":   { "base_url": "http://fabulist-models:8080/v1", "model": "qwen3-reranker",   "timeout": 120 },
-    "sidecar-decision": { "base_url": "http://fabulist-models:8080/v1", "model": "d1-3b",            "timeout": 120 }
-  },
-  "agents": {
-    "embedder": "sidecar-embed",
-    "reranker": "sidecar-rerank",
-    "decision": "sidecar-decision",
-    "narrator": "your-completion-connection"
-  }
-}
-```
-
-Or add them in the Connections drawer. The narrator is still a separate connection: the
-sidecar serves the auxiliary roles, not the prose model.
-
-**Device selection.** Vulkan enumerates devices in its own order (index 0 is not necessarily
-your first card), so the entrypoint refuses to guess when more than one GPU is visible. Set one
-of these in `.env`:
-
-```sh
-FABULIST_SIDECAR_DEVICE=Vulkan0              # or a bare 0
-FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"     # or a name substring
-```
-
-A clone ships no `.env`; copy `.env.example` and uncomment the one you need. One visible device
-needs no setting. An id that does not exist is a boot failure that lists
-the devices; zero Vulkan devices falls back to CPU — the Vulkan build's own behaviour, and the
-log says so. The image tag is pinned (`server-vulkan-b11804`): the d1 decision model is a new
-architecture, and older images answer 501 on `/v1/systemone`.
-
-**Verify it** after `docker compose up -d`:
-
-```sh
-uv run python scripts/sidecar_smoke.py
-```
-
-It checks the three model ids, one rerank call (sorted scores **and** `truncated = 0` on every
-sequence — the reranker's 2048-token context is sufficient only while the engine clips each
-candidate to 600 chars), one embedding call, and one `d1-3b` decision call. It reads the
-service log with `docker compose logs`; use `--log-file` or `--log-cmd` for another topology.
-On a fresh cache the first run also pulls ~2.7 GiB: the smoke's per-request timeout is 300 s
-(raise it with `--timeout` on a slow line), and `docker compose logs -f fabulist-models` shows
-the download. A second run does no network work — same three assertions, no pull.
-
-**No sidecar.** To run the engine alone (your own host model server, a hosted API):
-
-```sh
-docker compose -f docker-compose.app-only.yml up -d
-```
-
-**Troubleshooting.** If a model's first request fails with a download error, the weight cache is
-the place to look: `docker compose exec fabulist-models du -sh /cache` shows what is already
-there, and a half-finished blob is re-fetched automatically (llama.cpp stores partials by
-content hash). If the sidecar container fails at create with
-`failed to fulfil mount request: ... libnvidia-egl-wayland.so.1.1.21: no such file`, the NVIDIA
-CDI spec is stale after a driver update — regenerate it with
-`sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml` and `docker compose up -d` again.
-On an AMD/Intel host, delete the `deploy:` block in `docker-compose.yml` (it requests an NVIDIA
-device) and keep `devices: [/dev/dri]`.
+Check it with `uv run python scripts/sidecar_smoke.py`. To run the engine without it, use
+`docker compose -f docker-compose.app-only.yml up -d`. Exact sizes, the cache, offline weights,
+device selection, troubleshooting and the manual pinning:
+**[docs/MODELS-SIDECAR.md](docs/MODELS-SIDECAR.md)**.
 
 ### From source
 
@@ -278,9 +236,9 @@ uv sync
 uv run python scripts/serve.py            # engine on :2727, log in data/
 ```
 
-The engine serves the built UI at <http://localhost:2727>: one origin for the app and the API,
-no CORS setup needed. To work on the UI instead, run `cd frontend && npm run dev` and open
-<http://localhost:5173> — see [frontend/README.md](frontend/README.md).
+One origin serves the app and the API, so there is no CORS setup. For UI work,
+`cd frontend && npm run dev` and open <http://localhost:5173> — see
+[frontend/README.md](frontend/README.md).
 
 ### No model at all
 
@@ -288,150 +246,92 @@ no CORS setup needed. To work on the UI instead, run `cd frontend && npm run dev
 cd frontend && VITE_MOCK=1 npm run dev
 ```
 
-Every API call is answered from an in-memory mock, so the whole UI is explorable with no engine
-and no model. A red `MOCK` badge shows while it is active.
+Every call is answered from an in-memory mock, so the whole UI is explorable with no engine and no
+model. A red `MOCK` badge shows while it is active.
 
 ## Configuration
 
-`configs/connections.json` (gitignored, user-owned) has two sections — endpoints, and which
-agent uses which endpoint:
+`configs/connections.json` is gitignored and yours: endpoints, and which agent uses which endpoint.
+Most people never write it by hand. The Connections drawer writes a pasted key into `.env` as one
+line (`0600`) and never echoes it back, and the context size you declare there drives the warnings,
+the compaction threshold and the prompt headroom.
 
 ```json
 {
   "connections": {
-    "local": {
-      "base_url": "http://localhost:8080/v1",
-      "model": "your-model-id",
-      "sampling": { "temperature": 0.9, "top_p": 0.95, "max_tokens": 2048 },
-      "timeout": 300
-    },
-    "hosted": {
-      "base_url": "https://openrouter.ai/api/v1",
-      "model": "vendor/model-name",
-      "api_key_env": "OPENROUTER_KEY",
-      "timeout": 300
-    }
+    "local":  { "base_url": "http://localhost:8080/v1", "model": "your-model-id",
+                "sampling": { "temperature": 0.9, "top_p": 0.95, "max_tokens": 2048 }, "timeout": 300 },
+    "hosted": { "base_url": "https://openrouter.ai/api/v1", "model": "vendor/model-name",
+                "api_key_env": "OPENROUTER_KEY", "timeout": 300 }
   },
   "agents": { "narrator": "hosted", "extractor": "local" }
 }
 ```
 
-- `api_key_env` names an **environment variable**, never the key itself. Omit it for keyless
-  local servers.
-- A `base_url` may name a **cloud** endpoint (`https://…`), a **host-local** server
-  (`http://127.0.0.1:4445`, `localhost`, `[::1]`), or a **compose service** name
-  (`http://fabulist-models:8080`, the sidecar the default compose file ships). In the Docker image the
-  compose file sets `extra_hosts: host.docker.internal:host-gateway` and
-  `FABULIST_HOST_ALIAS=host.docker.internal`, so a loopback host is rewritten to
-  the host machine — inside a container `127.0.0.1` is the container itself.
-  Remote hosts and LAN IPs are never rewritten; an **empty** `FABULIST_HOST_ALIAS`
-  disables the rewrite (the URL is dialled exactly as written). `GET
-  /api/connections/doctor` probes every configured connection and reports the
-  resolved URL, reachability and latency.
-- Keys can also be pasted in the Connections drawer: the engine writes `FABULIST_<NAME>_KEY`
-  into the project `.env` (created `0600`, gitignored) by rewriting only that line, and applies
-  it on the next call with no restart. The key is never echoed back by the API.
-- Declare each connection's **context size** in the drawer (`context_window`). It is never
-  probed; budget warnings, prompt headroom and the compaction threshold are computed from it,
-  so the declared number is the one the engine believes. DeepSeek's `GET /v1/models` returns a
-  `context_window` you can copy; z.ai returns none, and `200000` for `glm-5.3` is a community
-  guess rather than a published figure.
-- `FABULIST_DEV_ORIGINS=http://localhost:5173,…` adds extra CORS origins when you serve the UI
-  from a different origin than the engine's defaults.
-- Everything user-specific stays out of git: `configs/connections.json`, `data/`, `.env`.
-
-### Agent slots
-
-`GET /api/connections` returns one row per agent slot (the `slots` array the Connections drawer
-renders) — eleven in the default sidecar setup, each bound to one connection:
-
-| slot | what it feeds |
-|---|---|
-| `completion` | type default: any completion task or item with no more specific binding |
-| `completion.narration` | the narrator pass — prose + generative-UI DSL |
-| `completion.extraction` | structured pulls: critic, proposals, summaries, captions |
-| `completion.state` | the state tracker's entity-registry writes |
-| `summarizer` | compaction and era summaries (falls back to `completion.extraction`) |
-| `captioner` | attachment and image captions (falls back to `completion.extraction`) |
-| `imagegen` | image-generation requests |
-| `embedding` | type default for embedding slots (an authored `embedder` wins) |
-| `embedder` | the live memory embedder |
-| `decision` | the native decision model (`POST /v1/systemone`) |
-| `reranker` | recall reranking (per-item key; the sidecar auto-pin writes it) |
-
-`narrator` is a legacy alias: it normalises to `completion.narration`, so either spelling binds
-the same slot and the typed spelling wins if both are authored (`extractor` likewise normalises
-to `completion.extraction`). An empty slot falls through item → task → type and only fails at
-call time if nothing resolves.
-
-Known issue #45: `glm-5.3` can echo the engine's own `<preset_def>` wrapper into committed prose
-— bind narration to another connection until that is fixed.
+`api_key_env` names an environment variable, never the key. Omit it for keyless servers. The
+`base_url` rewrite rules, the eleven agent slots and their fallbacks, and known issues #45 / #46:
+**[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
 ## API
 
-The API is served on the same origin as the UI; the OpenAPI document is at `/docs`.
+The API shares the UI's origin. The OpenAPI document is at `/docs`.
 
 ### Turns are an SSE stream
 
-`POST /api/sessions/{id}/turns` answers `text/event-stream` — there is no JSON mode and no
-`Accept` negotiation, so a plain client gets the stream too. Frames are `id:` / `event:` /
-`data:` lines, `data` carries the JSON delta, and `: ping` comment lines keep an idle stream
-warm. A failure *inside* the turn is not an HTTP status: the response is already 200, so it
-arrives as an `error` event in the stream (`"generation truncated: max_tokens reached before
-natural stop"` is one) and the stream closes when the turn's work is done.
+`POST /api/sessions/{id}/turns` answers `text/event-stream`. There is no JSON mode and no `Accept`
+negotiation, so a plain client gets the stream too. Frames are `id:` / `event:` / `data:` lines;
+`: ping` comments keep an idle stream warm. A failure *inside* a turn is not an HTTP status, because
+the response is already 200 — it arrives as an `error` event.
 
-**`max_tokens` × thinking models.** A thinking model spends the same `max_tokens` budget on
-reasoning before it writes anything, so a small budget can be consumed entirely by
-`reasoning_content` — the stream ends with only that transient `error` event and no prose. This
-is the most common silent-looking failure on a new connection (see the #45/#48-era field
-reports). The built-in default is `max_tokens: 1024`: set it explicitly for a thinking narrator
-(`8192` or more), or lower the model's reasoning depth (`reasoning_effort: "low"`, the z.ai/GLM
-knob). A non-thinking small model is fine at 2048.
-
-Known issue #46: a client that disconnects mid-stream can leave a committed turn with an empty
-narrative payload — empty prose, empty DSL — and the turn is kept.
+**`max_tokens` × thinking models.** A thinking model spends the same budget on reasoning before it
+writes anything. A small budget gets eaten by `reasoning_content`, and the stream ends with that
+`error` event and no prose. This is the commonest silent-looking failure on a new connection. The
+default is `max_tokens: 1024`, so set it explicitly for a thinking narrator (`8192` or more), or
+lower the reasoning depth with `reasoning_effort: "low"`.
 
 ### Exposure
 
-There is **no authentication** on any route. The image starts the engine with `--host 0.0.0.0`
-and the default compose file publishes `2727:2727`, so the app listens on every host interface
-(the host-network variant in `docker-compose.host.yml` binds the host's `2727` directly, same
-result). On a machine with a public interface, either publish loopback only
-(`"127.0.0.1:2727:2727"`) or put a reverse proxy with its own authentication in front of it.
-`scripts/serve.py` run from source defaults to `127.0.0.1:2727` — that is the only shipped path
-that does.
+There is **no authentication** on any route. The image starts the engine with `--host 0.0.0.0`, and
+the default compose file publishes `2727:2727`, so the app listens on every host interface
+(`docker-compose.host.yml` binds the host's `2727` directly, same result).
 
-This posture is stated in exactly two places: here and [SECURITY.md](SECURITY.md) (§2, *There is
-no authentication — by design*). Change both or neither.
+On a machine with a public interface, publish loopback only (`"127.0.0.1:2727:2727"`) or put a
+reverse proxy with its own authentication in front. `scripts/serve.py` from source defaults to
+`127.0.0.1:2727` — the only shipped path that does.
+
+This posture is stated in exactly two places: here and [SECURITY.md](SECURITY.md) (§2, *There is no
+authentication — by design*). Change both or neither.
 
 ## Architecture
 
-A turn is a compiled graph. Pre-turn nodes assemble context (persona and cast, world
-definition, recalled memory, plan, runtime notices) and inject state as facts at the end of the
-prompt; the **narrator pass emits prose and generative-UI DSL and nothing else**. At `commit`
-the turn is kept and the user is released; the remaining nodes — validation and repair, a
-quality gate and critic, the planner on its cadence, the state tracker, the environment HUD,
-attribution — run behind them and stream their landings back into the transcript.
+A turn is a compiled graph. Before the narrator runs, steps assemble context — persona and cast,
+world definition, recalled memory, plan, runtime notices — and inject state as facts at the end of
+the prompt. The **narrator pass emits prose and panels and nothing else**.
 
-Everything that lands is an appended event: `user`, `narrative`, `revision`, `state-delta`,
-`roll`, `asset`, `summary`, `ooc`, `system`. Only the dispatcher writes, and every read — the
-transcript, the state sidebar, the memory index, the next prompt — is a projection over those
-rows. Derived stores (vector index, LangGraph checkpoints) are cache and may be dropped or
-rebuilt at any time; on divergence the log wins. `docs/decisions/README.md` records the rulings
-that keep that shape honest.
+At `commit` the turn is kept and you are released. The rest streams its landings into the transcript
+behind you: validation and repair, the quality gate and critic, the planner on its cadence, the state
+tracker, the environment HUD, attribution.
+
+Everything that lands is an appended event: `user`, `narrative`, `revision`, `state-delta`, `roll`,
+`asset`, `summary`, `ooc`, `system`. Only the dispatcher writes. Every read — transcript, state
+sidebar, memory index, the next prompt — is a projection over those rows. Derived stores (vector
+index, checkpoints) are cache, rebuildable any time; when they disagree with the log, the log wins.
+`docs/decisions/README.md` records the rulings that keep that shape honest.
 
 ## Docs
 
-- [docs/decisions/README.md](docs/decisions/README.md) — the design rulings, one entry each
-- [SECURITY.md](SECURITY.md) — threat model, the no-authentication posture and the bind truth
-- [AGENTS.md](AGENTS.md) — how to work in this repo (conventions, verification rules)
-- [.env.example](.env.example) — the sidecar and API-key environment variables
-- [docs/PERSONA-SPEC.md](docs/PERSONA-SPEC.md) — persona/actor cards and structured canon
-- [docs/PROMPT-SURFACES.md](docs/PROMPT-SURFACES.md) — prompt modules, presets and the compiler
-- [docs/UI-LANGUAGE.md](docs/UI-LANGUAGE.md) — component flavours and panel language
-- [docs/UI-COPY.md](docs/UI-COPY.md) — the register for user-facing hints, labels and descriptions
-- [docs/COMPONENT-PATTERNS.md](docs/COMPONENT-PATTERNS.md) — how to build a component
-- [docs/COMPONENT-SETS.md](docs/COMPONENT-SETS.md) — the frozen `technology` set (v1.0.0) and the reusable component core
+- [docs/decisions/README.md](docs/decisions/README.md) — the design rulings
+- [docs/MODELS-SIDECAR.md](docs/MODELS-SIDECAR.md) — sidecar models, cache, role pins
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — connection rules, agent slots
+- [SECURITY.md](SECURITY.md) — threat model, no-auth posture
+- [AGENTS.md](AGENTS.md) — repo conventions and verification
+- [.env.example](.env.example) — sidecar and key variables
+- [docs/PERSONA-SPEC.md](docs/PERSONA-SPEC.md) — persona cards, structured canon
+- [docs/PROMPT-SURFACES.md](docs/PROMPT-SURFACES.md) — prompt modules, presets, compiler
+- [docs/UI-LANGUAGE.md](docs/UI-LANGUAGE.md) — component flavours
+- [docs/UI-COPY.md](docs/UI-COPY.md) — the copy register
+- [docs/COMPONENT-PATTERNS.md](docs/COMPONENT-PATTERNS.md) — building a component
+- [docs/COMPONENT-SETS.md](docs/COMPONENT-SETS.md) — the frozen `technology` set
 
 ## License
 
