@@ -265,8 +265,14 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		`${$sessionTitle || 'New chat'}${$sessionId ? ` — session ${$sessionId}` : ''}`
 	);
 
+	/** Bumped after a persona write (#94): re-runs the identity read so the
+	 *  transcript badge agrees with the chip / rail block that just changed. */
+	let personaRefresh = $state(0);
+
 	$effect(() => {
 		const sid = $sessionId;
+		// A persona assignment / pin write re-reads the identity cluster below.
+		void personaRefresh;
 		if (!sid) {
 			activePersona = null;
 			activeWorld = null;
@@ -284,11 +290,16 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 				let pid: string | null = cfg?.persona_id ?? null;
 				let label: string | null = null;
 				if (!pid) {
-					// No session persona: inherit the global pinned default. This
-					// settings read is global, not session-scoped.
-					const settings = await fetch(`${API_BASE}/api/settings`).then((r) => r.json());
-					pid = settings?.default_persona_id ?? null;
-					label = settings?.default_persona_label ?? null;
+					// No session persona: inherit the global pinned default — UNLESS the
+					// chat carries an explicit "no persona" clear, which suppresses the
+					// pin (the same three states the persona control renders; the engine
+					// sends no identity block for a cleared chat either).
+					const cleared = get(sessions).find((item) => item.id === sid)?.persona_cleared === true;
+					if (!cleared) {
+						const settings = await fetch(`${API_BASE}/api/settings`).then((r) => r.json());
+						pid = settings?.default_persona_id ?? null;
+						label = settings?.default_persona_label ?? null;
+					}
 				}
 				if (pid && !cancelled) {
 					const body = await fetch(`${API_BASE}/api/personas/${encodeURIComponent(pid)}`).then((r) => r.json());
@@ -1194,11 +1205,19 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	}
 
 	/** A persona chat was just created from the rail's actor "+" (the actor door):
-	 *  refresh the list FIRST so the persona picker resolves the new row (without
-	 *  it the picker shows "No chat open" until the first turn), then open it. */
+	 *  refresh the list FIRST so the new row (and its persona state) resolves,
+	 *  then open it. */
 	async function handleStartPersonaChat(id: string): Promise<void> {
 		await refreshSessions();
 		selectSession(id);
+	}
+
+	/** A persona write landed (#94): the session list is the chip's / rail block's
+	 *  state source, so re-read it; bump the identity read so the transcript badge
+	 *  follows the same write. */
+	function handlePersonaChanged(): void {
+		void refreshSessions();
+		personaRefresh += 1;
 	}
 
 	/**
@@ -2090,6 +2109,7 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		onOpenStudio={(kind, opts) => openStudio(kind, opts)}
 		onStartWorldChat={(id) => void handleStartWorldChat(id)}
 		onStartPersonaChat={(id) => void handleStartPersonaChat(id)}
+		onPersonaChanged={handlePersonaChanged}
 		refreshToken={railRefreshToken}
 	/>
 
@@ -2392,6 +2412,9 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 			{assistantEnabled}
 			{assistantPickerOpen}
 			onToggleAssistant={() => (assistantPickerOpen = !assistantPickerOpen)}
+			onOpenStudio={(kind, opts) => openStudio(kind, opts)}
+			onPersonaChanged={handlePersonaChanged}
+			personaRefreshToken={railRefreshToken}
 		/>
 
 	</main>
