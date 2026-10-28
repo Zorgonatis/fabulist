@@ -6,7 +6,7 @@ Personal RP narrative engine: LangGraph (Python 3.12, uv) + SvelteKit 3/Svelte 5
 
 An entertaining, seamless, self-healing roleplay platform.
 
-**SillyTavern, for people who want to edit the outcome instead of the prompt.**
+**A roleplay UI, for those who want to edit the outcome instead of the prompt.**
 Wherever you notice something, that's where you can change it.
 
 The story and the sidebar never disagree. You cannot wreck it.

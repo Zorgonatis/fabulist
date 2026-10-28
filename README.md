@@ -1,6 +1,6 @@
 # Fabulist
 
-**SillyTavern, for people who want to edit the outcome instead of the prompt.**
+**A roleplay UI, for those who want to edit the outcome instead of the prompt.**
 
 ### Wherever you notice something, that's where you can change it.
 
