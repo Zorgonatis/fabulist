@@ -142,13 +142,23 @@ function bookInt(value: unknown, fallback: number): number {
 }
 
 
-/** Keys from a wire `keys` list or the legacy singular `key`; empties dropped. */
+/** Keys from a wire `keys` list or the legacy singular `key`; empties dropped.
+ *
+ * A key string is comma-separated keyword syntax (issue #95): the engine's
+ * `world_info._normalize_keys` splits at every comma, removes the spaces and
+ * drops the empty parts, and the studio editor saves the same way
+ * (`BookPane.splitKeys`). This mirror applies that one rule so the book the UI
+ * shows is the book the engine activates. The rule is idempotent: a key with
+ * no comma does not change. */
 function bookKeys(value: unknown): string[] {
 	const list = value === undefined || value === null ? [] : Array.isArray(value) ? value : [value];
 	const out: string[] = [];
 	for (const item of list) {
 		const key = typeof item === 'string' ? item : typeof item === 'number' ? String(item) : '';
-		if (key) out.push(key);
+		for (const part of key.split(',')) {
+			const trimmed = part.trim();
+			if (trimmed) out.push(trimmed);
+		}
 	}
 	return out;
 }

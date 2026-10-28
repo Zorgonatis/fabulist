@@ -606,6 +606,15 @@
 							>
 						</span>
 						<span class="notice-reason">{notice.reason}</span>
+						{#if notice.entries && notice.entries.length > 0}
+							<!-- Issue #95: the advisory names the entries that filled the block. -->
+							<span class="notice-entries">
+								Active entries: {notice.entries.join(', ')}{notice.active &&
+								notice.active > notice.entries.length
+									? ` (+${notice.active - notice.entries.length} more)`
+									: ''}
+							</span>
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -1540,6 +1549,12 @@
 	.notice-reason {
 		color: var(--text-muted);
 		line-height: 1.35;
+		word-break: break-word;
+	}
+
+	.notice-entries {
+		font-size: 0.68rem;
+		color: var(--text-dim);
 		word-break: break-word;
 	}
 

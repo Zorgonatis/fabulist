@@ -48,7 +48,7 @@ raising).
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 __all__ = [
     "DEGRADATION_EVENTS",
@@ -58,6 +58,7 @@ __all__ = [
     "PRESET_DEGRADED_EVENT",
     "RECALL_DEGRADED_EVENT",
     "REASON_LIMIT",
+    "WORLD_INFO_ADVISORY_ENTRY_LIMIT",
     "WORLD_INFO_LARGE_EVENT",
     "append_degradation",
     "append_preset_degraded",
@@ -219,12 +220,61 @@ def append_preset_degraded(
     )
 
 
+#: How many active entry names the ``world_info_large`` advisory lists.
+WORLD_INFO_ADVISORY_ENTRY_LIMIT = 5
+
+#: Longest one listed entry name may be inside the reason line.
+_WORLD_INFO_ADVISORY_NAME_LIMIT = 30
+
+
+def _world_info_advisory_reason(
+    chars: int,
+    threshold: int,
+    active: int,
+    total: int,
+    entries: list[str],
+) -> str:
+    """The advisory's short reason: size, ratio, up to five names, one action.
+
+    Plain short sentences (issue #95). The names are dropped one at a time
+    only when the sentence would not fit :data:`REASON_LIMIT`; the count
+    sentence always stays, so the reason reads whole.
+    """
+    total = max(total, active)
+    percent = round(active * 100 / total) if total else 0
+    head = (
+        f"World info is {chars} characters. That is over the "
+        f"{threshold}-character advisory size. {active} of {total} entries "
+        f"are active ({percent}%)."
+    )
+    tail = " The block is sent in full. Turn off entries that you do not need."
+    names = [
+        name
+        if len(name) <= _WORLD_INFO_ADVISORY_NAME_LIMIT
+        else name[: _WORLD_INFO_ADVISORY_NAME_LIMIT - 1] + "\u2026"
+        for name in entries[:WORLD_INFO_ADVISORY_ENTRY_LIMIT]
+    ]
+    while True:
+        if not names:
+            return (head + tail)[:REASON_LIMIT]
+        listing = ", ".join(names)
+        if active > len(names):
+            listing += f" (+{active - len(names)} more)"
+        reason = f"{head} Active entries: {listing}.{tail}"
+        if len(reason) <= REASON_LIMIT:
+            return reason
+        names.pop()
+
+
 def append_world_info_large(
     log: Any,
     session_id: str | None,
     chars: int,
     *,
     threshold: int,
+    active: int = 0,
+    total: int = 0,
+    entries: Sequence[str] = (),
 ) -> bool:
     """Append ONE ``world_info_large`` advisory per turn; never raises.
 
@@ -233,6 +283,12 @@ def append_world_info_large(
     trimmed) — this row only makes the size visible in the Inspector notices
     tab, beside the real failure notices. It is an ADVISORY: nothing failed,
     nothing was dropped, and the prompt bytes are untouched.
+
+    Issue #95: the row carries the ratio of active entries to all entries and
+    the first five active entry names, so the reader can see WHICH entries
+    filled the block. The names and the counts ride the ``extra`` payload
+    (``active`` / ``total`` / ``entries``); the reason line states the size,
+    the ratio, up to five names and ONE action.
 
     At most ONE row per turn: the anchor is the session's newest ``user`` event
     seq, so the several renders one turn performs (the ``{{facts}}`` / ``{{wi}}``
@@ -263,11 +319,15 @@ def append_world_info_large(
         str(session_id),
         WORLD_INFO_LARGE_EVENT,
         stage=STAGES[WORLD_INFO_LARGE_EVENT],
-        reason=(
-            f"world-info block is {chars} characters. That is over the "
-            f"{threshold}-character advisory size. The block is sent in full. "
-            "Split the book if the context window is tight."
+        reason=_world_info_advisory_reason(
+            chars, threshold, active, total, list(entries)
         ),
         turn=turn,
-        extra={"chars": chars, "threshold": threshold},
+        extra={
+            "chars": chars,
+            "threshold": threshold,
+            "active": active,
+            "total": max(total, active),
+            "entries": list(entries)[:WORLD_INFO_ADVISORY_ENTRY_LIMIT],
+        },
     )

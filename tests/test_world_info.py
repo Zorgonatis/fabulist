@@ -134,6 +134,73 @@ def test_parse_accepts_singular_key_field():
     assert parsed.keys == ["solo"]
 
 
+# --- parse_book: comma-separated keys (issue #95) -----------------------------------
+# The studio editor saves keys split at each comma and shows them joined with
+# ", ", so the parse seam must apply that same rule: split at every comma,
+# remove the spaces around each part, drop the empty parts.
+
+
+def test_parse_splits_a_key_string_at_each_comma():
+    (parsed,) = parse_book({"entries": [{"keys": ["night market,lantern"], "content": "c"}]})
+    assert parsed.keys == ["night market", "lantern"]
+
+
+def test_parse_splits_a_key_string_and_trims_the_parts():
+    (parsed,) = parse_book({"entries": [{"keys": ["  rift ,  dusk  "], "content": "c"}]})
+    assert parsed.keys == ["rift", "dusk"]
+
+
+def test_parse_splits_every_item_of_a_key_list():
+    book = {"entries": [{"keys": ["a, b", "c", "d , e"], "content": "c"}]}
+    (parsed,) = parse_book(book)
+    assert parsed.keys == ["a", "b", "c", "d", "e"]
+
+
+def test_parse_drops_empty_parts_from_a_comma_key():
+    (parsed,) = parse_book({"entries": [{"keys": [",k1,, k2 ,"], "content": "c"}]})
+    assert parsed.keys == ["k1", "k2"]
+
+
+def test_parse_drops_a_key_that_is_only_commas_and_spaces():
+    (parsed,) = parse_book({"entries": [{"keys": [" , ,,"], "content": "c"}]})
+    assert parsed.keys == []
+
+
+def test_parse_leaves_a_key_without_a_comma_unchanged():
+    (parsed,) = parse_book({"entries": [{"keys": ["warden", "eastern gate"], "content": "c"}]})
+    assert parsed.keys == ["warden", "eastern gate"]
+
+
+def test_comma_split_is_idempotent():
+    # Applying the rule twice must not change the keys: this is what lets the
+    # editor, the import and the engine all split without drifting apart.
+    raw = {"entries": [{"keys": ["a, b", "c ,d,"], "content": "c"}]}
+    (first,) = parse_book(raw)
+    again = {"entries": [{"keys": first.keys, "content": "c"}]}
+    (second,) = parse_book(again)
+    assert second.keys == first.keys == ["a", "b", "c", "d"]
+
+
+def test_comma_split_keeps_a_multi_word_part_whole():
+    # Only a comma separates keywords; the spaces inside a part stay.
+    (parsed,) = parse_book({"entries": [{"keys": ["eastern gate, ledger"], "content": "c"}]})
+    assert parsed.keys == ["eastern gate", "ledger"]
+
+
+def test_comma_split_changes_which_entries_activate():
+    book = {
+        "entries": [
+            {"keys": ["lantern,dusk"], "content": "Lantern lore.", "insertion_order": 1}
+        ]
+    }
+    entries = parse_book(book)
+    # "dusk" is the second half of the comma key: it activates on its own.
+    assert [e.content for e in activate(entries, "the dusk comes early")] == [
+        "Lantern lore."
+    ]
+    assert activate(entries, "nothing matches here") == []
+
+
 def test_parse_empty_book_is_empty_list():
     assert parse_book({"entries": []}) == []
     assert parse_book([]) == []

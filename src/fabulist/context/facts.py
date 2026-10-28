@@ -598,6 +598,30 @@ def session_world_definition_block(
     return "\n".join(lines)
 
 
+#: Longest content excerpt used as an entry name in the advisory (issue #95).
+WORLD_INFO_ENTRY_LABEL_CHARS = 30
+
+
+def _world_info_entry_label(entry: Any) -> str:
+    """The short name the size advisory shows for one active entry.
+
+    Issue #95: the advisory lists the first five active entries. An entry's
+    own name is its ``comment`` (the studio's name column); an entry with no
+    comment is named by the start of its content, on one line. Always returns
+    a non-empty string when the entry carries any text at all.
+    """
+
+    comment = str(getattr(entry, "comment", "") or "").strip()
+    if comment:
+        label = " ".join(comment.split())
+    else:
+        content = str(getattr(entry, "content", "") or "").strip()
+        label = " ".join(content.split())
+    if len(label) > WORLD_INFO_ENTRY_LABEL_CHARS:
+        return label[: WORLD_INFO_ENTRY_LABEL_CHARS - 1].rstrip() + "\u2026"
+    return label or "(unnamed entry)"
+
+
 def _dedupe_entries(entries: list[Any]) -> list[Any]:
     """Drop later entries with a signature already seen (D31, first wins).
 
@@ -775,13 +799,15 @@ def session_world_info_block(
             entries: list[Any] = []
             for book in books:
                 entries.extend(parse_book(book))
-            active = activate(_dedupe_entries(entries), scan_text)
+            parsed = _dedupe_entries(entries)
+            active = activate(parsed, scan_text)
             rendered = render_block(active)
             if rendered is not None:
                 # Issue #83: nothing is trimmed, so the engine makes an
                 # oversized activation visible instead. Advisory only: the row
                 # never changes the rendered block, and it is emitted at most
                 # once per turn (the helper anchors on the turn's user event).
+                # Issue #95: the row also names the entries that filled it.
                 try:
                     size = len(_render_value(rendered, variables))
                     if size >= WORLD_INFO_ADVISORY_CHARS:
@@ -790,6 +816,9 @@ def session_world_info_block(
                             session_id,
                             size,
                             threshold=WORLD_INFO_ADVISORY_CHARS,
+                            active=len(active),
+                            total=len(parsed),
+                            entries=[_world_info_entry_label(entry) for entry in active],
                         )
                 except Exception:  # noqa: BLE001 - the advisory never breaks a turn
                     logger.warning("world-info size advisory skipped", exc_info=True)

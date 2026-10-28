@@ -46,7 +46,7 @@ routers, so wiring is one line in ``app.py``::
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -54,7 +54,7 @@ from fabulist.api.attachments import _session_exists
 from fabulist.api.cast_api import list_speaker_colors
 from fabulist.api.recap_api import build_recap
 from fabulist.cards.v2 import is_import_seed_text
-from fabulist.log.degradation import DEGRADATION_EVENTS
+from fabulist.log.degradation import DEGRADATION_EVENTS, WORLD_INFO_ADVISORY_ENTRY_LIMIT
 from fabulist.log.schema_gate import USAGE_EVENT
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -605,19 +605,30 @@ def _notices(events: list["Event"]) -> list[dict]:
             continue
         turn = payload.get("turn")
         hook = payload.get("hook")
-        notices.append(
-            {
-                "seq": event.seq,
-                "ts": event.ts,
-                "event": name,
-                "stage": str(payload.get("stage") or ""),
-                "reason": str(payload.get("reason") or payload.get("error") or ""),
-                "turn": turn
-                if isinstance(turn, int) and not isinstance(turn, bool)
-                else None,
-                "hook": hook if isinstance(hook, str) and hook else None,
-            }
-        )
+        notice: dict[str, Any] = {
+            "seq": event.seq,
+            "ts": event.ts,
+            "event": name,
+            "stage": str(payload.get("stage") or ""),
+            "reason": str(payload.get("reason") or payload.get("error") or ""),
+            "turn": turn
+            if isinstance(turn, int) and not isinstance(turn, bool)
+            else None,
+            "hook": hook if isinstance(hook, str) and hook else None,
+        }
+        # The world-info size advisory (issue #95) also carries its size, the
+        # active/all ratio and the first five active entry names, so the
+        # notices tab can name what filled the block instead of only its size.
+        for key in ("chars", "threshold", "active", "total"):
+            value = payload.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                notice[key] = value
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            names = [item for item in entries if isinstance(item, str) and item]
+            if names:
+                notice["entries"] = names[:WORLD_INFO_ADVISORY_ENTRY_LIMIT]
+        notices.append(notice)
     return notices[-NOTICE_LIMIT:]
 
 

@@ -224,3 +224,97 @@ def test_no_user_event_means_no_notice(build_log):
 def test_world_info_large_is_registered_in_the_notices_channel():
     assert WORLD_INFO_LARGE_EVENT in DEGRADATION_EVENTS
     assert STAGES[WORLD_INFO_LARGE_EVENT] == "world_info_render"
+
+
+# -- (d) the advisory's ratio and entry names (issue #95) -------------------
+
+#: Six constant entries named by their ``comment`` and two that do not fire:
+#: 6 of 8 active, ~12,000 rendered characters. The advisory lists the first
+#: five names, so this book exercises both the ratio and the name cap.
+NAMED_BOOK = [
+    {
+        "constant": True,
+        "comment": f"Lore {index}",
+        "content": chr(65 + index) * 2000,
+        "insertion_order": index,
+    }
+    for index in range(6)
+] + [
+    {
+        "keys": ["never appears"],
+        "comment": "Dormant one",
+        "content": "unused",
+        "insertion_order": 7,
+    },
+    {
+        "keys": ["never appears either"],
+        "comment": "Dormant two",
+        "content": "unused",
+        "insertion_order": 8,
+    },
+]
+
+
+def test_advisory_carries_the_active_ratio_and_the_first_five_names(build_log):
+    log = build_log()
+    sid = "ratio"
+    user = log.append_event(sid, "user", "user", {"text": "read the walls"})
+    _append_book(log, sid, NAMED_BOOK)
+
+    block = session_world_info_block(log, sid, "read the walls")
+    assert block is not None
+    assert len(block) > WORLD_INFO_ADVISORY_CHARS
+
+    (notice,) = _notices(log, sid)
+    assert notice["turn"] == user.seq
+    assert notice["chars"] == len(block)
+    assert notice["threshold"] == WORLD_INFO_ADVISORY_CHARS
+    # The ratio: six of the eight parsed entries are active.
+    assert notice["active"] == 6
+    assert notice["total"] == 8
+    assert "6 of 8 entries are active (75%)" in notice["reason"]
+    # It lists the first five active entries, never more.
+    assert notice["entries"] == ["Lore 0", "Lore 1", "Lore 2", "Lore 3", "Lore 4"]
+    assert "Active entries: Lore 0, Lore 1, Lore 2, Lore 3, Lore 4 (+1 more)" in notice[
+        "reason"
+    ]
+    # It keeps the size and gives one clear action.
+    assert str(len(block)) in notice["reason"]
+    assert "Turn off entries that you do not need." in notice["reason"]
+    assert len(notice["reason"]) <= 400
+
+
+def test_advisory_names_an_entry_without_a_comment_by_its_content(build_log):
+    log = build_log()
+    sid = "unnamed"
+    log.append_event(sid, "user", "user", {"text": "read the walls"})
+    _append_book(log, sid, VERY_LARGE)
+
+    session_world_info_block(log, sid, "read the walls")
+    (notice,) = _notices(log, sid)
+    # VERY_LARGE entries carry no ``comment``: the name falls back to the start
+    # of the content, clipped, so a nameless entry is still identifiable.
+    assert len(notice["entries"]) == 3
+    assert all(name.startswith(("X", "Y", "Z")) for name in notice["entries"])
+    assert all(len(name) <= 30 for name in notice["entries"])
+
+
+def test_advisory_counts_are_inspector_notice_payload(build_log):
+    # The Inspector read (issue #95) surfaces the advisory's extras: size,
+    # threshold, active, total and the entry names.
+    from fabulist.api.inspector_api import _notices as inspector_notices
+
+    log = build_log()
+    sid = "inspector"
+    log.append_event(sid, "user", "user", {"text": "read the walls"})
+    _append_book(log, sid, NAMED_BOOK)
+
+    session_world_info_block(log, sid, "read the walls")
+    rows = inspector_notices(log.get_events(sid))
+    advisory = [row for row in rows if row["event"] == WORLD_INFO_LARGE_EVENT]
+    assert len(advisory) == 1
+    row = advisory[0]
+    assert row["active"] == 6
+    assert row["total"] == 8
+    assert row["chars"] > WORLD_INFO_ADVISORY_CHARS
+    assert row["entries"] == ["Lore 0", "Lore 1", "Lore 2", "Lore 3", "Lore 4"]

@@ -30,7 +30,8 @@ export type DegradationNotice = {
 	seq: number;
 	/** Row timestamp (ISO), when the engine recorded one. */
 	ts?: string;
-	/** `recall_degraded` | `lane_degraded` | `index_degraded` | `hook_degraded`. */
+	/** `recall_degraded` | `lane_degraded` | `index_degraded` | `hook_degraded` |
+	 * `preset_degraded` | `world_info_large` (the size advisory, issue #83/#95). */
 	event: string;
 	/** WHICH step degraded (`memory_recall`, `npc_lane_strategy`, …). */
 	stage: string;
@@ -40,6 +41,16 @@ export type DegradationNotice = {
 	turn: number | null;
 	/** The post-turn hook's name, for `hook_degraded` / `index_degraded`. */
 	hook?: string | null;
+	/** Rendered world-info size in characters (`world_info_large`, issue #95). */
+	chars?: number;
+	/** The advisory size line the engine compares against (`world_info_large`). */
+	threshold?: number;
+	/** Active entries in the turn's world-info activation (`world_info_large`). */
+	active?: number;
+	/** Every parsed world-info entry the turn carried (`world_info_large`). */
+	total?: number;
+	/** The first five active entry names (`world_info_large`, issue #95). */
+	entries?: string[];
 };
 
 /** One pending proposal, as the badge and the notices tab name it. */
@@ -109,6 +120,19 @@ function seqNumber(value: unknown): number {
 	return typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : 0;
 }
 
+/** A wire integer, or `undefined` when the row does not carry one. */
+function optionalCount(value: unknown): number | undefined {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+	return Math.floor(value);
+}
+
+/** The advisory's entry names: strings only, at most `limit`. */
+function optionalNames(value: unknown, limit = 5): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const names = value.filter((item): item is string => typeof item === 'string' && item !== '');
+	return names.length ? names.slice(0, limit) : undefined;
+}
+
 /** Coerce one wire notice; a row with no name is dropped (nothing to render). */
 function normalizeNotice(raw: unknown): DegradationNotice | null {
 	if (!raw || typeof raw !== 'object') return null;
@@ -123,7 +147,13 @@ function normalizeNotice(raw: unknown): DegradationNotice | null {
 		stage: text(obj.stage),
 		reason: text(obj.reason),
 		turn: typeof turn === 'number' && Number.isFinite(turn) ? turn : null,
-		hook: text(obj.hook) || null
+		hook: text(obj.hook) || null,
+		// The world-info size advisory (issue #95) rides these extras.
+		chars: optionalCount(obj.chars),
+		threshold: optionalCount(obj.threshold),
+		active: optionalCount(obj.active),
+		total: optionalCount(obj.total),
+		entries: optionalNames(obj.entries)
 	};
 }
 
@@ -216,6 +246,8 @@ export function degradationLabel(event: string): string {
 			return 'Memory index degraded';
 		case 'hook_degraded':
 			return 'Post-turn hook degraded';
+		case 'world_info_large':
+			return 'World info is large';
 		default:
 			return event;
 	}

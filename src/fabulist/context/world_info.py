@@ -101,7 +101,17 @@ def _as_int(value: Any, *, default: int = 0) -> int:
 
 
 def _normalize_keys(raw: Any) -> list[str]:
-    """Normalize the ``keys`` field to a list of non-empty strings."""
+    """Normalize the ``keys`` field to a list of non-empty strings.
+
+    Issue #95: a key string is comma-separated keyword syntax (the studio
+    editor splits on ``,`` when it saves and renders the stored keys joined
+    with ``, ``), so each key string is split at every comma, the spaces
+    around each part are removed, and empty parts are dropped. The same rule
+    applies to every item of a ``keys`` list.
+
+    The rule is idempotent: splitting an already-split key returns the same
+    parts, so a key with no comma never changes.
+    """
 
     if raw is None:
         return []
@@ -122,8 +132,10 @@ def _normalize_keys(raw: Any) -> list[str]:
             raise WorldInfoError(
                 f"world-info key must be a string, got {type(item).__name__}"
             )
-        if key:  # an empty key is a substring of everything -> drop it
-            keys.append(key)
+        for part in key.split(","):
+            part = part.strip()
+            if part:  # an empty key is a substring of everything -> drop it
+                keys.append(part)
     return keys
 
 
