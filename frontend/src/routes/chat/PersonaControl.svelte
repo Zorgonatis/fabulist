@@ -10,7 +10,10 @@
 	//     (and in the COLLAPSED rail, so a narrow window still exposes it). It
 	//     shows the effective persona's picture + name ("You: not set" when
 	//     there is none) and opens a small panel on click.
-	//   * `variant="block"` — the rail's FIRST layer, above Worlds. Same body.
+	//   * `variant="block"` — the rail's FIRST layer, above Worlds. ONE closed
+	//     row (state line + name + chevron); the list, description, pin switch and
+	//     Edit door live in a dropdown it opens, never inline (owner ruling: an
+	//     always-open list "lists every persona... again").
 	//
 	// The body is ONE snippet rendered by both variants, and its state comes
 	// from ONE store (`#lib/userPersonaStore`), so the two surfaces cannot
@@ -29,6 +32,8 @@
 	// The description renders in full — the same `description` text the
 	// narrator receives in its `### User (the player)` block — never the
 	// scenario the old rail previewed.
+	import { tick } from 'svelte';
+
 	import type { Persona } from '#lib/api';
 	import type { StudioKind } from '#lib/studio/kinds';
 	import {
@@ -81,9 +86,17 @@
 	let busy = $state(false);
 	let pinBusy = $state(false);
 	let error = $state('');
-	/** The chip's panel is open (ignored by the block variant, which is inline). */
+	/** The control's panel is open (the chip's popover or the rail's dropdown). */
 	let open = $state(false);
 	let wrapEl = $state<HTMLElement | null>(null);
+	/** The rail row that anchors the dropdown. */
+	let triggerEl = $state<HTMLButtonElement | null>(null);
+	/** The rail dropdown itself (for focus + placement). */
+	let panelEl = $state<HTMLElement | null>(null);
+	/** The rail dropdown's viewport coordinates (see {@link placePanel}). */
+	let panelPos = $state<{ top: number; left: number; width: number; maxHeight: number } | null>(
+		null
+	);
 
 	// The catalog + pin read is shared by every mounted control (the store
 	// dedupes a concurrent read). `refreshToken` re-reads after a studio edit so
@@ -172,7 +185,68 @@
 		}
 	});
 
-	// The chip's panel closes on an outside press or Escape (Escape is
+	/**
+	 * Pin the rail dropdown to the viewport instead of the rail.
+	 *
+	 * The rail's layers scroll (`overflow-y: auto` on `.rail-scroll`), so an
+	 * in-flow/absolute panel is clipped the moment it is wider than the 15rem
+	 * rail. A `position: fixed` panel escapes that clip; these coordinates keep
+	 * it beside the row, inside the viewport, and re-pinned while the rail or the
+	 * window scrolls/resizes.
+	 */
+	function placePanel(trigger: HTMLButtonElement): void {
+		const margin = 8;
+		const gap = 4;
+		const rect = trigger.getBoundingClientRect();
+		const width = Math.min(320, window.innerWidth - margin * 2);
+		const left = Math.min(Math.max(margin, rect.left), window.innerWidth - margin - width);
+		const below = window.innerHeight - rect.bottom - margin - gap;
+		const above = rect.top - margin - gap;
+		const openBelow = below >= 200 || below >= above;
+		const room = openBelow ? below : above;
+		const maxHeight = Math.min(420, Math.max(120, room));
+		const rawTop = openBelow ? rect.bottom + gap : rect.top - gap - maxHeight;
+		// Never ride off the viewport when the rail scrolls the row out of sight.
+		const top = Math.max(margin, Math.min(rawTop, window.innerHeight - margin - maxHeight));
+		panelPos = { top, left, width, maxHeight };
+	}
+
+	const panelStyle = $derived(
+		panelPos
+			? `top: ${panelPos.top}px; left: ${panelPos.left}px; width: ${panelPos.width}px; max-height: ${panelPos.maxHeight}px;`
+			: ''
+	);
+
+	// While the rail dropdown is open: pin it, follow layout changes, and move
+	// the keyboard into it (so Tab reaches the list). Leaving the panel returns
+	// focus to the row that opened it.
+	$effect(() => {
+		if (!open || variant !== 'block') return;
+		const panel = panelEl;
+		const trigger = triggerEl;
+		if (!panel || !trigger || typeof window === 'undefined') return;
+		placePanel(trigger);
+		const onReflow = (): void => placePanel(trigger);
+		window.addEventListener('resize', onReflow);
+		window.addEventListener('scroll', onReflow, true);
+		// The panel is `visibility: hidden` until `placed` renders; focusing a
+		// hidden element is ignored, so wait one tick for the placed class.
+		let closed = false;
+		void tick().then(() => {
+			if (!closed) panel.focus({ preventScroll: true });
+		});
+		return () => {
+			closed = true;
+			window.removeEventListener('resize', onReflow);
+			window.removeEventListener('scroll', onReflow, true);
+			if (document.contains(trigger) && panel.contains(document.activeElement)) {
+				trigger.focus({ preventScroll: true });
+			}
+			panelPos = null;
+		};
+	});
+
+	// The panel closes on an outside press or Escape (Escape is
 	// preventDefaulted so the rail's scope-pop does not also fire).
 	$effect(() => {
 		if (!open) return;
@@ -184,6 +258,10 @@
 		const onKey = (event: KeyboardEvent): void => {
 			if (event.key !== 'Escape') return;
 			event.preventDefault();
+			// Escape returns the keyboard to the row that opened the dialog.
+			if (variant === 'block' && triggerEl && document.contains(triggerEl)) {
+				triggerEl.focus({ preventScroll: true });
+			}
 			open = false;
 		};
 		document.addEventListener('pointerdown', onDown, true);
@@ -193,6 +271,13 @@
 			document.removeEventListener('keydown', onKey);
 		};
 	});
+
+	/** Collapse the rail dropdown after a pick (the chip keeps its own habit). */
+	function collapse(): void {
+		if (variant !== 'block') return;
+		if (triggerEl && document.contains(triggerEl)) triggerEl.focus({ preventScroll: true });
+		open = false;
+	}
 
 	/**
 	 * Pick a persona (or "No persona").
@@ -205,11 +290,15 @@
 		if (busy || pinBusy) return;
 		error = '';
 		if (!hasChat || !sessionId) {
-			if (id === catalog.defaultPersonaId) return;
+			if (id === catalog.defaultPersonaId) {
+				collapse();
+				return;
+			}
 			pinBusy = true;
 			try {
 				await pinUserPersona(id);
 				onChanged?.();
+				collapse();
 			} catch (err) {
 				error = message(err);
 			} finally {
@@ -219,11 +308,15 @@
 		}
 		// Re-picking the current value is a no-op; a never-set chat CAN record an
 		// explicit clear, so the empty pick is only a no-op for an explicit none.
-		if (id === null ? !ownId && ownCleared : id === ownId) return;
+		if (id === null ? !ownId && ownCleared : id === ownId) {
+			collapse();
+			return;
+		}
 		busy = true;
 		try {
 			await assignUserPersona(sessionId, id);
 			onChanged?.();
+			collapse();
 		} catch (err) {
 			error = message(err);
 		} finally {
@@ -252,6 +345,7 @@
 
 	/** Edit opens the studio's Persona pane (the single definition door, D51). */
 	function editPersona(): void {
+		collapse();
 		onOpenStudio('persona', effectiveId ? { focusId: effectiveId } : {});
 	}
 
@@ -263,7 +357,7 @@
 	}
 </script>
 
-{#snippet body()}
+{#snippet state()}
 	<div class="pc-state">
 		{#if effectivePersona}
 			<UserBadge
@@ -281,7 +375,9 @@
 			<p class="pc-state-line">{stateLine}</p>
 		</div>
 	</div>
+{/snippet}
 
+{#snippet details()}
 	{#if effectivePersona}
 		<div class="pc-desc-block">
 			<span class="pc-label">Description</span>
@@ -324,7 +420,8 @@
 						class="pc-row"
 						class:current={hasChat
 							? ownId === persona.persona_id
-							: persona.persona_id === effectiveId}						aria-pressed={hasChat
+							: persona.persona_id === effectiveId}
+						aria-pressed={hasChat
 							? ownId === persona.persona_id
 							: persona.persona_id === effectiveId}
 						onclick={() => void choose(persona.persona_id)}
@@ -408,17 +505,44 @@
 		</button>
 		{#if open}
 			<div class="pc-pop" role="dialog" aria-label="User persona">
-				{@render body()}
+				{@render state()}
+				{@render details()}
 			</div>
 		{/if}
 	</div>
 {:else}
-	<section class="pc pc-block" aria-label="User persona">
-		<div class="pc-head-row">
-			<h3 class="pc-head">User persona</h3>
+	<!-- The rail's first layer: ONE closed row. The list, description, pin switch
+	     and Edit door are a dropdown — never an always-open list in the rail. -->
+	<section class="pc pc-block" aria-label="User persona" bind:this={wrapEl}>
+		<button
+			type="button"
+			class="pc-trigger"
+			bind:this={triggerEl}
+			aria-haspopup="dialog"
+			aria-expanded={open}
+			aria-controls="pc-rail-panel"
+			aria-label={`User persona: ${effectivePersona ? effectiveName : 'not set'} — open the persona list`}
+			title={stateLine}
+			onclick={() => (open = !open)}
+		>
+			{@render state()}
 			{#if effectiveIsDefault}<span class="pc-head-tag">default</span>{/if}
-		</div>
-		{@render body()}
+			<span class="pc-chevron" aria-hidden="true">▾</span>
+		</button>
+		{#if open}
+			<div
+				id="pc-rail-panel"
+				class="pc-panel"
+				class:placed={panelPos !== null}
+				role="dialog"
+				aria-label="User persona"
+				tabindex="-1"
+				bind:this={panelEl}
+				style={panelStyle}
+			>
+				{@render details()}
+			</div>
+		{/if}
 	</section>
 {/if}
 
@@ -600,33 +724,76 @@
 		color: var(--danger-text);
 	}
 
-	/* --- block (the rail's first layer) ------------------------------------- */
+	/* --- block (the rail's first layer): one closed row + a dropdown --------- */
 	.pc-block {
 		display: flex;
 		flex-direction: column;
-		gap: 0.35rem;
-		padding: 0.35rem 0.3rem 0.45rem;
+	}
+	.pc-trigger {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		width: 100%;
+		min-width: 0;
+		padding: 0.35rem 0.45rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
 		background: var(--bg-raised);
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
 	}
-	.pc-head-row {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.3rem;
+	.pc-trigger:hover {
+		border-color: var(--accent-line);
+		background: var(--bg-hover);
 	}
-	.pc-head {
-		margin: 0;
-		font-size: var(--font-micro);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--text-dim);
+	.pc-trigger[aria-expanded='true'] {
+		border-color: var(--accent-line);
+		background: var(--bg-hover);
 	}
+	.pc-trigger .pc-state {
+		flex: 1;
+	}
+	/* 13px, not a micro-label: this tag rides the one row the owner reads. */
 	.pc-head-tag {
-		font-size: var(--font-micro);
+		flex: none;
+		font-size: var(--font-small);
 		color: var(--accent-strong);
+	}
+	.pc-chevron {
+		flex: none;
+		font-size: var(--font-small);
+		line-height: 1;
+		color: var(--text-dim);
+		transition: transform 120ms ease;
+	}
+	.pc-trigger[aria-expanded='true'] .pc-chevron {
+		transform: rotate(180deg);
+		color: var(--accent-strong);
+	}
+	/* The rail scrolls; this panel is `position: fixed` (placed from the trigger's
+	   rect in script) so the rail's `overflow-y: auto` cannot clip it. */
+	.pc-panel {
+		position: fixed;
+		z-index: var(--z-pane, 10);
+		display: flex;
+		flex-direction: column;
+		gap: 0.55rem;
+		padding: 0.6rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 10px;
+		background: var(--bg-panel);
+		box-shadow: 0 10px 30px var(--shadow);
+		overflow-y: auto;
+		/* Placed before paint by the script effect; never flashes at a stale spot. */
+		visibility: hidden;
+	}
+	.pc-panel.placed {
+		visibility: visible;
+	}
+	.pc-panel:focus {
+		outline: none;
 	}
 
 	/* --- chip (the composer row + the collapsed rail) ----------------------- */
