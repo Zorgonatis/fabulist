@@ -125,6 +125,7 @@
 	// when present); validator flags render as a turn badge plus an IDE-style
 	// gutter marker on the anchored prose segment.
 	import { get } from 'svelte/store';
+	import type { Snippet } from 'svelte';
 	import type { NarratorSegment } from '#lib/stores';
 	import { sessionId as currentSessionId, transcript } from '#lib/stores';
 	import { speakerColors, type RegistryRow } from '#lib/speakerColorStore';
@@ -166,7 +167,8 @@
 		onNewChat,
 		compactBusy = false,
 		compactError = '',
-		pendingStatus = ''
+		pendingStatus = '',
+		dock = null
 	}: {
 		entries: TranscriptEntryView[];
 		branch?: BranchInfo | null;
@@ -194,6 +196,13 @@
 		/** Page-owned informational status ("Compacting…" while a turn waits on the
 		 *  forced path). NEVER an error — the plan calls for informational copy. */
 		pendingStatus?: string;
+		/**
+		 * Issue #98: the DOCKED state bar, handed in by the page, so the reading block
+		 * — the bar, a fixed gap, the 46rem measure — lives in the one component that
+		 * already owns the measure and the alignment switch. `null` = no bar (the
+		 * surface is floating, or undocked): the block is then the measure alone.
+		 */
+		dock?: Snippet | null;
 	} = $props();
 
 	//: The lightbox target (`src`) plus its alt text; null = closed.
@@ -1305,7 +1314,14 @@
 	});
 </script>
 
-<div class="transcript" aria-live="polite" bind:this={scroller}>
+<div class="reading-block" class:docked={dock != null}>
+	{#if dock}
+		<!-- Issue #98 (Option 1a, owner ruling): the state bar is the block's FIRST
+		     COLUMN — it wraps the transcript area only, so the head, the DSL strip,
+		     the assistant panel and the composer keep the full thread width. -->
+		{@render dock()}
+	{/if}
+	<div class="transcript" aria-live="polite" bind:this={scroller}>
 	{#if opening && opening.greetings.some((greeting) => greeting.trim())}
 		<section class="opening" aria-label="Opening scene">
 			<div class="opening-head">
@@ -1836,6 +1852,7 @@
 		</div>
 	{/if}
 </div>
+</div>
 
 {#if detailsOpen && opening?.card}
 	<CardDetails
@@ -1851,42 +1868,66 @@
 {/if}
 
 <style>
-	.transcript {
+	/* Issue #98: THE READING BLOCK.
+	 *
+	 * The block is ONE composition: the docked state bar (when it is docked), a
+	 * fixed gap, then the 46rem measure. It is a grid so the gap cannot become a
+	 * gutter again: the bar's edge and the prose's edge belong to the same row of
+	 * the same box, at every width and in all three alignment modes. The alignment
+	 * setting moves the BLOCK; the measure keeps its width inside it.
+	 *
+	 * The block also carries the transcript's old page padding, so the measure is
+	 * still 46rem of PROSE and the scroll area stays inset from the page edges. */
+	.reading-block {
 		flex: 1;
+		min-height: 0;
+		display: grid;
+		grid-template-columns: minmax(0, 46rem);
+		justify-content: center;
+		column-gap: 0.75rem;
+		padding-inline: 1rem;
+	}
+	/* The bar is a column: its own auto width (a floor and a cap, both in the
+	   component) plus the measure. The measure column is `minmax(0, 46rem)` so a
+	   narrow thread shrinks the prose rather than pushing the bar out. */
+	.reading-block.docked {
+		grid-template-columns: auto minmax(0, 46rem);
+	}
+	.transcript {
+		min-height: 0;
+		min-width: 0;
 		overflow-y: auto;
-		padding: 1rem;
+		padding: 1rem 0;
 		display: flex;
 		flex-direction: column;
 		gap: 0.9rem;
 	}
 	/* Issue #22: THE READING COLUMN.
 	 *
-	 * The scroll AREA stays full-bleed (its scrollbar and the page paint belong to
-	 * the thread), and every block inside it is capped at ONE measure and CENTRED.
-	 * Before this, the 46rem `max-width` on `.turn` was a left-anchored block in a
-	 * wide column: the cap existed in the stylesheet but the eye read a ragged
-	 * right gutter, and the width the density pass reclaimed landed entirely on
-	 * one side. Centring is what makes the cap BIND as a reading measure — the
-	 * reclaimed width becomes symmetric gutter on both sides.
+	 * The scroll AREA is the block's measure column, and every block inside it is
+	 * the full width of that column — one owner for the width: the grid track
+	 * above. Before this, the 46rem `max-width` on `.turn` was a left-anchored
+	 * block in a wide column: the cap existed in the stylesheet but the eye read a
+	 * ragged right gutter, and the width the density pass reclaimed landed entirely
+	 * on one side. Centring the BLOCK (not each row) is what makes the cap BIND as
+	 * a reading measure.
 	 *
-	 * 46rem is the owner's measure (issue #22). One owner for the width: the turn
-	 * rows below no longer carry their own `max-width`. */
+	 * 46rem is the owner's measure (issue #22); issue #98 moved it onto the grid
+	 * column so the docked bar could sit on the same edge. */
 	.transcript > * {
 		width: 100%;
-		max-width: 46rem;
-		margin-inline: auto;
 	}
 
-	/* Issue #41: alignment. The measure above keeps its width; only its inline
-	 * margins move — `left` flushes the column to the start, `right` to the end,
-	 * and `center` (the shipped default) has no rule of its own because the base
-	 * `margin-inline: auto` IS centred. The switch is `<html data-align>` from
-	 * `#lib/theme/apply` (applied with the preset, so a reload restores it). */
-	:global(:root[data-align='left']) .transcript > * {
-		margin-inline: 0 auto;
+	/* Issue #41 / #98: alignment. The measure keeps its width; the BLOCK moves —
+	 * `left` flushes it to the start, `right` to the end, and `center` (the shipped
+	 * default) needs no rule of its own because the base `justify-content` IS
+	 * centred. The switch is `<html data-align>` from `#lib/theme/apply` (applied
+	 * with the preset, so a reload restores it). */
+	:global(:root[data-align='left']) .reading-block {
+		justify-content: start;
 	}
-	:global(:root[data-align='right']) .transcript > * {
-		margin-inline: auto 0;
+	:global(:root[data-align='right']) .reading-block {
+		justify-content: end;
 	}
 
 	/* Wave B (D30): pinned read-only Opening block atop the transcript. */
