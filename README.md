@@ -32,7 +32,9 @@ state panel and memory recall are all views of it. Change a value on screen and 
 goes through the same validation the agents use. A value you pin is never overwritten
 by a render.
 
-<!-- image pending re-shoot -->
+<p align="center">
+  <img src="docs/images/firstlook-state-agreement.png" width="80%" alt="The state sidebar beside the prose it agrees with — the same meter and the same number on both sides">
+</p>
 
 ## You cannot wreck it
 
