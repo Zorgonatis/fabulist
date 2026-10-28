@@ -37,7 +37,7 @@ private/
 /archive/
 
 # local project context (Pi APPEND_SYSTEM): personal, unshipped
-.pi/APPEND_SYSTEM.md
+.pi/
 
 # internal process docs live in private/ (quarantined 2026-10-23)
 docs/plans/
