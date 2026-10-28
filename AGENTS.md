@@ -1,6 +1,19 @@
 # Fabulist — Agent Guide
 
 Personal RP narrative engine: LangGraph (Python 3.12, uv) + SvelteKit 3/Svelte 5 + openui.
+
+## What this is
+
+An entertaining, seamless, self-healing roleplay platform.
+
+**SillyTavern, for people who want to edit the outcome instead of the prompt.**
+Wherever you notice something, that's where you can change it.
+
+The story and the sidebar never disagree. You cannot wreck it.
+
+(Owner-approved front page, 2026-10-28. The README carries the same lines; the goals
+ladder is NOT canonical until separately ratified.)
+
 Read this, then `docs/decisions/README.md` (the design rulings) before any work.
 
 
