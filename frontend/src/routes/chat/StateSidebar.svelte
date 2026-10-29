@@ -55,7 +55,9 @@
 		connection = 'idle',
 		connectionError = '',
 		onRetry,
-		sessionId = ''
+		sessionId = '',
+		collapsed = $bindable(true),
+		docked = true
 	}: {
 		facts: Record<string, string>;
 		connection?: ConnectionStatus;
@@ -64,6 +66,19 @@
 		/** The recovery door: re-probe the session and re-run the failed turn. */
 		onRetry?: () => void;
 		sessionId?: string | null;
+		/**
+		 * Issue #98: the head's named door binds this to paint itself `active`, and
+		 * opens/closes the bar through `expand()` / `collapse()`. The bar still OWNS
+		 * the value, its persistence and its viewport rule.
+		 */
+		collapsed?: boolean;
+		/**
+		 * Issue #98: `true` = this is the DOCKED column of the shell row, the owner of
+		 * the stored collapse choice and the viewport rule. `false` = the same bar
+		 * inside the floating card, whose shape is the card the reader dragged — it
+		 * neither reads nor writes the dock's key.
+		 */
+		docked?: boolean;
 	} = $props();
 
 	/**
@@ -75,33 +90,84 @@
 	const retryDisabled = $derived(connection === 'connecting' || connection === 'streaming');
 
 	// --- collapse (T1) ---
-	// The D40 rail pattern (SessionDrawer): collapse lives entirely here. The
-	// bar's width is this component's own style, so `+page.svelte` never learns
-	// about it.
+	// Collapse lives entirely here: the bar's width is this component's own style,
+	// so `+page.svelte` never learns the geometry — it only binds the flag so its
+	// named door can say whether the state surface is open.
 	//
-	// The DEFAULT is COLLAPSED (issue #22): docked at 265px this pane's turn rows
-	// (time / date / location / weather) reprinted what the HUD station in the
-	// thread head already owns, and permanent left chrome is exactly what kept
-	// prose off its reading measure. Both states persist under the SAME key — an
-	// explicit expand writes '0' and is honoured, an absent key means "never
-	// chosen" and starts collapsed, so a fresh install pays ~38px, not 265px.
+	// Issue #98 (owner ruling): the bar is LEFT-DOCKED CHROME — a column of the
+	// 100vh shell row, the chat rail's sibling — and never rides the reading block,
+	// so prose keeps its own measure by LAYOUT, not by this flag. Collapse therefore
+	// follows the CHAT RAIL's rule (SessionDrawer): a stored choice wins, and with no
+	// stored choice the viewport decides — and keeps deciding until the reader
+	// operates the control, which then writes the choice. That supersedes issue
+	// #22's "collapsed at every width", which existed for a 265px column: the bar
+	// measures 12-16rem now, so it only auto-collapses where prose would lose its
+	// 46rem measure.
 	const COLLAPSE_KEY = 'fabulist.statebar.collapsed';
-	let collapsed = $state(true);
+	/**
+	 * The viewport below which the bar starts collapsed. Arithmetic, not taste: the
+	 * collapsed rail (2.4rem = 38.4px + 1px border), the bar's CAP (16rem = 256px,
+	 * border-box), the transcript's page padding (2rem = 32px), its scrollbar
+	 * (~15px) and the 46rem measure (736px) sum to 1078px — so 1080px is that sum
+	 * rounded up, and at every wider viewport the bar can be open while prose keeps
+	 * its full measure.
+	 */
+	const EXPAND_MIN_PX = 1080;
+	/** True once the READER chose a state; an explicit choice outranks the viewport. */
+	let statebarChoice = false;
 
-	function toggleCollapsed(): void {
-		collapsed = !collapsed;
-		// Persist best-effort; `window` is guarded because this can be reached from
-		// an event that also runs during hydration (SSR has no window).
+	/** Best-effort persist; `window` is guarded because an event can run during
+	 *  hydration (SSR has no window). The floating card is NOT the dock — its shape
+	 *  is the card the reader dragged — so it records nothing. */
+	function rememberCollapsed(): void {
+		if (!docked) return;
 		if (typeof window !== 'undefined') {
 			window.localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
 		}
 	}
 
+	function toggleCollapsed(): void {
+		collapsed = !collapsed;
+		if (docked) statebarChoice = true;
+		rememberCollapsed();
+	}
+
+	/** Open the docked bar from anywhere (the head's named door, issue #98). */
+	export function expand(): void {
+		if (!collapsed) return;
+		collapsed = false;
+		statebarChoice = true;
+		rememberCollapsed();
+	}
+
+	/** Close the bar back to its strip (the head door toggles the surface). */
+	export function collapse(): void {
+		if (collapsed) return;
+		collapsed = true;
+		statebarChoice = true;
+		rememberCollapsed();
+	}
+
 	onMount(() => {
 		if (typeof window === 'undefined') return;
-		// Only an explicit expand re-opens the dock; '1' and an absent key both
-		// leave it collapsed (the default above).
-		if (window.localStorage.getItem(COLLAPSE_KEY) === '0') collapsed = false;
+		// Only the DOCK owns a stored width; the floating card starts as it is given.
+		if (!docked) return;
+		const saved = window.localStorage.getItem(COLLAPSE_KEY);
+		// The reader's own choice first — '1' and '0' are both obeyed.
+		if (saved !== null) {
+			statebarChoice = true;
+			collapsed = saved !== '0';
+			return;
+		}
+		// Never chosen: follow the viewport, and keep following it until the reader
+		// operates the control (the rail's own rule).
+		const wide = window.matchMedia(`(min-width: ${EXPAND_MIN_PX}px)`);
+		collapsed = !wide.matches;
+		const onViewport = (event: MediaQueryListEvent): void => {
+			if (!statebarChoice) collapsed = !event.matches;
+		};
+		wide.addEventListener('change', onViewport);
+		return () => wide.removeEventListener('change', onViewport);
 	});
 
 	// --- the session tree ------------------------------------------------------
@@ -698,7 +764,13 @@
 	<header>
 		{#if !collapsed}<h2>State</h2>{/if}
 		<div class="head-right">
-			{#if !collapsed}
+			{#if collapsed}
+				<!-- Issue #98: the strip NAMES itself and keeps a live channel. One mark for
+				     one surface — the same ⊙ rides the head's State door — and its colour is
+				     the connection state's own rule, the one the status line already uses. -->
+				<span class="state-glyph" data-status={connection} aria-hidden="true">⊙</span>
+				<span class="state-word" aria-hidden="true">State</span>
+			{:else}
 				<span class="status" data-status={connection}>{statusLabel[connection]}</span>
 				<button
 					type="button"
@@ -1266,7 +1338,24 @@
 
 <style>
 	.sidebar {
-		width: 15rem;
+		/* Issue #98: the bar is LEFT-DOCKED CHROME — a column of the 100vh shell row,
+		   the chat rail's sibling — so its width is the width its own rows need: a
+		   floor and a cap measured from the real rows (place names, thread titles,
+		   meter rows, an open ✎ id, the retry row), never the rail's 15rem convention.
+		   `border-box` makes the declared width the USED width, so the shell arithmetic
+		   (rail + bar + prose) is exact. */
+		box-sizing: border-box;
+		width: auto;
+		/* The floor: the narrowest bar that still reads at rest — a micro label, a
+		   value and the ✎ door on one line (the header row alone needs 11.7rem). */
+		min-width: 12rem;
+		/* The cap, MEASURED (live, 1600px, a seeded session): the longest row a real
+		   pane produces — a 44-character thread name sharing its line with the state
+		   chip and the ✎ door — needs 16rem to read in two lines; at 13rem it took
+		   three, and a bar wider than this would start pulling width from the prose
+		   for nothing. Past the cap a longer name wraps, which is the content's own
+		   problem, not the bar's width. */
+		max-width: 16rem;
 		/* Issue #66: the dock is a column of the 100vh shell, so the pane FILLS its
 		   height (flex-grow) and can shrink into it (`min-height: 0` — the flex
 		   item's default floor is its content, which is what let a long state tab
@@ -1282,11 +1371,16 @@
 			width 160ms ease,
 			padding 160ms ease;
 	}
-	/* Collapsed state bar (T1): a narrow strip holding only the toggle, mirroring
-	   the D40 rail. The bar is a left-docked column, so width is the animated
-	   axis; everything but the header is dropped from view for the strip. */
+	/* Collapsed state bar (T1): a narrow strip holding the mark, the word and the
+	   toggle, mirroring the D40 rail. The bar is a left-docked column, so width is
+	   the animated axis; everything but the header is dropped from view for the
+	   strip. */
 	.sidebar.collapsed {
 		width: 2.4rem;
+		/* The strip is exactly 2.4rem — the floor and the cap above are the
+		   EXPANDED bar's, and `min-width` would otherwise outrank this width. */
+		min-width: 2.4rem;
+		max-width: 2.4rem;
 		/* Vertical padding only: the collapsed strip is a 2.4rem column holding one
 		   toggle, so horizontal padding is chrome the reader pays for twice (the
 		   rail beside it is the same 2.4rem). Measured 39.4px, matching the rail —
@@ -1300,10 +1394,36 @@
 	.sidebar.collapsed header {
 		flex-direction: column;
 		align-items: center;
+		gap: 0.4rem;
 		/* The pane's undock button is absolutely positioned at the dock's
-		   top-right (z-index 5); keep the toggle below it so it stays
-		   clickable in the narrow collapsed strip. */
+		   top-right (z-index 5); keep the mark, the word and the toggle below it so
+		   they stay clickable in the narrow collapsed strip. */
 		padding: 1.8rem 0 0 0;
+	}
+	/* Issue #98: the strip's mark. Its colour IS the connection state — the same
+	   five-value `data-status` the expanded status line uses (ready/closed muted,
+	   connecting/streaming accent, error danger) — so the strip keeps a live
+	   channel instead of going dark. */
+	.state-glyph {
+		font-size: 1rem;
+		line-height: 1;
+		color: var(--text-muted);
+	}
+	.state-glyph[data-status='streaming'],
+	.state-glyph[data-status='connecting'] {
+		color: var(--accent-strong);
+	}
+	.state-glyph[data-status='error'] {
+		color: var(--danger-text);
+	}
+	/* The word is VERTICAL: the strip is 2.4rem wide, and the job is "this is the
+	   state bar" — a small word read down the column, not a label across it. */
+	.state-word {
+		writing-mode: vertical-rl;
+		font-size: var(--font-micro);
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--text-dim);
 	}
 	header {
 		display: flex;
@@ -1322,6 +1442,9 @@
 		margin-left: auto;
 	}
 	.sidebar.collapsed .head-right {
+		flex-direction: column;
+		align-items: center;
+		gap: 0.3rem;
 		margin-left: 0;
 	}
 	.collapse-btn {

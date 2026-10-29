@@ -184,7 +184,20 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	// `[image: caption]` prefix (captioner path; VLM content-part seam later).
 	let pendingFile = $state<File | null>(null);
 	// R13 panes: sidebars can undock into floating DraggablePanes.
+	// Issue #98: the STATE surface's placement is a persisted shell choice now —
+	// the fourth key, the same pattern as the rail's `fabulist.rail.collapsed` and
+	// the bar's own `fabulist.statebar.collapsed` ('1' = floating, '0' = docked).
+	const STATE_UNDOCK_KEY = 'fabulist.statebar.undocked';
 	let stateUndocked = $state(false);
+	// Issue #98: the head's named door. It binds the bar's own collapse flag (the
+	// bar still OWNS the value + the persistence) and speaks to it through the
+	// exported `expand()` / `collapse()` doors.
+	let statebar = $state<{ expand(): void; collapse(): void } | null>(null);
+	let statebarCollapsed = $state(true);
+	/** The floating card's own shape: the card owns its width, not the dock's key. */
+	let paneStatebarCollapsed = $state(false);
+	/** Visible right now: floating, or docked and open. Drives the door's `active`. */
+	const stateSurfaceOpen = $derived(stateUndocked || !statebarCollapsed);
 	let inspectorOpen = $state(false);
 	let promptsOpen = $state(false);
 	// D51: entity DEFINITIONS live in the Design Studio (personas · worlds ·
@@ -507,12 +520,44 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		void initialize();
 		window.addEventListener('popstate', onPopState);
 		restoreStudioOpen();
+		restoreStatePlacement();
 		return () => {
 			window.removeEventListener('popstate', onPopState);
 			if (stateRefreshTimer !== null) clearTimeout(stateRefreshTimer);
 			clearContextRefetch();
 		};
 	});
+
+	/**
+	 * Issue #98: the state surface's PLACEMENT is remembered (docked or floating),
+	 * the fourth persisted shell choice. `placeState` is the ONE writer, so the
+	 * undock door, the floating card's close door and the head door all record the
+	 * reader's choice the same way the rail records its collapse.
+	 */
+	function placeState(undocked: boolean): void {
+		stateUndocked = undocked;
+		if (typeof window === 'undefined') return;
+		window.localStorage.setItem(STATE_UNDOCK_KEY, undocked ? '1' : '0');
+	}
+
+	/** Restore the remembered placement (absent key = docked, the shipped default). */
+	function restoreStatePlacement(): void {
+		if (window.localStorage.getItem(STATE_UNDOCK_KEY) === '1') stateUndocked = true;
+	}
+
+	/**
+	 * The head's named door (issue #98). One button, one surface: it opens the docked
+	 * bar, closes it back to its strip, and re-docks a floating card. The bar's own
+	 * state is the truth — this door never guesses it.
+	 */
+	function toggleStateSurface(): void {
+		if (stateUndocked) {
+			placeState(false);
+			return;
+		}
+		if (statebarCollapsed) statebar?.expand();
+		else statebar?.collapse();
+	}
 
 	/**
 	 * D51: the shell persists `{open, dock, width, kind, …}` but never writes its
@@ -2119,11 +2164,13 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 			x={statePanePos.x}
 			y={statePanePos.y}
 			w={300}
-			onclose={() => (stateUndocked = false)}
+			onclose={() => placeState(false)}
 		>
 			{#snippet children()}
 				<div class="pane-body">
 					<StateSidebar
+						bind:collapsed={paneStatebarCollapsed}
+						docked={false}
 						facts={$facts}
 						connection={$connection}
 						connectionError={$connectionError}
@@ -2135,15 +2182,20 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		</DraggablePane>
 	{:else}
 		<div class="side-dock">
+			<!-- Issue #98: the undock door names itself, like every other door in the
+			     head, and it is the ONE writer for the remembered placement. -->
 			<button
 				type="button"
 				class="undock-btn"
 				title="Undock into a floating pane (R13)"
-				onclick={() => (stateUndocked = true)}
+				aria-label="Undock the state bar into a floating pane"
+				onclick={() => placeState(true)}
 			>
 				⧉
 			</button>
 			<StateSidebar
+				bind:this={statebar}
+				bind:collapsed={statebarCollapsed}
 				facts={$facts}
 				connection={$connection}
 				connectionError={$connectionError}
@@ -2267,6 +2319,20 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 						onclick={() => (proposalsOpen = !proposalsOpen)}
 					>
 						<span class="shell-glyph" aria-hidden="true">⚖</span>
+					</button>
+					<!-- Issue #98 (owner ruling): the state surface's NAMED door. Same mark as
+					     its strip (⊙), same button shape as every other Observe door, so a
+					     reader can see that a state bar exists and open it again even when
+					     the strip is the only part of it on screen. -->
+					<button
+						type="button"
+						class="shell-btn"
+						class:active={stateSurfaceOpen}
+						title="State — the session tree and the live connection state"
+						aria-label="State — the session tree and the live connection state"
+						onclick={toggleStateSurface}
+					>
+						<span class="shell-glyph" aria-hidden="true">⊙</span>
 					</button>
 				</div>
 				<!-- D51: entity definitions live in this one surface; assembly stays in
@@ -2604,6 +2670,14 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 		padding: 0.6rem;
 		max-height: 70vh;
 		overflow: auto;
+	}
+	/* Issue #98: the content-derived width (a floor and a cap) belongs to the
+	 * DOCKED column only — the floating card's bar fills the card it was dropped
+	 * into. */
+	.pane-body :global(.sidebar) {
+		width: 100%;
+		min-width: 0;
+		max-width: none;
 	}
 	.chat {
 		display: flex;
