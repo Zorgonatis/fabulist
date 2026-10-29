@@ -12,6 +12,13 @@ pins exactly that — no engine surface is involved:
 1. **Left.** The docked state pane is COLLAPSED by default and both of its states
    persist under the existing key; the session rail auto-collapses below 1440px
    but an EXPLICIT choice (a stored ``'1'``/``'0'``) is never overruled.
+   (Issue #98, owner ruling, refines this: the bar's MOUNT is unchanged — it is
+   still the shell row's second child, docked at the left beside the rail — but
+   its collapse now follows the rail's `stored choice > viewport` rule with the
+   bar's own arithmetic as the threshold (1080px), so it is open by default at
+   every width where prose still keeps its 46rem; see
+   ``test_state_dock_collapse_follows_the_rail_rule`` and
+   ``test_state_bar_stays_docked_in_the_shell_row``.)
 2. **Vertical.** The attach control is one of the composer's actions (the row
    exists only while a file is pending or an error is showing); the HUD is a band
    INSIDE the thread head rather than its own row; the DSL strip renders only
@@ -93,24 +100,128 @@ def style_declarations(css: str, prop: str) -> list[str]:
 # --- 1. LEFT: the two persisted collapse defaults --------------------------------
 
 
-def test_state_dock_starts_collapsed_and_persists_both_states():
-    """The docked state pane is collapsed BY DEFAULT; both states persist."""
+def test_state_dock_collapse_follows_the_rail_rule():
+    """Issue #98 (owner ruling): the dock's collapse obeys the CHAT RAIL's rule.
+
+    A stored ``'1'``/``'0'`` is obeyed; with no stored choice the component follows
+    the viewport and keeps following it until the reader operates the control; the
+    control writes the choice, so the reader always wins. Both states persist under
+    the existing key.
+
+    This supersedes issue #22's "collapsed at every width" (which existed because a
+    265px LEFT column cost prose its measure): the bar is left-docked chrome that
+    measures 12-16rem now, so it only starts collapsed below its own arithmetic
+    (``EXPAND_MIN_PX`` = 1080px), where prose would lose its 46rem measure.
+    """
     src = read(STATE)
     assert "fabulist.statebar.collapsed" in src, "the dock's persistence key moved"
-    # Default collapsed: the reactive initialiser, not an onMount flag.
-    assert re.search(r"let collapsed = \$state\(true\)", src), (
-        "the state dock must START collapsed (issue #22): its turn rows duplicate the HUD"
+    # Collapsed is the initial value in both worlds (SSR has no viewport).
+    assert re.search(r"collapsed = \$bindable\(true\)", src), (
+        "the dock must start collapsed so the first paint never reflows"
     )
-    # An absent key means "never chosen" -> collapsed; only '0' re-opens it.
+    # The threshold is STATED arithmetic, not a magic number.
+    assert re.search(r"EXPAND_MIN_PX = 1080", src), (
+        "the auto-collapse threshold must be one named, stated value"
+    )
     mount = re.search(r"onMount\(\(\) => \{(.*?)\n\t\}\);", src, flags=re.DOTALL)
     assert mount, "the dock's onMount restore is gone"
     body = mount.group(1)
-    assert "getItem(COLLAPSE_KEY) === '0'" in body, (
-        "an explicit expand must be the only thing that re-opens the dock"
+    # The stored choice is honoured BEFORE the viewport rule is consulted...
+    assert "getItem(COLLAPSE_KEY)" in body
+    assert body.index("getItem(COLLAPSE_KEY)") < body.index("matchMedia"), (
+        "a stored choice must outrank the viewport"
     )
-    assert "=== '1'" not in body, "a stored '1' must not be required to stay collapsed"
-    # Both states are written back on toggle.
+    # ...which is a media query, not a one-shot innerWidth read...
+    assert "matchMedia" in body, "auto-collapse must follow resizes"
+    assert "if (!statebarChoice) collapsed = !event.matches" in body, (
+        "a resize may only move the bar while the reader has not chosen"
+    )
+    # ...and both states are written back on every control, the head door included.
     assert "setItem(COLLAPSE_KEY, collapsed ? '1' : '0')" in src
+    assert "statebarChoice = true" in src
+    # The head's named door drives the same component-owned state.
+    assert re.search(r"export function expand\(\)", src)
+    assert re.search(r"export function collapse\(\)", src)
+    # The floating card is not the dock: it must not read or write the dock's key.
+    assert "if (!docked) return;" in src, "the floating card must not steer the dock"
+
+
+def test_state_bar_stays_docked_in_the_shell_row():
+    """Issue #98 (owner ruling): THE MOUNT DOES NOT CHANGE.
+
+    "I want the bar anchored to the left of the screen (or anywhere else that it can
+    sit) similar to the chat panel." The bar stays the shell row's second child —
+    between the chat rail and the thread, riding the 100vh column — and never rides
+    the transcript's reading block: no transcript snippet, no grid wrapper, no
+    measure/alignment change in ``TranscriptList``.
+    """
+    page = read(PAGE)
+    assert '<div class="side-dock">' in page, "the dock column left the shell row"
+    assert "snippet stateDock" not in page, "the bar must not be handed to the transcript"
+    assert "dock={" not in page, "no dock slot may be passed down to the transcript"
+    # The dock is still the shell's own column: full height, shrinkable, scrolling
+    # inside itself (#66) rather than growing the document.
+    dock = rule_bodies(style_block(PAGE), ".side-dock")
+    assert dock, "the dock column's rule is gone"
+    assert "flex-direction: column" in dock[0]
+    assert "min-height: 0" in dock[0]
+    # The transcript is untouched by this issue: no reading block, and it never
+    # learns that a state bar exists.
+    transcript = read(TRANSCRIPT)
+    assert "reading-block" not in transcript
+    assert "StateSidebar" not in transcript
+
+
+def test_state_surface_has_a_named_door_a_mark_and_a_persisted_placement():
+    """Issue #98: one surface, one mark, one remembered placement.
+
+    The head's Observe group gains a ``State`` door with the same ⊙ the collapsed
+    strip carries; the strip's mark is coloured by the live connection state (the
+    bar's own ``data-status`` rule); the undock door finally has an aria-label; and
+    docked-or-floating persists under a fourth shell key, the rail's pattern.
+    """
+    page = read(PAGE)
+    state = read(STATE)
+    # The fourth persisted shell choice, written by ONE function.
+    assert "fabulist.statebar.undocked" in page, "the placement key is gone"
+    assert "setItem(STATE_UNDOCK_KEY, undocked ? '1' : '0')" in page
+    assert len(re.findall(r"placeState\(", page)) >= 3, (
+        "every placement door must go through placeState()"
+    )
+    # The door: same ⊙ as the strip, same .shell-btn shape as its peers, and it
+    # says whether the surface is open.
+    assert 'aria-label="State — the session tree and the live connection state"' in page
+    assert '<span class="shell-glyph" aria-hidden="true">⊙</span>' in page
+    assert re.search(r'class="shell-btn"\s*\n\s*class:active=\{stateSurfaceOpen\}', page)
+    # The strip NAMES itself and keeps a live channel.
+    assert re.search(r'class="state-glyph" data-status=\{connection\}', state)
+    assert "class=\"state-word\"" in state
+    css = style_block(STATE)
+    assert "writing-mode: vertical-rl" in css, "the strip's word is read down the column"
+    for status in ("streaming", "connecting", "error"):
+        assert f".state-glyph[data-status='{status}']" in css, (
+            f"the strip's mark must carry the {status} colour"
+        )
+    # The undock door is labelled for a screen reader (it had only a title).
+    assert 'aria-label="Undock the state bar into a floating pane"' in page
+    # The live turn-gate clicks this label BY NAME — it must survive.
+    assert "'Expand state bar'" in state
+
+
+def test_state_bar_width_follows_its_content_between_floor_and_cap():
+    """Issue #98: floor 12rem, cap 16rem, border-box; the strip stays 2.4rem."""
+    css = style_block(STATE)
+    body = rule_bodies(css, ".sidebar")[0]
+    assert "box-sizing: border-box" in body, "the declared width must be the USED width"
+    assert "width: auto" in body, "the bar's width follows its rows, not a convention"
+    assert "min-width: 12rem" in body, "the measured floor is 12rem"
+    assert "max-width: 16rem" in body, "the measured cap is 16rem"
+    strip = rule_bodies(css, ".sidebar.collapsed")[0]
+    assert "width: 2.4rem" in strip, "the collapsed strip keeps its 2.4rem width"
+    assert "min-width: 2.4rem" in strip, "the floor must not outrank the strip width"
+    assert "max-width: 2.4rem" in strip
+    # The floating card fills the card it was dropped into: floor/cap are the dock's.
+    assert ".pane-body :global(.sidebar)" in style_block(PAGE)
 
 
 def test_rail_auto_collapses_below_1440_unless_the_reader_chose():
