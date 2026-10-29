@@ -8,6 +8,18 @@ detail; this file is an index, not a report. Versioning follows
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-10-28
+
+### Fixed
+
+- Imported lorebook comma keys match again: keys split at the parse seam, and the size advisory names the active entries and their ratio (#95)
+- The user persona is findable without help: a chip at the composer, the rail block first and ungated, the studio door says what it does (#94)
+- The docked state bar follows the chat rail's collapse rule, keeps a state glyph and a named door, and remembers its placement (#98)
+
+### Changed
+
+- The README opens with what the product is; operator depth moves to docs/MODELS-SIDECAR.md and docs/CONFIGURATION.md (#93)
+
 ## [0.0.5] - 2026-10-26
 
 ### Fixed
