@@ -101,18 +101,26 @@
 	// stored choice the viewport decides — and keeps deciding until the reader
 	// operates the control, which then writes the choice. That supersedes issue
 	// #22's "collapsed at every width", which existed for a 265px column: the bar
-	// measures 12-16rem now, so it only auto-collapses where prose would lose its
-	// 46rem measure.
+	// measures 12-16rem now, so it only auto-collapses where opening it would cost
+	// the shell something (see EXPAND_MIN_PX).
 	const COLLAPSE_KEY = 'fabulist.statebar.collapsed';
 	/**
-	 * The viewport below which the bar starts collapsed. Arithmetic, not taste: the
-	 * collapsed rail (2.4rem = 38.4px + 1px border), the bar's CAP (16rem = 256px,
-	 * border-box), the transcript's page padding (2rem = 32px), its scrollbar
-	 * (~15px) and the 46rem measure (736px) sum to 1078px — so 1080px is that sum
-	 * rounded up, and at every wider viewport the bar can be open while prose keeps
-	 * its full measure.
+	 * The viewport below which the bar starts collapsed. Two measured constraints,
+	 * and the tighter one wins:
+	 *
+	 * - PROSE: the collapsed rail (2.4rem = 38.4px + 1px border), the bar's CAP
+	 *   (16rem = 256px, border-box), the transcript's page padding (2rem = 32px),
+	 *   its scrollbar (~15px) and the 46rem measure (736px) sum to 1078px.
+	 * - THE HEAD: its actions row wraps its groups (`.head-actions` is
+	 *   `flex-wrap: wrap`) when the thread gets tight, and a wrap is a THIRD row
+	 *   of vertical chrome (#22). Measured with the bar open: 1140px still wraps,
+	 *   1150px does not — so 1160px clears the boundary with ~10px of slack.
+	 *
+	 * 1160px is therefore the width below which the bar costs the shell something;
+	 * at or above it the expanded bar is free (prose keeps 46rem, the head keeps
+	 * one actions row), which is the point of opening it by default.
 	 */
-	const EXPAND_MIN_PX = 1080;
+	const EXPAND_MIN_PX = 1160;
 	/** True once the READER chose a state; an explicit choice outranks the viewport. */
 	let statebarChoice = false;
 

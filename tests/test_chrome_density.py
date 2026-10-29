@@ -15,8 +15,8 @@ pins exactly that — no engine surface is involved:
    (Issue #98, owner ruling, refines this: the bar's MOUNT is unchanged — it is
    still the shell row's second child, docked at the left beside the rail — but
    its collapse now follows the rail's `stored choice > viewport` rule with the
-   bar's own arithmetic as the threshold (1080px), so it is open by default at
-   every width where prose still keeps its 46rem; see
+   bar's own arithmetic as the threshold (1160px), so it is open by default at
+   every width where opening it costs the shell nothing; see
    ``test_state_dock_collapse_follows_the_rail_rule`` and
    ``test_state_bar_stays_docked_in_the_shell_row``.)
 2. **Vertical.** The attach control is one of the composer's actions (the row
@@ -119,8 +119,10 @@ def test_state_dock_collapse_follows_the_rail_rule():
     assert re.search(r"collapsed = \$bindable\(true\)", src), (
         "the dock must start collapsed so the first paint never reflows"
     )
-    # The threshold is STATED arithmetic, not a magic number.
-    assert re.search(r"EXPAND_MIN_PX = 1080", src), (
+    # The threshold is STATED arithmetic, not a magic number: 1160px is where the
+    # expanded bar stops costing the shell anything (prose keeps 46rem at 1078px;
+    # the head's actions row stops wrapping between 1140 and 1150).
+    assert re.search(r"EXPAND_MIN_PX = 1160", src), (
         "the auto-collapse threshold must be one named, stated value"
     )
     mount = re.search(r"onMount\(\(\) => \{(.*?)\n\t\}\);", src, flags=re.DOTALL)
