@@ -95,10 +95,11 @@ services:
   # load request per model id), so the ~2.7 GiB of HuggingFace weights land in
   # the cache volume then — NOT in the middle of a new chat's first turn, where
   # the wait looked like a failure (issue #64). The healthcheck below gates on
-  # that warmup, so the engine is never started against a cold sidecar. There is
-  # no CPU profile: this build falls back to CPU natively when no Vulkan device
-  # is found (the entrypoint says so loudly), so a GPU-less host needs no second
-  # file.
+  # that warmup, so the engine is never started against a cold sidecar. The
+  # models run on the CPU by default (issue #102): no VRAM needed, and it boots
+  # on any machine. `FABULIST_SIDECAR_DEVICE` moves them onto a GPU — the opt-in,
+  # about 15x faster on a rerank — and the same build falls back to CPU natively
+  # when no Vulkan device is found, so a CPU host needs no second preset.
   fabulist-models:
     # Pinned by TAG, not :latest — the d1 decision model is a new arch
     # (lfm2-d1, upstream #30110, 2026-10-08) and an older image lacks the
@@ -155,19 +156,23 @@ services:
       # The budget is seconds; keep healthcheck.start_period at or above it.
       FABULIST_SIDECAR_WARMUP: ${FABULIST_SIDECAR_WARMUP:-on}
       FABULIST_SIDECAR_WARMUP_TIMEOUT: ${FABULIST_SIDECAR_WARMUP_TIMEOUT:-1800}
-      # Which Vulkan device to use. Vulkan enumerates in ITS OWN order (index 0
-      # is not necessarily your first card — on the maintainer's two-GPU box
-      # Vulkan0 is the NVIDIA card and Vulkan1 the AMD one), so the entrypoint
-      # refuses to guess when several devices are visible. Set ONE of these in
-      # .env:
-      #   FABULIST_SIDECAR_DEVICE=Vulkan0     (a bare `0` is accepted too)
+      # Which backend the models run on. The shipped default is CPU: no VRAM is
+      # needed and it boots on any machine, and the cost is the recall path (a
+      # warm 10-doc rerank is 64-71 ms on a GPU, about 1.1 s on the CPU). A GPU
+      # is the opt-in, for a host with VRAM to spare: about 4.5 GiB resident,
+      # 6 GiB comfortable. Vulkan enumerates in ITS OWN order (index 0 is not
+      # necessarily your first card — on the maintainer's two-GPU box Vulkan0 is
+      # the NVIDIA card and Vulkan1 the AMD one), so nothing is chosen for you.
+      # Set ONE of these in .env:
       #   FABULIST_SIDECAR_DEVICE=cpu         (or `none`: no offload — models stay
-      #                                        on the CPU even when a GPU is visible)
+      #                                        on the CPU even when a GPU is
+      #                                        visible. This is the default.)
+      #   FABULIST_SIDECAR_DEVICE=Vulkan0     (a bare `0` is accepted too)
       #   FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"   (name substring)
-      # Exactly one visible device needs no setting; zero visible devices is
-      # the build's native CPU fallback (warned, not fatal); an explicit id
-      # that does not exist is a boot failure. Both empty = auto-or-fail.
-      FABULIST_SIDECAR_DEVICE: ${FABULIST_SIDECAR_DEVICE:-}
+      # An explicit id that does not exist, or a match that resolves to none or
+      # to several devices, is a boot failure that lists what the host exposes.
+      # The low-VRAM check only warns: it never switches a request back to CPU.
+      FABULIST_SIDECAR_DEVICE: ${FABULIST_SIDECAR_DEVICE:-cpu}
       FABULIST_SIDECAR_DEVICE_MATCH: ${FABULIST_SIDECAR_DEVICE_MATCH:-}
       # NVIDIA-on-Vulkan needs the `graphics` driver capability; without it the
       # container can have the GPU reserved and still enumerate no Vulkan
