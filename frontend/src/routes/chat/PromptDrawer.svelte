@@ -48,6 +48,7 @@
 	// this lane's owned files, so these import the module directly — the same
 	// pattern `Composer.svelte` uses for `#lib/api/imagegen`.
 	import {
+		DEFAULT_HISTORY_STRIP_DSL,
 		exportPreset,
 		getFactoryDirectives,
 		importPreset,
@@ -557,7 +558,8 @@
 			regexes: (s.regexes ?? []).map((row) => ({ ...row })),
 			history: {
 				depth: s.history?.depth ?? null,
-				strip_dsl: s.history?.strip_dsl ?? null
+				strip_dsl: s.history?.strip_dsl ?? null,
+				dsl_keep_last: s.history?.dsl_keep_last ?? null
 			},
 			directives: sortStringMap(s.directives ?? {})
 		});
@@ -1031,8 +1033,22 @@
 		setSurfaces({ ...surfaces, regexes: regexRows.filter((_, i) => i !== index) });
 	}
 
+	/** Merge one history-knob patch into the draft's `surfaces.history`. An empty
+	 * control means "use the engine default", so the key is DROPPED rather than
+	 * written: the strip box displays the engine default for a preset that stores
+	 * none, and storing that same value back would mark an untouched preset dirty
+	 * (and save a choice the owner never made). A preset that already stores the
+	 * value keeps it — re-checking the box returns the draft to its baseline. */
 	function setHistory(patch: PromptHistorySurfaces): void {
-		setSurfaces({ ...surfaces, history: { ...(surfaces.history ?? {}), ...patch } });
+		const next: PromptHistorySurfaces = { ...(surfaces.history ?? {}), ...patch };
+		const stored = baseline?.surfaces?.history ?? {};
+		if (next.strip_dsl === DEFAULT_HISTORY_STRIP_DSL && stored.strip_dsl === undefined) {
+			delete next.strip_dsl;
+		}
+		for (const key of ['depth', 'strip_dsl', 'dsl_keep_last'] as const) {
+			if (next[key] === undefined) delete next[key];
+		}
+		setSurfaces({ ...surfaces, history: next });
 	}
 
 	// --- W3 directive rows (ordered, full CRUD) --------------------------------
@@ -1539,7 +1555,8 @@
 							<button type="button" class="entry-btn" onclick={() => showView('advanced')}>
 								<span class="entry-title">Advanced</span>
 								<span class="entry-sub">
-									Token text — component library, recalled framing, regex, history
+									Text the engine fills in — the component list, recalled memories and older
+									turns
 								</span>
 							</button>
 						</div>
