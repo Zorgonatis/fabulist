@@ -15,6 +15,7 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Changed
 
+- A header's controls anchor to its first row instead of its centre: the studio window buttons and the collapsed state bar control sit at the top right (#103)
 - The models sidecar runs on the CPU unless a GPU is asked for; unset no longer takes a visible device or fails on two, and the GPU opt-in carries its measured cost (#102)
 - The keep-last panel window is editable next to History depth, and the panel-strip control now shows the engine's real default instead of its opposite (#100)
 - The studio's Queries pane is named Repair triggers — a row is the cause, the repair is the effect (#99)
