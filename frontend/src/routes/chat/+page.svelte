@@ -1195,8 +1195,12 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 				return false;
 			}
 			connection.set('idle');
-			await openSession(outcome.sessionId);
+			// Issue #108: `refreshSessions()` BEFORE `openSession()` — `openSession`
+			// reads the new line's title from the session store, and the list has to
+			// hold the branch first or the header falls back to "New chat". Same
+			// order the compaction path documents (see `compactNow` below).
 			await refreshSessions();
+			await openSession(outcome.sessionId);
 			return true;
 		} finally {
 			branchBusy = false;
@@ -1270,8 +1274,11 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 
 		if (outcome.status === 'done' && outcome.branchId) {
 			connection.set('idle');
-			await openSession(outcome.branchId, committedNarrSeq);
+			// Issue #108: the list first, then open — `openSession` reads the branch's
+			// title from the session store, so refreshing afterwards left the header
+			// on "New chat" until a reload (the compaction path's documented order).
 			await refreshSessions();
+			await openSession(outcome.branchId, committedNarrSeq);
 			return;
 		}
 		if (outcome.status === 'error') {

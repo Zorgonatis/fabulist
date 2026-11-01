@@ -110,6 +110,40 @@ def _session_ids(log: "EventLog") -> list[str]:
     return [row[0] for row in rows if not row[0].startswith("__")]
 
 
+def _chain_title(chain: list) -> str:
+    """The latest NON-EMPTY title on a session's fork chain (issue #108).
+
+    The DISPLAY fold, deliberately separate from the rename revision TARGET
+    (``_summarize``'s ``_title_event``, which stays the branch's own row per
+    issue #86). A branch whose own title row is blank has nothing better to
+    show than the name of the line it was cut from -- the pre-#86 forks own no
+    title row at all, and a fork of an untitled chat pins ``""``. Both read as
+    "Untitled chat" today even though the ancestor carries a name.
+
+    Blank titles are skipped rather than folded (the rule
+    :func:`fabulist.graph.context_monitor.session_title` already applies to
+    compaction successors), so a ``""`` pin never masks an ancestor's name. That
+    cannot hide a deliberate blank: ``rename_session`` rejects an empty title
+    with 422, so no user choice can be an empty title.
+    """
+    title = ""
+    for event in chain:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            continue
+        if getattr(event, "type", None) == "system" and payload.get("event") in _TITLE_EVENTS:
+            value = payload.get("title")
+            if isinstance(value, str) and value.strip():
+                title = value
+        elif getattr(event, "type", None) == "revision":
+            revised = payload.get("revised")
+            if isinstance(revised, dict):
+                value = revised.get("title")
+                if isinstance(value, str) and value.strip():
+                    title = value
+    return title
+
+
 def _summarize(log: "EventLog", session_id: str) -> dict | None:
     """Derive one session's title/visibility/turn-count/updated_at from rows.
 
@@ -126,9 +160,17 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
     values its parent had at the cut -- the same values the engine already
     resolves (:func:`fabulist.personas.registry.chat_persona_state`,
     :mod:`fabulist.context.facts`), so the rail badge and the prompt agree. The
-    title/visibility/turn-count half stays OWN-row: ``_title_event`` is the
-    rename revision's TARGET, and a rename on a branch must supersede the
-    branch's own title carry row, never the parent's (#86 constraint).
+    title REVISION TARGET and the visibility/turn-count half stay OWN-row:
+    ``_title_event`` is the rename revision's TARGET, and a rename on a branch
+    must supersede the branch's own title carry row, never the parent's (#86
+    constraint).
+
+    The title VALUE shown here is the one exception (issue #108, Option B): a
+    blank own title means "this line has no name of its own", not "this line is
+    nameless", so it falls back to the latest non-empty title on the chain
+    (:func:`_chain_title`). That heals every already-pinned empty name with no
+    log write, and it cannot hide a deliberate blank -- ``rename_session``
+    rejects an empty title with 422. The rename TARGET is untouched by it.
     """
     events = log.get_events(session_id)
     if not events:
@@ -228,6 +270,12 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
             enabled = event.payload.get("enabled")
             if isinstance(enabled, bool):
                 memory_enabled = enabled
+
+    # Issue #108: an empty OWN title is absence on display, not a name -- fall
+    # back to the chain. ``_title_event``/``_title_payload`` above are the
+    # branch's own anchor and stay exactly as the own-row loop found them.
+    if not title.strip():
+        title = _chain_title(chain)
 
     return {
         "session_id": session_id,
