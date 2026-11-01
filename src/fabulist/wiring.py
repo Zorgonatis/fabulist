@@ -831,6 +831,33 @@ def _decision_observer(log: EventLog) -> Callable[[dict], None]:
     return observe
 
 
+def _ordered_segment_text(segments: Any) -> str | None:
+    """One narrative row's segments in DOCUMENT ORDER, or ``None`` when unusable.
+
+    Issue #100: the windowed (unstripped) projection renders the turn as it was
+    written — ``prose`` and ``dsl`` segments interleaved, never the prose channel
+    alone. ``None`` means the row carries no usable ``segments`` list (a legacy,
+    pre-split payload): the caller falls back to its ``prose``.
+
+    The join is the compiler's own rule
+    (:func:`fabulist.prompts.compiler._prose_from_segments`): blocks separated by
+    a blank line, each block stripped, empty and non-mapping segments skipped —
+    so the two projections emit the same bytes for the same row.
+    """
+    if not isinstance(segments, (list, tuple)) or not segments:
+        return None
+    texts: list[str] = []
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        text = str(segment.get("text", "")).strip()
+        if text:
+            texts.append(text)
+    if not texts:
+        return None
+    return "\n\n".join(texts)
+
+
 def history_from_log(
     log: EventLog,
     session_id: str,
@@ -851,6 +878,16 @@ def history_from_log(
     ``surfaces``-carried regex list are the preset-overridable projection knobs.
     ``dsl_keep_last`` (default 3) unstrips the newest narratives — the model
     sees its own recent panels in place (D34; no reinjection seam).
+
+    Issue #100: the D34 window unstrips the CHANNELS, not the prose bytes. The
+    commit path (``graph/nodes.py``) stores ``prose`` (the joined ``prose``
+    segments ONLY), ``dsl`` and the ordered ``segments`` separately — so a
+    narrative inside the window is built from its ``segments`` in document order
+    (prose and DSL interleaved exactly as written), while a row below the window
+    keeps the prose-only projection, byte-identical to before. A legacy row with
+    no ``segments`` list falls back to its ``prose`` channel; nothing is invented.
+    The join mirrors :func:`fabulist.prompts.compiler._prose_from_segments` so
+    both history projections render the SAME bytes for the same row.
 
     ``drop_current_user`` (OFF by default) drops the turn's OWN user row from
     the projection — the newest user row, POSITIONALLY, never by matching the
@@ -1019,11 +1056,17 @@ def history_from_log(
             message_seqs.append(item["seq"])
         else:
             do_strip = strip and (keep_from_seq is None or item["seq"] < keep_from_seq)
-            prose = (
-                strip_dsl(payload.get("prose", ""))
-                if do_strip
-                else payload.get("prose", "")
-            )
+            if do_strip:
+                prose = strip_dsl(payload.get("prose", ""))
+            else:
+                # Issue #100: inside the keep-last window the message comes from
+                # the row's ORDERED SEGMENTS. ``prose`` holds the prose channel
+                # only (the commit path stores the DSL separately), so unstripping
+                # the prose restored nothing — the window was a no-op on real
+                # data. ``None`` (no usable ``segments``) = a legacy row: the
+                # prose channel stands, exactly as before.
+                ordered = _ordered_segment_text(payload.get("segments"))
+                prose = ordered if ordered is not None else payload.get("prose", "")
             if prose:
                 message = {"role": "assistant", "content": prose}
                 # Issue #42: a turn that PRODUCED ``reasoning_content`` must bring

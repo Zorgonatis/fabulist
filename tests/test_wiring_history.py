@@ -45,6 +45,15 @@ def _cold_component_caches():
 
 
 def _seed(log: EventLog) -> str:
+    """Two turns in the shape the engine ACTUALLY commits (issue #100).
+
+    ``graph/nodes.py`` stores ``prose`` as the joined ``prose`` segments ONLY,
+    plus ``dsl`` and the ordered ``segments`` as separate fields. The old fixture
+    wrote the DSL *inside* prose — a payload the engine never produces — which is
+    exactly why the D34 window looked like it worked while being a no-op on real
+    data: ``strip_dsl(prose)`` had something to strip. Never write that shape
+    here again; a fixture that lies hides the defect it is meant to pin.
+    """
     sid = "base"
     log.append_event(sid, "system", "system", {"event": "session_created"})
     log.append_event(sid, "user", "user", {"text": "I enter the tavern."})
@@ -53,7 +62,7 @@ def _seed(log: EventLog) -> str:
         "narrative",
         "narrator",
         {
-            "prose": "card = ArtifactCard(\"Damp\", \"Tavern\")\nThe fire crackles.",
+            "prose": "The fire crackles.",
             "dsl": 'card = ArtifactCard("Damp", "Tavern")',
             "segments": [
                 {"kind": "dsl", "text": 'card = ArtifactCard("Damp", "Tavern")'},
@@ -88,7 +97,9 @@ def test_history_strips_dsl_from_prose(tmp_path):
     log = EventLog(tmp_path / "h.db")
     base = _seed(log)
     # D34 default: the newest 3 narratives keep their DSL in place (the model
-    # sees its own recent panels; no reinjection seam).
+    # sees its own recent panels; no reinjection seam). The tavern turn's DSL is
+    # a SEPARATE channel, so this only passes if the window reads ``segments``
+    # (issue #100 — the pre-fix code unstripped a prose field that held no DSL).
     hist = history_from_log(log, base)
     assert "ArtifactCard" in hist[1]["content"]
     assert "fire crackles" in hist[1]["content"]
@@ -110,9 +121,143 @@ def test_history_keeps_only_newest_three_narratives_dsl(tmp_path):
             {"prose": f"beat {i}.", "dsl": "", "segments": [{"kind": "prose", "text": f"beat {i}."}]},
         )
     hist = history_from_log(log, base)
-    # The tavern DSL turn is now the 4th-newest narrative -> stripped at default.
+    # The tavern turn is now the 5th-newest narrative (the window covers only the
+    # last 3) -> stripped at default.
     assert "ArtifactCard" not in hist[1]["content"]
     assert "fire crackles" in hist[1]["content"]
+
+
+# --- Issue #100: the D34 window restores the DSL CHANNEL, not prose bytes -----
+#
+# The commit path stores ``prose`` (the joined ``prose`` segments ONLY), ``dsl``
+# and the ordered ``segments`` as SEPARATE fields, so a narrative's prose never
+# contains DSL. Applying ``strip_dsl`` to it — or choosing not to — changed
+# nothing: the window was a no-op on every row the engine actually wrote. A
+# narrative at or after ``keep_from_seq`` renders its ORDERED SEGMENTS; rows
+# below the window keep today's prose-only projection, byte-identical.
+
+
+def _panel(no: int) -> tuple[str, str]:
+    """``(dsl statement, prose)`` for beat ``no`` in the committed split."""
+    return (f'card = ArtifactCard("Panel{no}", "Room{no}")', f"beat {no}.")
+
+
+def _append_committed(
+    log: EventLog, sid: str, *, prose: str, dsl: str = "", segments=None
+) -> None:
+    """Append a narrative exactly as ``graph/nodes.py`` commits one.
+
+    Prose WITHOUT the DSL, the DSL in its own field, and the segments in
+    document order (dsl first here, matching what the raw stream yields for a
+    panel-then-prose turn).
+    """
+    if segments is None:
+        segments = ([{"kind": "dsl", "text": dsl}] if dsl else []) + (
+            [{"kind": "prose", "text": prose}] if prose else []
+        )
+    log.append_event(
+        sid, "narrative", "narrator", {"prose": prose, "dsl": dsl, "segments": segments}
+    )
+
+
+def test_the_window_renders_kept_turns_from_their_segments(tmp_path):
+    """Issue #100: the newest narratives keep their panel, older ones strip it.
+
+    FAILS before the fix: the kept rows rendered ``payload["prose"]``, which
+    holds no DSL, so no panel reached the model at all.
+    """
+    log = EventLog(tmp_path / "window.db")
+    sid = "window"
+    for no in range(3):
+        dsl, prose = _panel(no)
+        log.append_event(sid, "user", "user", {"text": f"turn {no}"})
+        _append_committed(log, sid, prose=prose, dsl=dsl)
+
+    hist = history_from_log(log, sid, surfaces={"history": {"dsl_keep_last": 2}})
+    assistants = [m["content"] for m in hist if m["role"] == "assistant"]
+    # Below the window: today's prose-only projection, byte-identical.
+    assert assistants[0] == "beat 0."
+    # Inside the window: the ordered segments — the panel is back, in place.
+    assert assistants[1] == 'card = ArtifactCard("Panel1", "Room1")\n\nbeat 1.'
+    assert assistants[2] == 'card = ArtifactCard("Panel2", "Room2")\n\nbeat 2.'
+
+
+def test_a_kept_turn_preserves_the_document_order_of_both_channels(tmp_path):
+    """Prose -> DSL -> prose stays in that order (never grouped by channel)."""
+    log = EventLog(tmp_path / "order.db")
+    sid = "order"
+    log.append_event(sid, "user", "user", {"text": "one"})
+    _append_committed(
+        log,
+        sid,
+        prose="Opening.\nClosing.",  # the joined prose channel, as committed
+        dsl='card = ArtifactCard("Mid", "Room")',
+        segments=[
+            {"kind": "prose", "text": "Opening."},
+            {"kind": "dsl", "text": 'card = ArtifactCard("Mid", "Room")'},
+            {"kind": "prose", "text": "Closing."},
+        ],
+    )
+    assert history_from_log(log, sid)[-1]["content"] == (
+        'Opening.\n\ncard = ArtifactCard("Mid", "Room")\n\nClosing.'
+    )
+
+
+def test_rows_without_segments_keep_the_prose_projection(tmp_path):
+    """Legacy rows (no ``segments``) fall back to prose — no crash, no invented DSL."""
+    log = EventLog(tmp_path / "legacy-shape.db")
+    sid = "legacy"
+    # Pre-split row, no ``segments`` and no ``dsl``: the prose IS the turn.
+    log.append_event(sid, "user", "user", {"text": "one"})
+    log.append_event(sid, "narrative", "narrator", {"prose": "Old beat."})
+    # Pre-split row whose prose still carries its own panel (the old shape).
+    log.append_event(sid, "user", "user", {"text": "two"})
+    log.append_event(
+        sid,
+        "narrative",
+        "narrator",
+        {
+            "prose": 'card = ArtifactCard("Old", "One")\nAn older beat.',
+            "dsl": 'card = ArtifactCard("Old", "One")',
+        },
+    )
+    # An unusable segments list is the same case as an absent one.
+    log.append_event(sid, "user", "user", {"text": "three"})
+    log.append_event(
+        sid, "narrative", "narrator", {"prose": "A third beat.", "segments": []}
+    )
+
+    # All inside the default window: the prose channel stands, byte-identical to
+    # the pre-#100 behaviour (nothing is reconstructed from ``dsl``).
+    hist = history_from_log(log, sid)
+    assert [m["content"] for m in hist if m["role"] == "assistant"] == [
+        "Old beat.",
+        'card = ArtifactCard("Old", "One")\nAn older beat.',
+        "A third beat.",
+    ]
+    # dsl_keep_last=0 is still the legacy strip-all projection, unchanged.
+    legacy = history_from_log(log, sid, surfaces={"history": {"dsl_keep_last": 0}})
+    assert [m["content"] for m in legacy if m["role"] == "assistant"] == [
+        "Old beat.",
+        "An older beat.",
+        "A third beat.",
+    ]
+
+
+def test_strip_off_keeps_every_channel(tmp_path):
+    """``history.strip_dsl=False`` keeps everything — the window knob cannot undo it."""
+    log = EventLog(tmp_path / "strip-off.db")
+    sid = "strip-off"
+    log.append_event(sid, "user", "user", {"text": "one"})
+    dsl, prose = _panel(0)
+    _append_committed(log, sid, prose=prose, dsl=dsl)
+
+    hist = history_from_log(log, sid, strip=False)
+    assert hist[-1]["content"] == f"{dsl}\n\n{prose}"
+    assert (
+        history_from_log(log, sid, strip=False, surfaces={"history": {"dsl_keep_last": 0}})
+        == hist
+    )
 
 
 def test_history_regex_stage_respects_depth(tmp_path):
@@ -407,7 +552,7 @@ def test_an_uncovered_turn_stays_raw_next_to_a_compacted_one(tmp_path):
     sid = _seed(log)
     # The FIRST turn only (its user row through its narrative).
     first_user = _seq_of(log, sid, text="I enter the tavern.")
-    first_narrative = _seq_of(log, sid, prose="card = ArtifactCard(\"Damp\", \"Tavern\")\nThe fire crackles.")
+    first_narrative = _seq_of(log, sid, prose="The fire crackles.")
     _summarize(log, sid, covers=[first_user, first_narrative])
 
     hist = history_from_log(log, sid)
@@ -424,9 +569,7 @@ def test_a_legacy_single_seq_span_covers_the_users_row_too(tmp_path):
     """
     log = EventLog(tmp_path / "legacy.db")
     sid = _seed(log)
-    narrative_seq = _seq_of(
-        log, sid, prose="card = ArtifactCard(\"Damp\", \"Tavern\")\nThe fire crackles."
-    )
+    narrative_seq = _seq_of(log, sid, prose="The fire crackles.")
     _summarize(log, sid, covers=[narrative_seq, narrative_seq], text="The tavern was damp.")
 
     hist = history_from_log(log, sid)
