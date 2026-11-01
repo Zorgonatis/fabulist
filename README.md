@@ -224,8 +224,9 @@ spare, one line in `.env` moves them onto a GPU — `FABULIST_SIDECAR_DEVICE=Vul
 `FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"`) — where a warm 10-document rerank takes 64-71 ms
 instead of about 1.1 s. Leave the line out and the CPU stays.
 
-Nothing ships in the image. The compose file names each model as a HuggingFace reference, and your
-first request downloads it: **~2.7 GiB, once** (2.73 GiB measured). It lands in the named volume
+Nothing ships in the image. The compose file names each model as a HuggingFace reference, and the
+default warm-up downloads all three at container start (`FABULIST_SIDECAR_WARMUP=off` moves that to
+the first request instead): **~2.7 GiB, once** (2.73 GiB measured). It lands in the named volume
 `fabulist-model-cache`, so a rebuild never pays twice. At boot the engine pins the three roles, but
 only into empty slots, and never touches the narrator.
 

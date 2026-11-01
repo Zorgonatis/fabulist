@@ -37,8 +37,8 @@ rather than as storage buckets. Three views inside the one drawer:
   (D65); materialize-on-first-edit seeds the rows from the code catalog.
 - **Advanced — token text** — every prompt-contributing text the engine substitutes
   OUTSIDE the step blocks: **Library doc**, **Recalled framing** (+ the four section
-  headers), **Regex scripts**, **History knobs** (depth / strip DSL), and the legacy
-  directive-text migration button.
+  headers), **Regex scripts**, **History knobs** (depth, strip DSL, and the keep-last
+  window), and the legacy directive-text migration button.
 - **Full-screen block editor** — an in-app overlay (D51 v1 precedent; deliberately not an
   OS `window.open` popout): markdown-lite source beside a live `renderMarkdown` preview,
   a formatting toolbar, and the **variable inserter inside the editor**, splicing `{{name}}`
@@ -50,7 +50,7 @@ rather than as storage buckets. Three views inside the one drawer:
 |---|---|---|---|---|
 | 1 | System stack: directives (Director, perspective, anti-slop, Story Strings, length, VTK rules, …) | prompts/parts.py DEFAULT_DIRECTIVES → compiler.resolve_directives → render_system_prompt | YES — **Rules** (the preset's directive rows; an empty list inherits the code catalog) | PromptDrawer preview; agent-calls capture; inspector `system` region |
 | 2 | Library doc (OpenUI component reference) | prompts/library_mini.py; substituted at compile via `<<library>>` in the directive stack | YES — **Advanced → Library doc** (empty = inherit the factory text) | inspector `library` region; capture |
-| 3 | History | compiler DSL-stripped projection (regex stage applied, depth-limited) | PARTLY — **Advanced → Regex scripts** (find/replace/flags/min depth) and **History** (depth, strip DSL); the projection itself is code | capture; inspector `history` region |
+| 3 | History | compiler DSL-stripped projection (regex stage applied, depth-limited; the newest `dsl_keep_last` narratives keep their panels — default 3, 0 strips all) | PARTLY — **Advanced → Regex scripts** (find/replace/flags/min depth) and **History** (depth, strip DSL, keep-last window); the projection itself is code | capture; inspector `history` region |
 | 4 | `<state>` facts (persona, roster, stt, rolls, clock pipe-YAML) | context/facts.py | NO — assembled from the log (edit state via the sidebar ✎ door) | capture; inspector `facts` region |
 | 5 | Plan seam (`<plan>` from last turn's Story Strings) | graph/plans.py render_plan_for_prompt | NO — structural | capture |
 | 6 | Final user message (your turn text + image part if attached) | engine | NO | capture; inspector `user` region |

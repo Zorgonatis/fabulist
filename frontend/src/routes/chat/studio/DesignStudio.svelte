@@ -3,7 +3,7 @@
 	//
 	// A NON-modal, anchorable surface that hosts per-kind editor panes (Flow ·
 	// Proposals · Personas · Worlds · Books · Assistants · Profiles · Repair triggers ·
-	// Templates · Planner). The shell owns layout only: kind
+	// Catalog · Templates · Planner · NPC lanes). The shell owns layout only: kind
 	// tabs, dock/float placement, collapse, persistence, the Escape registration
 	// and the dirty guard. It reads NO page stores and makes NO fetches — panes
 	// receive plain props (`focusId`, `startNew`, `onChanged`, `onDirty`,
