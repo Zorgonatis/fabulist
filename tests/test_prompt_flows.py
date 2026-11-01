@@ -795,11 +795,13 @@ def test_preview_ooc_flow_mode_shape(build_app):
 
     body = run(scenario()).json()
     assert body["preview_mode"] == "flow"
-    # system (OOC default) + the seeded history + empty facts + the user turn.
+    # Issue #104: the OOC preview IS the live OOC builder's list — the system
+    # default, then the ``[OOC]``-flagged user turn. The API pre-appends the
+    # turn's user row, so the builder drops its history copy and the state facts
+    # ride the engine envelope (absent on a session with no tracked state).
     assert body["messages"][0]["role"] == "system"
     assert "out-of-character" in body["messages"][0]["content"]
-    assert {"role": "user", "content": "hello"} in body["messages"]
-    assert body["messages"][-1] == {"role": "user", "content": "answer"}
+    assert body["messages"][-1] == {"role": "user", "content": "[OOC] answer"}
     assert body["chars"] == sum(len(str(m["content"])) for m in body["messages"])
 
 

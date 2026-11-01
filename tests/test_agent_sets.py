@@ -337,6 +337,10 @@ _WIRING_SEAMS = (
     # caller all route through it), so the Context Size consumers and the
     # summarizer cannot resolve the same interaction two different ways.
     "_interaction_slot",
+    # Issue #104: the studio preview's planner transport profile — the same
+    # interaction slot resolution the planner node takes, read for the preview
+    # (read-only: no degraded row, content mode on failure).
+    "_preview_planner_profile",
 )
 
 

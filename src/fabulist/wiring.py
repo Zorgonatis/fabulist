@@ -97,7 +97,6 @@ from fabulist.graph.nodes import (
 from fabulist.graph.plans import load_last_plan, render_plan_for_prompt
 from fabulist.graph.types import TurnState
 from fabulist.log import EventLog
-from fabulist.prompts import assemble_messages
 from fabulist.prompts.compiler import DEFAULT_BUDGET, DEFAULT_HISTORY_STRIP_DSL
 from fabulist.prompts.envelope import (
     ENVELOPE_ROLE,
@@ -119,7 +118,7 @@ from fabulist.state.attribution import (
     PaletteEntry,
     palette_for_turn,
 )
-from fabulist.state.bts import BtsRunner, build_bts_messages
+from fabulist.state.bts import BtsRunner
 from fabulist.state.historian import make_historian_runner
 from fabulist.state.settings import ANTI_INJECTION_DEFAULT, anti_injection_enabled
 
@@ -160,40 +159,14 @@ def _critic_flags_block(flags: list[dict]) -> str:
 def _render_critic_payload(evidence: Mapping[str, Any]) -> str:
     """Compose the critic's single payload block — the D41/D49 evidence bundle.
 
-    Included, by contract: the user message; THIS turn's prose as plain text (the
-    literal ``find`` source, one linebreak between lines and no numbering); the
-    validator's flags; a short tail of the preceding turns' prose; the session's
-    current state line.
-
-    Deliberately EXCLUDED, each for a reason:
-
-    * **DSL segments** — the critic judges prose only (D49: patch scope is prose;
-      the DSL channel has its own validation gate). Feeding it the openui DSL
-      would invite UI edits and bloat a cheap agent's context with component
-      source it cannot change.
-    * **Injected facts / recall / roster / library** — those are the narrator's
-      INPUTS, assembled pre-turn; the critic reviews what the turn made of the
-      scene, not a re-derivation of it. Including them would also hand the critic
-      the fiction's ground truth and turn a prose critique into a source check.
-    * **Full history** — only a short prior tail is sent: the two defects that
-      matter (repetition, lack of movement) are judged against the immediately
-      preceding beats, and the whole log would blow the cheap agent's budget for
-      no verdict value.
+    Issue #104: the ONE implementation lives in
+    :func:`fabulist.prompts.request_parts.render_critic_payload`, so the preview
+    and the critic call site render the same payload by construction. This name
+    stays as the wiring's delegate (it has existing importers).
     """
-    prior = [text for text in (evidence.get("prior_prose") or []) if text]
-    prior_block = "\n\n".join(f"---\n{text}" for text in prior) or "(none)"
-    return (
-        "### USER MESSAGE\n"
-        f"{evidence.get('user_message') or ''}\n\n"
-        "### THIS TURN (the turn's prose; copy `find` text verbatim from it)\n"
-        f"{_plain_prose(str(evidence.get('prose') or ''))}\n\n"
-        "### VALIDATOR FLAGS (hints, not commands)\n"
-        f"{_critic_flags_block(list(evidence.get('flags') or []))}\n\n"
-        "### PRIOR TURNS (most recent last)\n"
-        f"{prior_block}\n\n"
-        "### STATE\n"
-        f"{evidence.get('state_line') or ''}\n"
-    )
+    from fabulist.prompts.request_parts import render_critic_payload
+
+    return render_critic_payload(evidence)
 
 
 class _DslSegmenter:
@@ -1616,7 +1589,20 @@ def make_narrator_message_builder(
     dynamic tail, rebuilt per build — after the lane block, never the prefix.
     """
 
-    def build(state: TurnState, out: dict | None = None) -> list[dict]:
+    def build(
+        state: TurnState,
+        out: dict | None = None,
+        preset_override: Any = None,
+    ) -> list[dict]:
+        """Compile one turn's messages; ``preset_override`` renders a given preset.
+
+        Issue #104: the studio preview must be able to render a preset that is
+        NOT the active one (``POST /api/prompts/preview`` with ``preset_id``).
+        The override replaces ONLY the preset read below — every part of the
+        assembly, and therefore every prefix byte of every turn, stays the same
+        (ADR-005). ``None`` (every live turn) reads the active preset exactly as
+        before.
+        """
         # Single source of truth (context.facts): the suffix join lives in one
         # importable place so the replay rig recomputes byte-identical suffixes
         # (W3.5) — wiring no longer owns the ordering/blank-drop conventions.
@@ -1653,7 +1639,7 @@ def make_narrator_message_builder(
             log, sid, str(state.get("user_content") or "")
         )
 
-        preset = None
+        preset = preset_override
         surfaces: dict = {}
         variables: dict = {}
         # Preset-carried directive catalog (list[Directive] | None).
@@ -1661,7 +1647,8 @@ def make_narrator_message_builder(
         # list replaces it in stored order (Item 2 W1).
         dir_base = None
         try:
-            preset = active_preset(log)
+            if preset is None:
+                preset = active_preset(log)
             surfaces = preset_surfaces(preset)
             dir_base = preset_directives(preset)
             variables = resolve_variables(log, sid, state["user_content"])
@@ -2105,9 +2092,17 @@ def make_ooc_message_builder(
     """
 
     def build(session_id: str, content: str) -> list[dict]:
-        from fabulist.prompts.narrator import OOC_FLAG, render_state_block
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
-        from fabulist.prompts.variables import render_display_text, resolve_variables
+        """Render one OOC turn through the shared request builder (issue #104).
+
+        The parts assembly (history, the ``[OOC]``-flagged user row, the empty
+        facts row, the per-turn envelope) lives in
+        :func:`fabulist.prompts.request_parts.ooc_request` — the SAME function the
+        studio preview calls, so the two cannot drift again (before #104 the
+        preview rendered a facts row and no envelope, a list the engine never
+        sends).
+        """
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import ooc_request
 
         try:
             preset = active_preset(log)
@@ -2121,48 +2116,15 @@ def make_ooc_message_builder(
                 "the OOC turn used the code default prompt — check the preset store",
             )
             preset = None
-        facts_line = facts_line_from_log(log, session_id) or ""
-        # The state facts are the envelope's <engine_state> block, never a
-        # user-role message (the flow's `facts` row is therefore inert here).
-        envelope = render_engine_envelope(state=render_state_block(facts_line))
-        parts = {
-            "system": OOC_SYSTEM,
-            # Same duplication as narrate: the API pre-appended the OOC turn's
-            # user row, and `user_content` below re-appends it flagged.
-            # Issue #79: OOC resolves ITS OWN connection's vision (the ``ooc``
-            # interaction, falling back to the narrator) per build.
-            "history": history_from_log(
-                log,
-                session_id,
-                limit=8,
-                drop_current_user=True,
-                vision=bool(vision_fn()) if vision_fn is not None else False,
-            ),
-            "facts": "",
-            # Issue #63: the same display step the transcript uses, so the OOC
-            # turn's ``{{user}}`` resolves exactly like the bubble that sent it.
-            "user_content": (
-                f"{OOC_FLAG} {render_display_text(log, session_id, str(content))}"
-            ),
-            "variables": resolve_variables(log, session_id, content),
-        }
-        try:
-            messages = compile_preset_flow(preset, "ooc", parts)
-            # Issue #44: ONE universal carrier — the envelope is an ephemeral
-            # ``assistant`` message immediately BEFORE the final user message.
-            messages, _def_end, _envelope_at = insert_engine_envelope(
-                messages, len(messages), envelope
-            )
-            return messages
-        except Exception:  # noqa: BLE001 - flow path must never break a turn
-            logger.warning("ooc flow compile fell back to assemble", exc_info=True)
-            return assemble_messages(
-                system=OOC_SYSTEM,
-                history=parts["history"],
-                facts=facts_line,
-                user_msg=content,
-                kind="ooc",
-            )
+        # Issue #79: OOC resolves ITS OWN connection's vision (the ``ooc``
+        # interaction, falling back to the narrator) per build.
+        return ooc_request(
+            log,
+            session_id,
+            content,
+            preset,
+            vision=bool(vision_fn()) if vision_fn is not None else False,
+        )
 
     return build
 
@@ -2350,8 +2312,8 @@ def build_engine(
         # "" (the extractor is post-turn and session-blind by contract).
         # The session id is threaded explicitly (issue #70) so a failed preset
         # read can leave its ``preset_degraded`` row on the TURN's session.
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
-        from fabulist.state.extractor import EXTRACTOR_SYSTEM_PROMPT, _turn_block
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import extract_request
 
         try:
             preset = active_preset(log)
@@ -2365,15 +2327,9 @@ def build_engine(
                 "the extractor used the code default prompt — check the preset store",
             )
             preset = None
-        return compile_preset_flow(
-            preset,
-            "extract",
-            {
-                "system": EXTRACTOR_SYSTEM_PROMPT,
-                "turn_payload": _turn_block(user_msg, narrative),
-                "variables": {"message": user_msg, "last_narrative": narrative},
-            },
-        )
+        # Issue #104: the parts assembly is the preview's and the engine's ONE
+        # function (request_parts.extract_request) — no second copy exists.
+        return extract_request(user_msg, narrative, preset)
 
     # D21/B4: the ``bts`` interaction owns world-state; the extractor's delta
     # emission is retired (it stays importable for the eval rig). Speaker
@@ -2390,8 +2346,8 @@ def build_engine(
         from fabulist.agents.debug import CURRENT_INTERACTION
 
         CURRENT_INTERACTION.set("bts")
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
-        from fabulist.state.bts import BTS_SYSTEM_PROMPT
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import bts_request
 
         try:
             preset = active_preset(log)
@@ -2406,15 +2362,9 @@ def build_engine(
                 "preset store",
             )
             preset = None
-        base = build_bts_messages(user_msg, narrative, prior_state, checkpoint=checkpoint)
-        return compile_preset_flow(
-            preset,
-            "bts",
-            {
-                "system": str(base[0].get("content", BTS_SYSTEM_PROMPT)),
-                "payload": str(base[1].get("content", "")) if len(base) > 1 else "",
-                "variables": {},
-            },
+        # Issue #104: one parts function for the engine and the preview.
+        return bts_request(
+            user_msg, narrative, prior_state, checkpoint=checkpoint, preset=preset
         )
 
     bts_caller = PresetAgentCaller("bts", "extractor")
@@ -2671,7 +2621,8 @@ def build_engine(
         are structural (the node composes them from the log + the planner
         config), so the flow carries a single authored row.
         """
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import planner_directive_messages
 
         try:
             preset = active_preset(log)
@@ -2688,11 +2639,8 @@ def build_engine(
                 "store",
             )
             preset = None
-        return compile_preset_flow(
-            preset,
-            "planner",
-            {"system": DEFAULT_PLANNER_DIRECTIVE, "variables": {}},
-        )
+        # Issue #104: one directive render for the engine and the preview.
+        return planner_directive_messages(preset)
 
     def _planner_directive(session_id: str = "") -> str:
         """The planner's directive text (the flow's system row, compiled)."""
@@ -2767,8 +2715,8 @@ def build_engine(
         from fabulist.agents.debug import CURRENT_INTERACTION
 
         CURRENT_INTERACTION.set("critic")
-        from fabulist.prompts.critic import CRITIC_SYSTEM_PROMPT
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import critic_request
 
         try:
             preset = active_preset(log)
@@ -2782,15 +2730,8 @@ def build_engine(
                 "the critic used the code default prompt — check the preset store",
             )
             preset = None
-        return compile_preset_flow(
-            preset,
-            "critic",
-            {
-                "system": CRITIC_SYSTEM_PROMPT,
-                "payload": _render_critic_payload(evidence),
-                "variables": {},
-            },
-        )
+        # Issue #104: one parts function for the engine and the preview.
+        return critic_request(evidence, preset)
 
     critic_caller = PresetAgentCaller("critic", "extractor")
 
@@ -2817,7 +2758,8 @@ def build_engine(
         from fabulist.agents.debug import CURRENT_INTERACTION
 
         CURRENT_INTERACTION.set("proposals")
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import proposals_request
 
         try:
             preset = active_preset(log)
@@ -2832,15 +2774,8 @@ def build_engine(
                 "preset store",
             )
             preset = None
-        return compile_preset_flow(
-            preset,
-            "proposals",
-            {
-                "system": str(payload.get("system") or ""),
-                "payload": str(payload.get("payload") or ""),
-                "variables": {},
-            },
-        )
+        # Issue #104: one parts function for the engine and the preview.
+        return proposals_request(payload, session_id, preset)
 
     # W9.13/W9.25: the NPC fan-out's lane binding. ``npc`` is its own interaction
     # (D19) so the owner can point lanes at a different connection than the
@@ -2889,12 +2824,8 @@ def build_engine(
         own builder once and appends this tail to it (D2/D3).
         """
         from fabulist.agents.debug import CURRENT_INTERACTION
-        from fabulist.graph.nodes import (
-            default_npc_lane_messages,
-            render_private_block,
-        )
-        from fabulist.prompts.npc import build_lane_ask, build_lane_system
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import npc_request
 
         # D25 capture correctness: each lane runs as its own task, so setting the
         # contextvar here labels that lane's capture/usage truthfully.
@@ -2911,21 +2842,9 @@ def build_engine(
                 "the NPC lane used the code default prompt — check the preset store",
             )
             preset = None
-        name = str(context.get("name") or "")
-        try:
-            flow = compile_preset_flow(
-                preset,
-                "npc",
-                {
-                    "system": build_lane_system(name, render_private_block(context)),
-                    "payload": build_lane_ask(name),
-                    "variables": {"name": name},
-                },
-            )
-        except Exception:  # noqa: BLE001 - a broken flow never kills a lane
-            logger.warning("npc lane flow fell back to the code default", exc_info=True)
-            flow = []
-        return flow or default_npc_lane_messages(context)
+        # Issue #104: the lane TAIL is one function for the engine and the
+        # preview (the shared narrator prefix is appended by the node).
+        return npc_request(state, context, preset)
 
     def _template_behaviours() -> dict[str, str]:
         """``{template id: implements}`` for the node-template library (W9.10).
@@ -3599,8 +3518,8 @@ def build_app(
         `compile_preset_flow`, so what the owner previews is what compaction
         sends (accepted drift: a preset edit applies to the next run).
         """
-        from fabulist.graph.compaction import build_summarizer_messages
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import summarize_request
 
         try:
             preset = active_preset(log)
@@ -3617,16 +3536,8 @@ def build_app(
                 "compaction used the code default prompt — check the preset store",
             )
             preset = None
-        base = build_summarizer_messages(transcript)
-        return compile_preset_flow(
-            preset,
-            "summarize",
-            {
-                "system": str(base[0].get("content", "")),
-                "payload": str(base[1].get("content", "")) if len(base) > 1 else "",
-                "variables": {},
-            },
-        )
+        # Issue #104: one parts function for compaction and the preview.
+        return summarize_request(transcript, preset)
 
     # ONE service instance: the forced path (the monitor hook) and the button
     # path (`api/context_api`) compact through the same object, onto the same
@@ -3654,8 +3565,8 @@ def build_app(
     def _assistant_flow_messages(
         definition: Any, context: Any, session_id: str = ""
     ) -> list[dict]:
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
-        from fabulist.assistants.manager import build_assistant_messages
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import assistant_request
 
         try:
             preset = active_preset(log)
@@ -3669,17 +3580,9 @@ def build_app(
                 "the assistant used the code default prompt — check the preset store",
             )
             preset = None
-        base = build_assistant_messages(definition, context)
-        return compile_preset_flow(
-            preset,
-            "assistant",
-            {
-                "system": str(base[0].get("content", "")),
-                "history": [],
-                "user_content": str(base[1].get("content", "")) if len(base) > 1 else "",
-                "variables": {},
-            },
-        )
+        # Issue #104: one parts function for the panel hook, the manual consult
+        # and the preview.
+        return assistant_request(definition, context, preset)
 
     def _assistant_model_caller_factory(agent: str):
         # W5-S2 chokepoint parity: every assistant caller is built through
@@ -3782,11 +3685,38 @@ def build_app(
     # /api/prompts/preview renders through it so preview == reality.
     app.state.message_builder = message_builder
 
+    def _preview_planner_profile() -> dict | None:
+        """The LIVE planner transport profile, for the preview (#104).
+
+        Same resolution the planner node takes (its interaction's bound agent,
+        the connection's capabilities, the preset's ``fields``), read ONCE per
+        preview. Read-only by design: an unresolvable slot falls back to content
+        mode with NO ``preset_degraded`` row — a preview is not a turn.
+        """
+        from fabulist.connections.capabilities import resolve_capabilities
+        from fabulist.connections.taxonomy import resolve_interaction_agent
+        from fabulist.graph.planner_schema import build_planner_request_profile
+        from fabulist.prompts.agent_sets import bindings_for
+        from fabulist.prompts.preset_store import active_preset, planner_config
+
+        try:
+            agent = resolve_interaction_agent(
+                bindings_for(log), registry.agents, "planner", "narrator"
+            )
+            fields = dict(planner_config(active_preset(log)).get("fields") or [])
+            return build_planner_request_profile(
+                resolve_capabilities(registry.connection_for(agent)), fields
+            )
+        except Exception:  # noqa: BLE001 - content mode is the safe preview answer
+            return None
+
+    app.state.planner_request_profile = _preview_planner_profile
+
     # D18 completion: caption + assistant flow renderers (the routers read
     # them off app.state; None keeps the fixed default shapes).
     def _caption_flow_messages(asset: dict, session_id: str = "") -> list[dict]:
-        from fabulist.media.images import build_caption_messages
-        from fabulist.prompts.preset_store import active_preset, compile_preset_flow
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.request_parts import caption_request
 
         try:
             preset = active_preset(log)
@@ -3800,16 +3730,8 @@ def build_app(
                 "the captioner used the code default prompt — check the preset store",
             )
             preset = None
-        base = build_caption_messages(asset)
-        return compile_preset_flow(
-            preset,
-            "caption",
-            {
-                "system": str(base[0].get("content", "")),
-                "payload": base[1].get("content", "") if len(base) > 1 else "",
-                "variables": {},
-            },
-        )
+        # Issue #104: one parts function for the captioner and the preview.
+        return caption_request(asset, preset)
 
     app.state.caption_flow = _caption_flow_messages
     app.state.assistants_flow = _assistant_flow_messages

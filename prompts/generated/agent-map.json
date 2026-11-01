@@ -9,7 +9,7 @@
         "history",
         "user"
       ],
-      "input_builder": "fabulist.wiring._assistant_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.assistant_request",
       "name": "assistant",
       "output_schema": "assistant reply prose + optional openui DSL (`asst = AssistantCard(...)` statement)",
       "registry": true,
@@ -31,7 +31,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._bts_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.bts_request",
       "name": "bts",
       "output_schema": "one BTS block over the nine v3.0.1 categories; delta by default, checkpoint on MODE: checkpoint",
       "registry": true,
@@ -52,7 +52,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._caption_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.caption_request",
       "name": "caption",
       "output_schema": "one image caption string",
       "registry": true,
@@ -73,7 +73,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._critic_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.critic_request",
       "name": "critic",
       "output_schema": "one fenced JSON verdict {verdict: ok|diffs|fail, reason, edits} (a legacy regen_feedback key is tolerated and ignored)",
       "registry": true,
@@ -124,7 +124,7 @@
         "system",
         "turn_payload"
       ],
-      "input_builder": "fabulist.wiring._extract_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.extract_request",
       "name": "extract",
       "output_schema": "one Δ[...] pipe-YAML state-delta line over extractor.DELTA_KEYS + action_class (one repair retry on malformed output)",
       "registry": true,
@@ -174,7 +174,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._npc_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.npc_request",
       "name": "npc",
       "output_schema": "one JSON lane result {intent, narrative, lines:[{text, tone}]} (no forced tool_choice, R29; shape failure skips the lane)",
       "registry": true,
@@ -219,7 +219,7 @@
       "flow": [
         "system"
       ],
-      "input_builder": "fabulist.wiring._planner_flow_messages",
+      "input_builder": "fabulist.graph.nodes.planner_request",
       "name": "planner",
       "output_schema": "ONE plan payload {strings: [4-6], datetime?, weather?, forecast?, established?, <preset-defined extras>} (no forced tool_choice on a connection without the capability, M6/§4)",
       "registry": true,
@@ -239,7 +239,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._proposals_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.proposals_request",
       "name": "proposals",
       "output_schema": "ONE JSON batch of {kind, action, target, patch, evidence} rows for a single data type (world | actors | books); no prose, no statements, and a malformed batch skips the lane (W9.22 §3)",
       "registry": true,
@@ -290,7 +290,7 @@
         "system",
         "payload"
       ],
-      "input_builder": "fabulist.wiring._summarize_flow_messages",
+      "input_builder": "fabulist.prompts.request_parts.summarize_request",
       "name": "summarize",
       "output_schema": "one compaction summary text (covers_seqs span)",
       "registry": true,

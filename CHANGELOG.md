@@ -10,6 +10,7 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Fixed
 
+- The studio prompt preview shows the request the engine actually sends, for every interaction: one named request assembly per interaction is shared by the live call site and the preview, so planner/npc/proposals no longer 500 and critic/ooc match the turn (#104)
 - The last N turns keep their panels in the model's history again: the keep-last window read the prose channel, which never holds panel markup (#100)
 - A studio band caption opens its own band: the bands wrap as units, so no caption trails the previous band's row (#99)
 
