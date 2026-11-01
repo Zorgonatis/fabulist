@@ -98,10 +98,12 @@ from fabulist.worlds.registry import WORLD_REF_EVENT
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CANON_HEADER",
     "ENGINE_MEMORY_CLOSE",
     "ENGINE_MEMORY_OPEN",
     "ENGINE_NOTICE_CLOSE",
     "ENGINE_NOTICE_OPEN",
+    "LORE_PLANNER_HEADER",
     "RECALLED_BTS_HEADER",
     "RECALLED_CLOSE",
     "RECALLED_FRAMING",
@@ -128,6 +130,9 @@ __all__ = [
     "recalled_message",
     "registry_bts_section",
     "session_bts_section",
+    "session_canon_block",
+    "session_lore_block",
+    "session_lore_entries",
     "set_swap_notice",
     "session_persona_block",
     "session_stt_block",
@@ -185,6 +190,16 @@ RECALLED_RECALL_HEADER = "### Recall — past moments"
 RECALLED_WORLD_INFO_HEADER = "### World info — active lore"
 RECALLED_RECAP_HEADER = "### Recap — earlier events"
 RECALLED_BTS_HEADER = "### Behind the scenes — continuity notes"
+
+#: The FIXED-CANON section headings (issue #106). Two sections, one surface
+#: group (``surfaces.lore``): the PLANNER's ``LORE (fixed canon)`` block — every
+#: enabled entry, no activation scan — and the narrator's fixed-canon section,
+#: which renders only the ``constant`` entries and rides inside the
+#: ``<engine_state>`` truth block beside the state facts. Both are editable
+#: preset surfaces; these are the fallback constants (D27 semantics: absent
+#: means "render the code constant").
+LORE_PLANNER_HEADER = "LORE (fixed canon):"
+CANON_HEADER = "### Fixed canon — authored lore"
 
 #: D-F: the teaching system turn placed immediately after the narrative it
 #: refers to (the validate stage's post-commit findings). The framing matters for
@@ -745,8 +760,178 @@ def _entity_books(log: EventLog, session_id: str, events: list[Event]) -> list[A
     return books
 
 
+def _lore_source_books(
+    log: EventLog, session_id: str, events: list[Event]
+) -> list[Any]:
+    """Raw book payloads EVERY lore read of the session pools (D31, issue #106).
+
+    Three sources in render order, identical to the narrator's
+    :func:`session_world_info_block`:
+
+    * a card's ``character_book`` (the W2.10 WI v1 card source);
+    * legacy ``world_info`` import events (the session's own books);
+    * entity books reachable from the chat's persona / world
+      (:func:`_entity_books`).
+
+    Factored out so the ACTIVATED render and the UNFILTERED lore render (the
+    planner's, and the narrator's fixed canon) can never drift apart about which
+    books a session has.
+    """
+
+    books: list[Any] = []
+    for event in events:
+        if event.type == "system":
+            if isinstance(event.payload.get("card"), dict):
+                book = event.payload["card"].get("character_book")
+                if book:
+                    books.append(book)
+            if event.payload.get("event") == "world_info" and event.payload.get("book"):
+                books.append(event.payload["book"])
+    books.extend(_entity_books(log, session_id, events))
+    return books
+
+
+def _pool_lore_entries(
+    log: EventLog, session_id: str, events: list[Event] | None = None
+) -> list[Any]:
+    """Every ENABLED lorebook entry the session can reach, pooled then deduped.
+
+    No activation scan runs here: :func:`fabulist.context.world_info.parse_book`
+    already drops disabled entries, so the result is the full authored entry set
+    in insertion order (D31 dedupe: first signature wins).
+
+    Raises :class:`~fabulist.context.world_info.WorldInfoError` when a book is
+    structurally unparseable; the public readers below swallow it into "no lore".
+    """
+
+    if events is None:
+        events = log.get_chain_events(session_id)
+    entries: list[Any] = []
+    for book in _lore_source_books(log, session_id, events):
+        entries.extend(parse_book(book))
+    return _dedupe_entries(entries)
+
+
+def session_lore_entries(log: EventLog, session_id: str) -> list[Any]:
+    """The session's pooled, enabled lorebook entries — no scan, no render.
+
+    Owner constraint (issue #106, 2026-11-01): the planner gets the FULL,
+    unfiltered lorebook views. Keyword activation cannot be trusted at planning
+    time — turn 1 has no narrative tail to scan, so a canon entry whose key does
+    not literally occur in the world definition, the opening scene or the first
+    message stays dark. A dark canon entry is the defect this read exists to
+    close, so every enabled entry is relevant and every enabled entry is
+    returned. A parse failure logs and yields ``[]`` (advisory context, never
+    fatal).
+    """
+
+    try:
+        return _pool_lore_entries(log, session_id)
+    except WorldInfoError:
+        logger.warning("lore pool parse failed for %s", session_id, exc_info=True)
+        return []
+
+
+def _render_lore_block(
+    entries: list[Any], header: str, variables: dict | None
+) -> str | None:
+    """Render entries in ``insertion_order`` under ``header``, or ``None``.
+
+    Same line shape as :func:`fabulist.context.world_info.render_block`
+    (``- {content}``), so a lore section and the narrator's activated block read
+    alike; no size filter, no truncation (owner ruling 2026-10-26, issue #83).
+    """
+
+    ordered = sorted(entries, key=lambda entry: entry.order)
+    if not ordered:
+        return None
+    body = "\n".join(f"- {entry.content}" for entry in ordered)
+    return _render_value(f"{header}\n{body}", variables)
+
+
+def session_lore_block(
+    log: EventLog,
+    session_id: str,
+    *,
+    surfaces: dict | None = None,
+    variables: dict | None = None,
+) -> str | None:
+    """The PLANNER's ``LORE (fixed canon)`` section, or ``None``.
+
+    Every enabled entry, rendered whole, with NO activation scan (issue #106).
+    Deliberately carries no world-definition prefix: the planner already renders
+    the live world definition in its own ``WORLD`` block, and the narrator's
+    assembler is the only caller that wants
+    :func:`session_world_definition_block` glued on top (see
+    :func:`session_world_info_block`).
+
+    Author-composed data: byte-stable inside one planner run (ADR-005) — nothing
+    here depends on the clock, the tail or the turn.
+    """
+
+    entries = session_lore_entries(log, session_id)
+    header = lore_copy(surfaces, variables)["planner"]
+    return _render_lore_block(entries, header, variables)
+
+
+def session_canon_block(
+    log: EventLog,
+    session_id: str,
+    *,
+    surfaces: dict | None = None,
+    variables: dict | None = None,
+) -> str | None:
+    """The NARRATOR's fixed-canon section — the ``constant`` entries only.
+
+    Issue #106: an entry marked ``constant`` is FIXED CANON. The narrator's truth
+    tier states that a fixed-canon entry outranks the tracked state (the rule
+    rides :data:`fabulist.prompts.envelope.STATE_HEADER`), so the constant
+    entries render beside the state facts in the ``<engine_state>`` block — and
+    they leave the ``<engine_memory>`` reference block, where the same words
+    would read as optional context (see ``include_constants`` on
+    :func:`session_world_info_block`). One copy, in the tier that wins.
+    """
+
+    entries = [
+        entry for entry in session_lore_entries(log, session_id) if entry.constant
+    ]
+    header = lore_copy(surfaces, variables)["canon"]
+    return _render_lore_block(entries, header, variables)
+
+
+def lore_copy(
+    surfaces: dict | None = None, variables: dict | None = None
+) -> dict[str, str]:
+    """Effective fixed-canon headings from the preset's ``lore`` surface (D27).
+
+    Mirrors :func:`recalled_copy`: a preset-carried value wins, ``{{expression}}``
+    tokens resolve against ``variables``, and an absent/blank surface renders the
+    module constant verbatim. Keys: ``planner`` (the planner's section heading)
+    and ``canon`` (the narrator's truth-tier section heading).
+    """
+
+    from fabulist.prompts.surfaces import normalize_surfaces, render_surface_text
+
+    block = normalize_surfaces(surfaces).get("lore") or {}
+
+    def _text(value: object, default: str) -> str:
+        if isinstance(value, str) and value.strip():
+            return render_surface_text(value, variables)
+        return default
+
+    return {
+        "planner": _text(block.get("planner_header"), LORE_PLANNER_HEADER),
+        "canon": _text(block.get("canon_header"), CANON_HEADER),
+    }
+
+
 def session_world_info_block(
-    log: EventLog, session_id: str, scan_text: str, variables: dict | None = None
+    log: EventLog,
+    session_id: str,
+    scan_text: str,
+    variables: dict | None = None,
+    *,
+    include_constants: bool = True,
 ) -> str | None:
     """Active World Info + optional world prefix, rendered into the facts block.
 
@@ -771,6 +956,13 @@ def session_world_info_block(
     no entities and no world renders byte-identically to the pre-D31
     single-source render. Fork-aware (reads the base chain).
 
+    ``include_constants`` (issue #106) splits the fixed canon out of the
+    reference block: the narrator's assembly passes ``False``, so the
+    ``constant`` entries do NOT render here — they ride the truth tier beside
+    the state facts (:func:`session_canon_block`). The default ``True`` is the
+    pre-#106 render (every activated entry), which is what a direct caller
+    asking "what did activation select" still gets.
+
     ``variables`` is the fixed-vocabulary macro map (D43): World Info entries
     and the world block's text are user-authored ST text that may carry
     ``{{user}}`` / ``{{char}}`` / ``{{persona}}`` / ``{{world}}``; when supplied
@@ -782,25 +974,14 @@ def session_world_info_block(
     """
 
     events = log.get_chain_events(session_id)
-    books: list[Any] = []
-    for event in events:
-        if event.type == "system":
-            if isinstance(event.payload.get("card"), dict):
-                book = event.payload["card"].get("character_book")
-                if book:
-                    books.append(book)
-            if event.payload.get("event") == "world_info" and event.payload.get("book"):
-                books.append(event.payload["book"])
-    books.extend(_entity_books(log, session_id, events))
-
     rendered: str | None = None
+    books = _lore_source_books(log, session_id, events)
     if books:
         try:
-            entries: list[Any] = []
-            for book in books:
-                entries.extend(parse_book(book))
-            parsed = _dedupe_entries(entries)
+            parsed = _pool_lore_entries(log, session_id, events)
             active = activate(parsed, scan_text)
+            if not include_constants:
+                active = [entry for entry in active if not entry.constant]
             rendered = render_block(active)
             if rendered is not None:
                 # Issue #83: nothing is trimmed, so the engine makes an
@@ -842,10 +1023,17 @@ class TurnContextBlocks:
                         (:func:`static_prefix_parts`). Splices into the stable
                         system region AHEAD of history, so it is not repeated in
                         the per-turn ``<state>`` suffix.
-    ``state_parts``   — final user message (roster, stt, rolls, clock).
+    ``state_parts``   — final user message (roster, stt, rolls, clock) and,
+                        LAST, the fixed-canon section (issue #106: the constant
+                        lorebook entries, inside the truth tier beside the
+                        state facts). The envelope's ``<engine_state>`` block
+                        carries both, facts first.
     ``context_parts`` — the full canonical dynamic context (pre-D22 order; still
                         carries the persona AND the D54 identity block so
                         :func:`facts_hash` and the replay rig stay byte-faithful).
+                        The fixed canon is deliberately NOT here: like BTS it is
+                        an injection-only part, so the provenance hash keeps
+                        anchoring the pre-#106 canonical context.
     ``recalled``      — the ``<engine_memory>`` block BODY (framing + recall /
                         world-info / recap sections), or ``None`` when empty.
     ``notice``        — the ``<engine_notice>`` block BODY (BTS continuity, cast
@@ -897,7 +1085,7 @@ def _collect_parts(
     ]
     recent = " ".join(recent_narratives)
     world_info = session_world_info_block(
-        log, sid, f"{user_text}\n{recent}", variables=variables
+        log, sid, f"{user_text}\n{recent}", variables=variables, include_constants=False
     )
     stt = session_stt_block(log, sid)
     return (
@@ -1215,7 +1403,14 @@ def assemble_turn_context(
     # hash/replay, in the same order.
     identity = session_user_identity_block(log, sid, variables=variables)
     static_parts = [p for p in (persona, identity) if p]
-    state_parts = [p for p in (roster_names, stt, rolls, clock_facts) if p]
+    # Issue #106: fixed canon (the ``constant`` lorebook entries) rides the
+    # truth tier beside the state facts — INSIDE this turn's ``<engine_state>``
+    # block, after the facts, with the precedence rule stated in the block's
+    # header (``envelope.STATE_HEADER``). It is not recalled reference and it is
+    # not stable-prefix content (ADR-005), so the narrator's cached prefix keeps
+    # every byte.
+    canon = session_canon_block(log, sid, surfaces=surfaces, variables=variables)
+    state_parts = [p for p in (roster_names, stt, rolls, clock_facts, canon) if p]
     context_parts = [
         p
         for p in (
@@ -1409,7 +1604,9 @@ def recalled_message(
 
     * ``### Recall — past moments`` <- the recall block text (``state["recall"]``)
     * ``### World info — active lore`` <- :func:`session_world_info_block`
-      (existing renderer, relocated)
+      (existing renderer, relocated). Constant lorebook entries are NOT here:
+      they are fixed canon and ride the state block's canon section instead
+      (issue #106, ``include_constants=False`` on the reader).
     * ``### Recap — earlier events`` <- :func:`fabulist.graph.compaction.recap_texts`
       lines (the PROMPT recap: absorbed eras dropped, W9.26 §2.4)
 
@@ -1437,7 +1634,11 @@ def recalled_message(
         )
         if _world_info is None:
             _world_info = session_world_info_block(
-                log, sid, f"{user_text}\n{recent}", variables=variables
+                log,
+                sid,
+                f"{user_text}\n{recent}",
+                variables=variables,
+                include_constants=False,
             )
         if _summaries is None:
             _summaries = [
