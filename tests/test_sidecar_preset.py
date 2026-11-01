@@ -129,17 +129,19 @@ def test_the_serving_flags_survive_the_ref_rewrite():
     assert sections["embeddinggemma-2"]["ctx-size"] == "8192"
     assert sections["embeddinggemma-2"]["pooling"] == "mean"
     assert sections["embeddinggemma-2"]["embd-normalize"] == "2"
-    # This value is REQUIRED IN KIND, not tuned: n_ubatch must be at least the
-    # largest batch the model can be asked to embed in one pass. llama.cpp
+    # These values are REQUIRED IN KIND, not tuned: n_ubatch must be at least
+    # the largest batch the model can be asked to embed in one pass. llama.cpp
     # asserts a non-causal batch fits inside one n_ubatch, and that an image's
     # patches fit inside one batch; its defaults (n_batch 2048, n_ubatch 512)
-    # trip the first assert on an ordinary text batch. Lowering this to the
-    # context size would change no reserved size — buffers are sized by
-    # min(ctx, n_ubatch) — but it would cut the multimodal headroom, so the
-    # value stays. It changes only if the image path needs more than 8192
-    # patches, which is unmeasured. (See the [embeddinggemma-2] section of
-    # deploy/sidecar/models.ini, and issue #101.)
+    # trip the first assert on an ordinary text batch. Both keys are pinned
+    # below — the two asserts read different ones, so lowering either alone
+    # silently breaks that path. Lowering them to the context size would change
+    # no reserved size — buffers are sized by min(ctx, n_ubatch) — but it would
+    # cut the multimodal headroom, so the values stay. They change only if the
+    # image path needs more than 8192 patches, which is unmeasured. (See the
+    # [embeddinggemma-2] section of deploy/sidecar/models.ini, and issue #101.)
     assert sections["embeddinggemma-2"]["ubatch-size"] == "32768"
+    assert sections["embeddinggemma-2"]["batch-size"] == "32768"
     assert sections["d1-3b"]["ctx-size"] == "8192"
 
 
