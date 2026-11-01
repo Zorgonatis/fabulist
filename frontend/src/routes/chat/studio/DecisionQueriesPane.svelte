@@ -324,16 +324,16 @@
 
 <div class="queries-pane">
 	<header class="pane-head">
-		<h2 class="pane-title">Decision queries</h2>
+		<h2 class="pane-title">Repair triggers</h2>
 		<span class="pane-meta"
 			>{slopRows.length} phrases · {customRows.length} custom</span
 		>
 	</header>
 
 	<p class="hint">
-		The checks the engine runs on every turn before the critic reviews the prose. A check that
-		fires is handed to the critic as a specific issue, so add the ones you keep catching yourself.
-		Every row here can be turned off or removed.
+		Checks the engine runs on every turn. When a row fires, the turn is sent back to be repaired
+		before you see it. Add the ones you keep catching yourself. Every row can be turned off or
+		removed.
 	</p>
 
 	{#if seeded}
@@ -348,7 +348,7 @@
 	{/if}
 
 	{#if loading}
-		<p class="hint">Loading decision queries…</p>
+		<p class="hint">Loading repair triggers…</p>
 	{:else}
 		<section class="group" aria-labelledby="slop-heading">
 			<header class="group-head">
@@ -561,7 +561,7 @@
 			onclick={() => void save()}
 			disabled={busy || !(dirty || seeded)}
 		>
-			{busy ? 'Saving…' : 'Save queries'}
+			{busy ? 'Saving…' : 'Save triggers'}
 		</button>
 	</div>
 </div>

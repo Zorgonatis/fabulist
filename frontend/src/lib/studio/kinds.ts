@@ -61,7 +61,7 @@ export const STUDIO_KINDS: readonly StudioKindSpec[] = [
 	{ kind: 'book', tab: 'Books', pane: 'Book', group: 'assets' },
 	{ kind: 'assistant', tab: 'Assistants', pane: 'Assistant', group: 'assets' },
 	{ kind: 'profile', tab: 'Profiles', pane: 'Profile', group: 'assets' },
-	{ kind: 'queries', tab: 'Queries', pane: 'Queries', group: 'engine' },
+	{ kind: 'queries', tab: 'Repair triggers', pane: 'Repair triggers', group: 'engine' },
 	{ kind: 'catalog', tab: 'Catalog', pane: 'Catalog', group: 'engine' },
 	{ kind: 'templates', tab: 'Templates', pane: 'Templates', group: 'engine' },
 	{ kind: 'planner', tab: 'Planner', pane: 'Planner', group: 'engine' },
