@@ -418,19 +418,24 @@
 {#snippet kindTabs()}
 	<nav class="tabs" aria-label="Entity kinds">
 		{#each STUDIO_GROUPS as group (group.group)}
-			<!-- The caption names the band; the pills sit in a labelled group so the
-			     band is announced too (the caption itself is decoration). -->
-			<span class="tab-group-label" aria-hidden="true">{group.label}</span>
-			<div class="tab-group" role="group" aria-label={group.label}>
-				{#each kindsInGroup(group.group) as spec (spec.kind)}
-					<button
-						type="button"
-						class="tab"
-						class:active={spec.kind === kind}
-						aria-pressed={spec.kind === kind}
-						onclick={() => selectKind(spec.kind)}>{spec.tab}</button
-					>
-				{/each}
+			<!-- ONE band = ONE flex item on a line of its OWN, so a caption always
+			     opens its line: it can never be left at the end of the PREVIOUS
+			     band's row, which is what made the bands unreadable (#99). The
+			     caption names the band; the pills sit in a labelled group so the band
+			     is announced too (the caption itself is decoration). -->
+			<div class="tab-band">
+				<span class="tab-group-label" aria-hidden="true">{group.label}</span>
+				<div class="tab-group" role="group" aria-label={group.label}>
+					{#each kindsInGroup(group.group) as spec (spec.kind)}
+						<button
+							type="button"
+							class="tab"
+							class:active={spec.kind === kind}
+							aria-pressed={spec.kind === kind}
+							onclick={() => selectKind(spec.kind)}>{spec.tab}</button
+						>
+					{/each}
+				</div>
 			</div>
 		{/each}
 	</nav>
@@ -707,11 +712,27 @@
 
 	.tabs {
 		display: flex;
+		/* A COLUMN of bands: one band per line, always. Sharing a line is what
+		   put a caption after the previous band's pills, and a strip whose
+		   structure flips at a breakpoint has to be re-learnt (#99). */
+		flex-direction: column;
 		flex: 1;
 		min-width: 0;
-		gap: 0.2rem 0.45rem;
+		/* The gap IS the band separation. The row gap of .tab-group (0.2rem) is
+		   the space between two pills; this is several times that. */
+		gap: 0.4rem;
+		align-items: stretch;
+	}
+
+	/* One band = one flex item, so its caption and its pills wrap as a unit: the
+	   caption opens the band, and pills that do not fit wrap BELOW it rather
+	   than pushing the caption mid-line (#99). */
+	.tab-band {
+		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
+		gap: 0.2rem 0.45rem;
+		min-width: 0;
 	}
 
 	/* Band caption above pill groups (#99). It NAMES the pills that follow, so it
@@ -728,14 +749,11 @@
 		color: var(--text);
 	}
 
-	/* The BAND break rides on the caption's leading edge, so the space between
-	   bands (this margin plus the nav's column gap) is several times the space
-	   between two pills of the same band (.tab-group's 0.2rem gap). */
-	.tab-group-label:not(:first-child) {
-		margin-inline-start: 0.75rem;
-	}
-
+	/* A zero basis keeps the group on the caption's line and lets it fill the
+	   band, so its pills wrap under the caption rather than the caption sitting
+	   alone above them. */
 	.tab-group {
+		flex: 1 1 0;
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.2rem;
