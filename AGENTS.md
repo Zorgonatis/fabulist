@@ -101,7 +101,11 @@ COMMITTED FACTORY ARTIFACT (`prompts/factory-defaults.json`) — editing the con
 is not enough: run `scripts/seed_prompt_defaults.py --force` (and check flow row ORDER — its
 write path can reorder rows; the prompt-flows test pins it). `StatusPanel` is gone. `assistant`
 is canonical; `sidekick` survives only as deliberate read-side legacy shims. The engine-emitted
-HUD statement is `EnvTracker`.
+HUD statement is `EnvTracker`. `Queries` is now `Repair triggers` (#99) — COPY ONLY: kind id
+`queries`, `DecisionQueriesPane.svelte`, `decisionQueries.ts`, `/api/decision-queries`,
+`src/fabulist/decision_queries.py` and the `__decision_queries__` anchor all stay on purpose —
+a UI word off its identifier is deliberate, not a bug; a trigger is the CAUSE (the check that
+fires), a repair the EFFECT (the turn sent back).
 
 ## Component vocabulary is ONE generated tree — regenerate, never hand-sync Python
 (was: ONE pipeline; ADR-025 split it — one generated spec **per set**, plus one union; the engine reads the active set, the renderer the union.)
@@ -127,6 +131,10 @@ generator's inline `INFRASTRUCTURE` block (four infra components), which must tr
   (and anything outside the finish-reason allowlist discarded — ADR-021); DSL statements may
   arrive unfenced (nodes.py `_split_unfenced_statements` + frontend `segment.ts`); `pkill -f`
   self-matches — use `fuser -k <port>/tcp`.
+- The keep-last window reads the ordered `segments` channel, never `prose` — `prose` is the joined
+  prose segments only and never holds panel markup, so a window that read prose kept nothing while
+  every unit test with a hand-written fixture still passed (#100); the commit path stores `prose`,
+  `dsl` and `segments` as separate channels.
 
 ## Verification (browser interaction)
 

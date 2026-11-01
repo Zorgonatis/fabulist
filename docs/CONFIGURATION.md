@@ -92,6 +92,15 @@ normalises to `completion.extraction`.
 
 An empty slot falls through item → task → type. It only fails at call time, if nothing resolves.
 
+## History panels
+
+`surfaces.history.dsl_keep_last` is a preset setting, not a `connections.json` field: the panel
+window, edited in the prompt drawer's Advanced section beside History depth as the field labelled
+`Keep panels for`, counted in turns. With the strip control on, turns older than the window lose
+their panel markup and the newest N turns keep theirs; with it off, every turn keeps its panels.
+The default is 3, and the value is read only while the strip control is on. `0` strips every turn —
+the pre-window projection (`surfaces.history.strip_dsl`, on by default).
+
 ## Known issues
 
 - **#45** — `glm-5.3` can echo the engine's own `<preset_def>` wrapper into committed prose. Bind
