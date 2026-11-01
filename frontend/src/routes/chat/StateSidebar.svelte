@@ -1404,9 +1404,12 @@
 		align-items: center;
 		gap: 0.4rem;
 		/* The pane's undock button is absolutely positioned at the dock's
-		   top-right (z-index 5); keep the mark, the word and the toggle below it so
-		   they stay clickable in the narrow collapsed strip. */
-		padding: 1.8rem 0 0 0;
+		   top-right (z-index 5); keep the strip's stack below it so it stays
+		   clickable in the narrow collapsed strip. The reserve belongs to the DOCK,
+		   so it is the head's margin, not its padding: the head's own box still
+		   starts where its first control does (top-anchored, like every header's). */
+		margin-top: 1.8rem;
+		padding: 0;
 	}
 	/* Issue #98: the strip's mark. Its colour IS the connection state — the same
 	   five-value `data-status` the expanded status line uses (ready/closed muted,
@@ -1454,6 +1457,12 @@
 		align-items: center;
 		gap: 0.3rem;
 		margin-left: 0;
+	}
+	/* The control anchors to the TOP of the collapsed head, with the mark and the
+	   word reading under it. In DOM order it was the LAST item of the strip's
+	   column — measured 92px down a 116px head, i.e. bottom-anchored. */
+	.sidebar.collapsed .collapse-btn {
+		order: -1;
 	}
 	.collapse-btn {
 		flex: none;

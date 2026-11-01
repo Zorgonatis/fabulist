@@ -679,7 +679,14 @@
 	.studio-head {
 		flex: none;
 		display: flex;
-		align-items: center;
+		/* The head's rows are the TAB STRIP's bands, not its own items: the strip
+		   is a column of bands (#99), so centring the items put the drag handle and
+		   the window buttons on the MIDDLE band's line (measured: 34px below the
+		   first). They belong on the FIRST band's line, level with the top of the
+		   head — so the items start at the top, and each control is sized to one band
+		   row (.drag-handle below; `.head-actions`' 1.5rem buttons are already that
+		   row's height within 2px). */
+		align-items: flex-start;
 		gap: 0.35rem;
 		padding: 0.35rem 0.4rem;
 		background: var(--bg-raised);
@@ -702,7 +709,11 @@
 		font-size: var(--font-small);
 		color: var(--text-dim);
 		letter-spacing: -0.1em;
-		padding: 0 0.1rem;
+		/* A pill's vertical box (`.tab`: 0.2rem padding inside a 1px border), so the
+		   handle is exactly one band row tall and centres on that row's line when
+		   the head starts its items at the top. */
+		padding: 0.2rem 0.1rem;
+		border-block: 1px solid transparent;
 	}
 
 	.studio-head:focus-visible {
