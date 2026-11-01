@@ -14,17 +14,27 @@
 #
 # Selection, in order:
 #   FABULIST_SIDECAR_DEVICE=VulkanN|N   explicit id; a missing id is FATAL.
+#   FABULIST_SIDECAR_DEVICE=cpu|none    no offload: the models stay on the CPU.
 #   FABULIST_SIDECAR_DEVICE_MATCH=text  case-insensitive substring of the device
 #                                       name; zero or several matches is FATAL.
-#   neither set, exactly one Vulkan device   use it (nothing to guess).
-#   neither set, several Vulkan devices      FATAL, listing them. Picking one
-#                                            would be exactly the assumption
-#                                            this script exists to avoid.
-#   neither set, no Vulkan device            fall through to CPU. This is the
-#                                            Vulkan build's own native fallback
-#                                            (verified: with the ICD hidden the
-#                                            same binary serves rerank on CPU),
-#                                            so there is no CPU profile.
+#   neither set                        CPU. That is the SHIPPED DEFAULT (issue
+#                                       #102): no VRAM needed, boots on any
+#                                       machine, and slower on the recall path
+#                                       (a warm 10-doc rerank is 64-71 ms on a
+#                                       GPU and about 1.1 s on the CPU). The
+#                                       GPU is the opt-in, so this script does
+#                                       not pick one on its own — a device id
+#                                       is a Vulkan enumeration index, and a
+#                                       guess is how a server ends up on the
+#                                       wrong card or out of memory. Exactly one
+#                                       visible device is NOT an invitation to
+#                                       use it: an automatic switch is one the
+#                                       user cannot see coming.
+#   neither set, no Vulkan device       CPU as well. That is also this Vulkan
+#                                       build's own native fallback (verified:
+#                                       with the ICD hidden the same binary
+#                                       serves rerank on CPU), so there is no
+#                                       separate CPU preset.
 #
 # WEIGHTS. The shipped preset names HuggingFace references (hf-repo/hf-file),
 # so the weights DO NOT EXIST ON DISK at boot — llama.cpp downloads them when
@@ -74,6 +84,11 @@
 #   FABULIST_SIDECAR_PORT        8080
 #   FABULIST_SIDECAR_MODELS_MAX  3
 #   FABULIST_SIDECAR_SLEEP_IDLE_SECONDS  300
+#   FABULIST_SIDECAR_DEVICE      cpu  (also `none`. Unset means the same CPU
+#                                      mode: a GPU is the opt-in, so set
+#                                      VulkanN — or a bare N — to use one.)
+#   FABULIST_SIDECAR_DEVICE_MATCH ""   name substring; zero or several matches
+#                                      is a boot failure.
 #   FABULIST_SIDECAR_WARMUP      on   (off = serve immediately; for hosts that
 #                                      pre-seed the cache. The readiness marker
 #                                      is written at once, so health is unchanged
@@ -317,6 +332,10 @@ MATCH="${FABULIST_SIDECAR_DEVICE_MATCH:-}"
 
 DEV=""
 DEV_LINE=""
+# "request" when the user named a device, "default" for the shipped CPU mode:
+# the log line differs, because one is a choice and the other is what happens
+# when nobody chooses.
+DEV_SOURCE="request"
 
 if [ -n "$WANT" ]; then
     # Accept both "Vulkan0" and a bare "0"; "cpu"/"none" ask for NO offload
@@ -356,19 +375,22 @@ elif [ -n "$MATCH" ]; then
     fi
     DEV_LINE="$matches"
     DEV=$(printf '%s' "$DEV_LINE" | cut -d'|' -f1)
-elif [ "$device_count" -eq 1 ]; then
-    DEV_LINE="$device_lines"
-    DEV=$(printf '%s' "$DEV_LINE" | cut -d'|' -f1)
-elif [ "$device_count" -gt 1 ]; then
-    echo "[sidecar] FATAL: $device_count Vulkan devices are visible and no choice was made." >&2
-    echo "[sidecar] Vulkan enumerates in its own order; refusing to guess which one you meant." >&2
-    echo "[sidecar] devices this host exposes:" >&2
-    show_devices
-    echo "[sidecar] set FABULIST_SIDECAR_DEVICE=VulkanN (or FABULIST_SIDECAR_DEVICE_MATCH=<name substring>) in .env." >&2
-    exit 1
+else
+    # Nothing was asked for, so nothing is guessed: CPU (issue #102). A GPU is
+    # the opt-in, and the free-memory check below never chooses one for the
+    # user — it only warns.
+    DEV="none"
+    DEV_SOURCE="default"
 fi
 
-if [ "$DEV" = "none" ]; then
+if [ "$DEV_SOURCE" = "default" ]; then
+    log "CPU only: no Vulkan device was requested, so the models run on the CPU (the shipped default)."
+    if [ "$device_count" -eq 0 ]; then
+        log "CPU only: this host enumerated no Vulkan device either, so there is nothing to offload to."
+    else
+        log "To move them onto a GPU, set FABULIST_SIDECAR_DEVICE=VulkanN (or FABULIST_SIDECAR_DEVICE_MATCH=<name>) in .env."
+    fi
+elif [ "$DEV" = "none" ]; then
     log "CPU only (--device none): models stay on the CPU by request."
 elif [ -n "$DEV" ]; then
     log "using Vulkan device: $DEV_LINE"
@@ -377,9 +399,6 @@ elif [ -n "$DEV" ]; then
         log "WARNING: $DEV reports only ${free_mib} MiB free; the three models need ~4.5 GiB resident (6 GiB comfortable)."
         log "WARNING: the router will start, but a model load may fail with an out-of-memory error."
     fi
-else
-    log "WARNING: no Vulkan device was found — falling back to CPU (this build's native behaviour)."
-    log "WARNING: decision calls take several seconds and embedding indexing is ~100x slower on CPU."
 fi
 
 # --- 4. readiness marker ----------------------------------------------------

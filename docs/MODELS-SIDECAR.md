@@ -6,7 +6,8 @@ download size. This is the detail behind it.
 
 ## The three models
 
-One llama.cpp server, Vulkan build, in router mode.
+One llama.cpp server, Vulkan build, in router mode. The models run on the CPU by default; see
+[Device selection](#device-selection).
 
 | model id | route | role |
 |---|---|---|
@@ -133,17 +134,39 @@ sidecar serves the auxiliary roles, not the prose model.
 
 ## Device selection
 
-Vulkan enumerates devices in its own order, so index 0 is not necessarily your first card. When more
-than one GPU is visible the entrypoint refuses to guess. Set one of these in `.env`:
+The sidecar runs its three models on the **CPU by default**. That is a choice, and it is the
+shipped one: it needs no VRAM, and it boots on any machine. Pay for it on the recall path — one
+rerank per recall, one embed per query and per write:
+
+| backend | warm 10-doc rerank | VRAM |
+|---|---|---|
+| CPU (default) | about 1.1 s | none |
+| GPU (opt-in) | 64-71 ms | ~4.5 GiB resident, 6 GiB comfortable |
+
+About 15x on that call, measured on the same binary with the Vulkan ICD hidden for the CPU figure.
+Both answered `healthy` with `truncated = 0` on every sequence. The figures live in
+`deploy/sidecar/models.ini`, beside the flags they were taken with.
+
+To use a GPU, set one line in `.env`:
 
 ```sh
 FABULIST_SIDECAR_DEVICE=Vulkan0              # or a bare 0
 FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"     # or a name substring
 ```
 
-A clone ships no `.env`. Copy `.env.example` and uncomment the one you need. One visible device needs
-no setting. An id that does not exist is a boot failure that lists the devices. Zero Vulkan devices
-falls back to CPU — the Vulkan build's own behaviour — and the log says so.
+Vulkan enumerates devices in its own order, so index 0 is not necessarily your first card. Nothing
+is picked for you, which is why an explicit setting is the way a GPU is switched on. An id that does
+not exist is a boot failure that lists the devices. A name match that resolves to no device, or to
+several, is the same boot failure.
+
+Go back to the CPU with `FABULIST_SIDECAR_DEVICE=cpu` (or `none`), or by removing the line. That is
+what a fresh clone gets: a clone ships no `.env`, and with no `.env` the sidecar runs on the CPU.
+The log says which mode it picked, and how to change it.
+
+No memory check ever changes the mode. When a requested device reports less free memory than that,
+the entrypoint warns and starts anyway. A load that does not fit is llama.cpp's own out-of-memory
+error, in `docker compose logs fabulist-models`. The automatic switch is deliberately not there: a
+silent slowdown is worse than a loud failure.
 
 The image tag is pinned (`server-vulkan-b11804`). The d1 decision model is a new architecture, and
 older images answer 501 on `/v1/systemone`.

@@ -197,7 +197,8 @@ any provider the engine is pointed at.
 - Python **3.12** with [uv](https://docs.astral.sh/uv/), and Node **>= 22.6** with npm — only to
   build from source or work on the UI.
 - **ffmpeg** (+ `ffprobe`) for audio or video attachments.
-- Linux, macOS or WSL. The engine needs no GPU; the model server owns that question.
+- Linux, macOS or WSL. No GPU is needed anywhere: the sidecar runs its models on the CPU by
+  default, and a GPU is an opt-in.
 
 ## Install
 
@@ -214,9 +215,14 @@ arg, not a default; the compose file shows the line.
 
 ### The models sidecar
 
-The default compose file starts **`fabulist-models`** too: one llama.cpp server in Vulkan router
-mode. It serves three auxiliary models — `embeddinggemma-2` for memory embeddings, `qwen3-reranker`
-for recall reranking, `d1-3b` for the yes/no checks.
+The default compose file starts **`fabulist-models`** too: one llama.cpp server (the Vulkan build)
+in router mode. It serves three auxiliary models — `embeddinggemma-2` for memory embeddings,
+`qwen3-reranker` for recall reranking, `d1-3b` for the yes/no checks.
+
+It runs them on the **CPU by default**: no VRAM needed, and it boots on any machine. With VRAM to
+spare, one line in `.env` moves them onto a GPU — `FABULIST_SIDECAR_DEVICE=Vulkan0` (or
+`FABULIST_SIDECAR_DEVICE_MATCH="RTX 5090"`) — where a warm 10-document rerank takes 64-71 ms
+instead of about 1.1 s. Leave the line out and the CPU stays.
 
 Nothing ships in the image. The compose file names each model as a HuggingFace reference, and your
 first request downloads it: **~2.7 GiB, once** (2.73 GiB measured). It lands in the named volume
