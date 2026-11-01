@@ -6,7 +6,7 @@ One line per change, with a reference to the closed issue. The issue thread carr
 detail; this file is an index, not a report. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.7] - 2026-11-01
 
 ### Fixed
 
