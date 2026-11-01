@@ -19,6 +19,7 @@ imported from the same modules the engine imports them from::
     caption      fabulist.media.images.CAPTION_SYSTEM
     bts          fabulist.state.bts.BTS_SYSTEM_PROMPT
     critic       fabulist.prompts.critic.CRITIC_SYSTEM_PROMPT
+    planner      fabulist.graph.nodes.DEFAULT_PLANNER_DIRECTIVE
 
 ``narrate`` is intentionally untouched (its ``narrator_system`` row is assembled
 by the compiler, not a single constant). ``attribution`` is no longer a flow at
@@ -27,6 +28,13 @@ model-facing prompt left to seed. ``assistant`` is **skipped on purpose**:
 its system prompt is per-definition
 (``fabulist.assistants.manager.render_assistant_system``), not one constant, so
 there is nothing to seed into the flow.
+
+The planner row (issue #105) is the ADR-006 closing move: its directive was the
+one model-facing prompt that lived only in a Python file, behind an empty preset
+row. The seeded text equals ``DEFAULT_PLANNER_DIRECTIVE`` byte for byte, so the
+sent prompt does not change — the factory version bump is the ONE visible
+event, and the constant stays as the fallback for a call with no preset surface
+(direct node calls, tests).
 
 HTTP-first, API-only
 --------------------
@@ -81,6 +89,10 @@ FLOW_SYSTEM_MODULE_ID: dict[str, str] = {
     "caption": "caption_system",
     "bts": "bts_system",
     "critic": "critic_system",
+    # Issue #105: the planner's one authored row. The directive text is the
+    # engine constant, byte for byte — no sent prompt changes, the text just
+    # becomes preset data (ADR-006).
+    "planner": "planner_system",
 }
 
 #: How long to wait for the engine to answer after a restart, in seconds.
@@ -108,6 +120,7 @@ def resolve_system_prompts() -> dict[str, str]:
     # Lazy imports: wiring imports fabulist.api, which imports this script's
     # consumers; importing at call time keeps the module import graph flat.
     from fabulist.graph.compaction import SUMMARIZER_SYSTEM_PROMPT
+    from fabulist.graph.nodes import DEFAULT_PLANNER_DIRECTIVE
     from fabulist.media.images import CAPTION_SYSTEM
     from fabulist.prompts.critic import CRITIC_SYSTEM_PROMPT
     from fabulist.state.bts import BTS_SYSTEM_PROMPT
@@ -121,6 +134,7 @@ def resolve_system_prompts() -> dict[str, str]:
         "caption": CAPTION_SYSTEM,
         "bts": BTS_SYSTEM_PROMPT,
         "critic": CRITIC_SYSTEM_PROMPT,
+        "planner": DEFAULT_PLANNER_DIRECTIVE,
     }
 
 
@@ -289,6 +303,29 @@ def verify(preset: dict, constants: dict[str, str]) -> list[str]:
     return problems
 
 
+def verify_row_order(before: dict, after: dict) -> list[str]:
+    """Flag any flow whose row-id ORDER changed across the preset write.
+
+    AGENTS.md is explicit: the seed write path can reorder flow rows, so the
+    order must be checked after every write (``tests/test_prompt_flows.py``
+    pins it). A seed that appends or drops rows is a loud failure here instead
+    of a silent artifact diff.
+    """
+    problems: list[str] = []
+    for flow, rows in before.items():
+        was = [str(row.get("id") or "") for row in rows or []]
+        now = [str(row.get("id") or "") for row in (after.get(flow) or [])]
+        if was != now:
+            problems.append(
+                f"{flow}: row order changed across the write "
+                f"(before={was}, after={now})"
+            )
+    for flow in after:
+        if flow not in before:
+            problems.append(f"{flow}: flow appeared in the write payload")
+    return problems
+
+
 # -- presentation ------------------------------------------------------------
 
 
@@ -403,12 +440,17 @@ def main(argv: list[str] | None = None) -> int:
             f"(factory_changed: {committed.get('factory_changed')})"
         )
 
-        problems = verify(updated, constants)
+        problems = verify(updated, constants) + verify_row_order(
+            flows, updated.get("flows") or {}
+        )
         if problems:
             for problem in problems:
                 print(f"VERIFY FAIL: {problem}", file=sys.stderr)
             return 1
-        print("verified: every covered flow's system row carries its constant.")
+        print(
+            "verified: every covered flow's system row carries its constant, "
+            "and no flow's row order changed."
+        )
     return 0
 
 

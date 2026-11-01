@@ -1,6 +1,6 @@
 {
   "_comment": "Fabulist factory default preset image (D26). This file is the versioned factory image the engine LOADS when seeding a fresh default: edit it only deliberately and commit it. Produced by POST /api/prompts/default/commit; reset (POST /api/prompts/default/reset) re-seeds the persisted default from it. Do not hand-edit module ids unless you mean to.",
-  "factory_version": 11,
+  "factory_version": 12,
   "preset_id": "default",
   "name": "default",
   "modules": [
@@ -278,7 +278,7 @@
         "name": "Planner directive",
         "type": "system",
         "role": "system",
-        "content": "",
+        "content": "You are the story planner for a roleplay narrative engine. Read the context and set the plan the next turns steer by: 4-6 forward story strings, the in-fiction date/time the scene opens at, the weather and its outlook, and the facts this plan holds established. Follow the card or world when it already states a start. Answer with the plan only.",
         "enabled": true
       }
     ],

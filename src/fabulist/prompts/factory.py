@@ -101,7 +101,13 @@ __all__ = [
 #:       input-language statement (read the tags, never write them: render what
 #:       a block carries as plain prose). No tag, anchor or position changes.
 #:       Existing installs see the review/reset notice and adopt deliberately.
-FACTORY_VERSION: int = 11
+#:  12 — issue #105 (ADR-006): the planner directive stops being a code-only
+#:       prompt. The factory planner flow's ``planner_system`` row is seeded
+#:       with ``DEFAULT_PLANNER_DIRECTIVE`` byte for byte (the constant stays
+#:       as the fallback for a call with no preset surface), so the sent prompt
+#:       does not change while the text becomes editable preset data. Existing
+#:       installs see the review/reset notice and adopt deliberately.
+FACTORY_VERSION: int = 12
 
 #: Repo-relative location of the committed factory image. ``configs/`` is
 #: gitignored user state, so the artifact lives under ``prompts/`` instead
