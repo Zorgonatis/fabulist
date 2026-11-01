@@ -129,6 +129,13 @@ def test_the_serving_flags_survive_the_ref_rewrite():
     assert sections["embeddinggemma-2"]["ctx-size"] == "8192"
     assert sections["embeddinggemma-2"]["pooling"] == "mean"
     assert sections["embeddinggemma-2"]["embd-normalize"] == "2"
+    # 32768 is a required value, not a tuned one, and it cannot go to 8192.
+    # llama.cpp asserts a non-causal batch fits inside one n_ubatch and that an
+    # image's patches fit inside one batch; its defaults (n_batch 2048,
+    # n_ubatch 512) trip the first assert on an ordinary text batch. The
+    # reserved buffers are sized by min(ctx, n_ubatch), so the value sets no
+    # buffer size here; the 4x over ctx 8192 is headroom for the multimodal
+    # path. (See the [embeddinggemma-2] section of deploy/sidecar/models.ini.)
     assert sections["embeddinggemma-2"]["ubatch-size"] == "32768"
     assert sections["d1-3b"]["ctx-size"] == "8192"
 
