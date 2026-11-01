@@ -1686,6 +1686,22 @@
 					{preview.chars} chars
 					{#if preview.preview_mode}<span class="mode">mode: {preview.preview_mode}</span>{/if}
 				</div>
+				<!-- Issue #104: the preview's note FIELDS (never a synthetic message)
+				     — which lane/member it rendered and what it had to substitute. -->
+				{#if preview.lane || preview.lane_member || preview.assistant_id || preview.notes?.length}
+					<div class="preview-notes">
+						{#if preview.lane}
+							<span class="note-chip">lane: {preview.lane_label || preview.lane}</span>
+						{/if}
+						{#if preview.lane_member}
+							<span class="note-chip">lane member: {preview.lane_member}</span>
+						{/if}
+						{#if preview.assistant_id}
+							<span class="note-chip">assistant: {preview.assistant_id}</span>
+						{/if}
+						{#each preview.notes ?? [] as note}<p class="hint">{note}</p>{/each}
+					</div>
+				{/if}
 				<div class="messages">
 					{#each preview.messages as msg, i (i)}
 						<div class="msg">
@@ -1710,6 +1726,7 @@
 		title={editingBlock.name}
 		source={editingBlockSource}
 		value={editingBlock.content}
+		engineDefault={editingBlock.type === 'system' ? (openStep?.system_default ?? '') : ''}
 		{variables}
 		onSave={applyBlockEdit}
 		onClose={closeBlockEditor}
@@ -1973,6 +1990,20 @@
 	.preview-meta .mode {
 		margin-left: 0.4rem;
 		color: var(--warn);
+	}
+	.preview-notes {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.2rem 0.4rem;
+		margin-top: 0.15rem;
+	}
+	.note-chip {
+		font-size: 0.66rem;
+		color: var(--text-muted);
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		padding: 0 0.35rem;
 	}
 	.messages {
 		display: flex;

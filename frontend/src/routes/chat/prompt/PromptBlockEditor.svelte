@@ -20,6 +20,7 @@
 		title,
 		source,
 		value,
+		engineDefault = '',
 		variables = [],
 		onSave,
 		onClose
@@ -32,18 +33,43 @@
 		source: BlockSource;
 		/** The block's current content. */
 		value: string;
+		/** The text an EMPTY `system` row sends — the engine default (issue #105,
+		 * `GET /api/prompts/steps` `system_default`). The editor pre-fills it so the
+		 * user edits the real prompt instead of a blind box; ``''`` when the flow
+		 * has no single engine default for this row. */
+		engineDefault?: string;
 		variables?: PromptVariableSpec[];
 		onSave: (content: string) => void;
 		onClose: () => void;
 	} = $props();
 
+	/** What the draft is compared against: the row's OWN text, or — while the row
+	 * is still empty — the engine default the box was pre-filled with. So merely
+	 * opening a pre-filled row is not an unsaved edit, and the first keystroke is
+	 * the authored override (the empty-body-means-engine-default seam stays
+	 * exact: nothing is saved until the user actually changes the text).
+	 *
+	 * Mount-time read by design (the overlay is remounted per block): the props
+	 * are the seed, not a live sync.
+	 */
+	const seed = untrack(() => {
+		const prefill =
+			source.kind === 'engine-default' && value.trim() === '' && engineDefault.trim() !== ''
+				? engineDefault
+				: value;
+		// True when the box shows the engine default rather than saved content.
+		return { baseline: prefill, prefilled: prefill !== value };
+	});
+	const baseline = seed.baseline;
+	const prefilled = seed.prefilled;
+
 	/** Local draft. The overlay is mounted fresh per block, so the initial prop
 	 * read is the right seed (`untrack` — a prop read in a state initializer must
 	 * not become a tracked dependency; there is no prop sync by design). */
-	let text = $state(untrack(() => value));
+	let text = $state(baseline);
 	let sourceEl = $state<HTMLTextAreaElement | null>(null);
 
-	const dirty = $derived(text !== value);
+	const dirty = $derived(text !== baseline);
 
 	onMount(() => register('prompt-block', () => onClose()));
 
@@ -121,7 +147,13 @@
 		</p>
 	{:else if source.kind === 'engine-default'}
 		<p class="notice">
-			Empty = the built-in <strong>{scope}</strong> prompt. Type here to override it.
+			{#if prefilled}
+				Showing the built-in <strong>{scope}</strong> prompt — this block is still empty, so that
+				text is what gets sent. Your first keystroke makes it yours; the text you apply replaces the
+				engine default for this block.
+			{:else}
+				Empty = the built-in <strong>{scope}</strong> prompt. Type here to override it.
+			{/if}
 		</p>
 	{/if}
 

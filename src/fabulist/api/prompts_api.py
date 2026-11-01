@@ -561,6 +561,30 @@ def _bound_agent(preset: Preset | None, interaction: str) -> str | None:
     return str(default_agent) if default_agent is not None else None
 
 
+#: Flows whose ``system`` row has a single engine default the studio can show.
+#: ``planner`` is the one that ships EMPTY (issue #105): its directive lived
+#: only in ``nodes.DEFAULT_PLANNER_DIRECTIVE``, so the block editor had nothing
+#: to pre-fill and the badge's "type to override" was a blind box. The text is
+#: resolved from the same constant the fallback seam uses (never copied here),
+#: so the served default cannot drift from what an empty row would send.
+_ENGINE_DEFAULT_SYSTEM_INTERACTIONS: frozenset[str] = frozenset({"planner"})
+
+
+def _engine_default_system(interaction: str) -> str | None:
+    """The engine default text for a flow's ``system`` row, else ``None``.
+
+    ``None`` means "this flow has no single engine-default text a surface can
+    honestly show" (narrate assembles its system prompt; the other flows'
+    factory rows ship authored). Kept lazy: importing the node layer at module
+    top would cycle (``fabulist.wiring`` imports ``fabulist.api``).
+    """
+    if interaction not in _ENGINE_DEFAULT_SYSTEM_INTERACTIONS:
+        return None
+    from fabulist.graph.nodes import DEFAULT_PLANNER_DIRECTIVE
+
+    return DEFAULT_PLANNER_DIRECTIVE
+
+
 def _system_source(rows: list[Any]) -> str:
     """``"authored"`` when an enabled ``system`` row carries text, else ``"engine"``.
 
@@ -586,7 +610,9 @@ async def list_steps_route(request: Request) -> dict:
     :data:`fabulist.prompts.catalog.INTERACTION_CATALOG` (the single authoring
     source) and decorated with the ACTIVE preset's state: its bound agent, its
     structural blocks, its block count, whether it is enabled, and whether its
-    system prompt is authored or engine-supplied. Read-only; nothing is written.
+    system prompt is authored or engine-supplied. ``system_default`` carries the
+    engine default text for a flow whose ``system`` row can be empty (issue
+    #105) so the block editor can pre-fill it. Read-only; nothing is written.
     """
     log = _log_for(request)
     preset = active_preset(log)
@@ -606,6 +632,10 @@ async def list_steps_route(request: Request) -> dict:
                 "block_count": len(rows),
                 "enabled": any(bool(row.get("enabled", True)) for row in rows),
                 "system_source": _system_source(rows),
+                # Issue #105: the text an EMPTY ``system`` row would send. The
+                # block editor pre-fills it so no install keeps a blind box;
+                # ``null`` when the flow has no single engine default.
+                "system_default": _engine_default_system(interaction),
             }
         )
     return {"steps": steps}

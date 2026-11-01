@@ -171,6 +171,10 @@ export interface PromptStep {
 	block_count: number;
 	enabled: boolean;
 	system_source: 'authored' | 'engine';
+	/** The text an EMPTY `system` row would send (issue #105). `null` when the
+	 * flow has no single engine default the studio can show. The block editor
+	 * pre-fills it so an empty row is never a blind box. */
+	system_default?: string | null;
 }
 
 
@@ -182,11 +186,26 @@ export interface PromptPreviewMessage {
 
 
 /** Result of `POST /api/prompts/preview`. `preview_mode` names the render path
- * and is non-empty when the preview is degraded (e.g. no active preset). */
+ * and is non-empty when the preview is degraded (e.g. no active preset).
+ *
+ * The note fields beside the list report what a preview had to substitute or
+ * which lane it rendered (issue #104: they ride response FIELDS, never a
+ * synthetic message). The drawer renders them as one caption line so the list
+ * is never silently misread as the unpreviewed default. */
 export interface PromptPreview {
 	messages: PromptPreviewMessage[];
 	chars: number;
 	preview_mode: string;
+	/** Lane member display name when the npc lane previewed a named member. */
+	lane_member?: string | null;
+	/** Lane id when the proposals lane previewed one data type. */
+	lane?: string;
+	lane_kind?: string;
+	lane_label?: string;
+	/** The assistant definition the consult previewed. */
+	assistant_id?: string | null;
+	/** Substitutions the preview could not resolve (stated, never hidden). */
+	notes?: string[];
 }
 
 
