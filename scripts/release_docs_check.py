@@ -23,7 +23,11 @@ Checks:
 * **M2** — ``CHANGELOG.md`` has ``## [<version>] - <YYYY-MM-DD>`` and every
   bullet in it carries the issue reference ``(#NN)`` (AGENTS.md, Releases).
 * **M3** — every ``(#NN)`` in the release's commit subjects (``git log
-  <previous-tag>..HEAD``) is referenced from that changelog section.
+  <previous-tag>..HEAD``) is referenced from the changelog section it reads: the
+  ``[<version>]`` section when it exists, otherwise ``[Unreleased]`` — the cut
+  writes the version section, so pre-cut the index is still ``[Unreleased]``.
+  The line names which section it read; with neither present it fails, rather
+  than listing issues as missing from a section that does not exist.
 * **M4** — every ``FABULIST_*`` name the compose files pass is either in
   ``.env.example`` or justified plumbing (:data:`COMPOSE_PLUMBING`).
 * **M5** — the copy register's retired words do not appear as user-visible text
@@ -91,6 +95,9 @@ _PYPROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"')
 _PACKAGE_VERSION = re.compile(r'^\s*"version"\s*:\s*"([^"]+)"')
 _ROOT_PACKAGE_NAME = 'name = "fabulist"'
 _SECTION_HEADER = re.compile(r"^## \[([^\]]+)\] - (\d{4}-\d{2}-\d{2})\s*$")
+_UNRELEASED_HEADER = re.compile(r"^## \[Unreleased\]\s*$")
+#: The section M3 falls back to when the version's own section does not exist yet.
+UNRELEASED = "Unreleased"
 _ISSUE_REF = re.compile(r"\(#(\d+)\)")
 _TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 _INTERPOLATION = re.compile(r"\$\{(FABULIST_[A-Z0-9_]+)")
@@ -176,24 +183,52 @@ def check_version_agreement(
 # ---------------------------------------------------------------------------
 
 
-def _changelog_section(text: str, version: str) -> tuple[int, list[tuple[int, str]]]:
-    """``(header line, body lines)`` of the ``## [version]`` section; ``0`` if absent."""
-    lines = text.splitlines()
-    start = 0
-    for number, line in enumerate(lines, 1):
-        match = _SECTION_HEADER.match(line)
-        if match and match.group(1) == version:
-            start = number
-            break
-    if start == 0:
-        return 0, []
+def _section_body(lines: list[str], start: int) -> list[tuple[int, str]]:
+    """The numbered body lines below the header on line ``start`` (1-based)."""
     body: list[tuple[int, str]] = []
     for number in range(start + 1, len(lines) + 1):
         line = lines[number - 1]
         if line.startswith("## "):
             break
         body.append((number, line))
-    return start, body
+    return body
+
+
+def _changelog_section(text: str, version: str) -> tuple[int, list[tuple[int, str]]]:
+    """``(header line, body lines)`` of the ``## [version]`` section; ``0`` if absent."""
+    lines = text.splitlines()
+    for number, line in enumerate(lines, 1):
+        match = _SECTION_HEADER.match(line)
+        if match and match.group(1) == version:
+            return number, _section_body(lines, number)
+    return 0, []
+
+
+def _unreleased_section(text: str) -> tuple[int, list[tuple[int, str]]]:
+    """The same for ``## [Unreleased]``, whose header carries no date part."""
+    lines = text.splitlines()
+    for number, line in enumerate(lines, 1):
+        if _UNRELEASED_HEADER.match(line):
+            return number, _section_body(lines, number)
+    return 0, []
+
+
+def _coverage_section(
+    changelog: Path, version: str
+) -> tuple[str, list[tuple[int, str]]] | None:
+    """The section M3 reconciles against: ``[<version>]``, else ``[Unreleased]``.
+
+    Returns the section name and its body, or ``None`` when the changelog holds
+    neither. Resolving the section is independent of M2's verdict.
+    """
+    text = changelog.read_text(encoding="utf-8")
+    start, body = _changelog_section(text, version)
+    if start:
+        return version, body
+    start, body = _unreleased_section(text)
+    if start:
+        return UNRELEASED, body
+    return None
 
 
 def check_changelog_shape(version: str, *, changelog: Path = CHANGELOG) -> bool:
@@ -236,30 +271,45 @@ def _previous_tag(version: str, git: GitRunner) -> str:
 def check_issue_coverage(
     version: str, *, changelog: Path = CHANGELOG, git: GitRunner = _git
 ) -> bool:
-    """M3: the changelog section indexes every issue the release's commits cite."""
+    """M3: the section it reads indexes every issue the release's commits cite.
+
+    Pre-cut there is no ``[<version>]`` section to read — the cut writes it — so
+    the entries live under ``[Unreleased]`` and the line says which it read. The
+    check never reports issues as missing from a section that does not exist.
+    """
+    section = _coverage_section(changelog, version)
+    if section is None:
+        return _emit(
+            "FAIL",
+            "M3",
+            f"no changelog section to attribute: {changelog.name} has neither "
+            f"'## [{version}]' nor '## [{UNRELEASED}]'",
+        )
+    name, body = section
+    check = f"M3 (reading [{name}]):"
     try:
         tag = _previous_tag(version, git)
         code, out = git("log", f"{tag}..HEAD", "--pretty=format:%s")
         if code != 0:
             raise _Skip(f"git log {tag}..HEAD failed: {out.strip().splitlines()[0]}")
     except _Skip as reason:
-        return _emit("SKIP", "M3", f"{reason}; issue coverage unverified")
+        return _emit("SKIP", check, f"{reason}; issue coverage unverified")
     committed = {int(number) for number in _ISSUE_REF.findall(out)}
-    _, body = _changelog_section(changelog.read_text(encoding="utf-8"), version)
     referenced = {int(number) for number in _ISSUE_REF.findall("\n".join(line for _, line in body))}
     missing = sorted(committed - referenced)
     if missing:
         return _emit(
             "FAIL",
-            "M3",
-            f"{tag}..HEAD cites "
+            check,
+            "missing "
             + ", ".join(f"#{number}" for number in missing)
-            + f" — absent from the {version} section of {changelog.name}",
+            + f" — cited by {tag}..HEAD, absent from the [{name}] section of {changelog.name}",
         )
     return _emit(
         "PASS",
-        "M3",
-        f"{len(committed)} issue(s) from {tag}..HEAD are indexed in the {version} section",
+        check,
+        f"every issue in {tag}..HEAD is accounted for "
+        f"({len(committed)} cited, all in the [{name}] section of {changelog.name})",
     )
 
 

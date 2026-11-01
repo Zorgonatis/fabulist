@@ -121,6 +121,49 @@ def test_m3_fails_on_an_unindexed_issue_and_skips_without_a_tag(capsys, tmp_path
     assert out.startswith("SKIP M3") and "no v* tag below 0.0.7" in out
 
 
+def test_m3_reads_the_version_section_when_it_exists(capsys, tmp_path):
+    """A cut that already wrote its own section reconciles against that one."""
+    changelog = _changelog(
+        tmp_path,
+        "## [0.0.7] - 2026-11-01\n\n- One change (#99)\n\n"
+        "## [Unreleased]\n\n- Work indexed only under Unreleased (#101)\n",
+    )
+    git = _fake_git(tags="v0.0.6\n", subjects="fix things (#99)\nfeat: more (#101)\n")
+    assert gate.check_issue_coverage("0.0.7", changelog=changelog, git=git) is False
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("FAIL M3 (reading [0.0.7]):")
+    assert "missing #101" in out and "[Unreleased]" not in out
+
+
+def test_m3_reads_unreleased_and_says_so_when_the_version_section_is_absent(capsys, tmp_path):
+    """Pre-cut the entries live under [Unreleased]; the line names the section it read."""
+    changelog = _changelog(
+        tmp_path, "## [Unreleased]\n\n- One change (#99)\n- Another (#100)\n"
+    )
+    git = _fake_git(tags="v0.0.6\nv0.0.5\n", subjects="fix things (#99)\nfeat: more (#100)\n")
+    assert gate.check_issue_coverage("0.0.7", changelog=changelog, git=git) is True
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("PASS M3 (reading [Unreleased]):")
+    assert "v0.0.6..HEAD is accounted for" in out
+    # The same changelog fails M2: the checks do not depend on each other.
+    assert gate.check_changelog_shape("0.0.7", changelog=changelog) is False
+    assert capsys.readouterr().out.startswith("FAIL M2")
+    unindexed = _fake_git(tags="v0.0.6\n", subjects="fix things (#99)\nnew work (#104)\n")
+    assert gate.check_issue_coverage("0.0.7", changelog=changelog, git=unindexed) is False
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("FAIL M3 (reading [Unreleased]):") and "missing #104" in out
+
+
+def test_m3_fails_without_a_section_to_attribute_instead_of_listing_issues(capsys, tmp_path):
+    changelog = _changelog(tmp_path, "## [0.0.6] - 2026-10-28\n\n- Already shipped (#95)\n")
+    git = _fake_git(tags="v0.0.6\n", subjects="fix things (#99)\n")
+    assert gate.check_issue_coverage("0.0.7", changelog=changelog, git=git) is False
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("FAIL M3")
+    assert "no changelog section to attribute" in out
+    assert "#99" not in out and "missing" not in out
+
+
 # --- M4: environment parity -----------------------------------------------------
 
 
