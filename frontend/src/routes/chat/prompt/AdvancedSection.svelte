@@ -11,6 +11,7 @@
 		PromptRegexRow,
 		PromptSurfaces
 	} from '#lib/api';
+	import { DEFAULT_HISTORY_KEEP_LAST_DSL, DEFAULT_HISTORY_STRIP_DSL } from '#lib/api/prompts';
 
 	let {
 		surfaces,
@@ -68,6 +69,18 @@
 	 * EXPRESSION in Svelte — keep braces out of attribute strings). */
 	const SURFACE_PLACEHOLDER = 'Using the shipped text — type to override it';
 	const SURFACE_TEXTAREA_PLACEHOLDER = 'Type to replace the shipped text';
+
+	/** Tooltip for the keep-last window (the empty value is the engine default). */
+	const KEEP_LAST_TITLE = `How many of the newest turns keep their panels. Left empty it uses the built-in default (${DEFAULT_HISTORY_KEEP_LAST_DSL}).`;
+
+	/** Numeric knob read: empty clears it (the engine default applies); anything
+	 * typed is clamped to a whole count `>= 0`, matching the engine's rule. */
+	function keepCount(raw: string): number | undefined {
+		if (raw.trim() === '') return undefined;
+		const parsed = Number(raw);
+		if (!Number.isFinite(parsed)) return undefined;
+		return Math.max(0, Math.trunc(parsed));
+	}
 
 	/** The recalled section headers (D27 surface 2). */
 	const RECALLED_HEADERS: { key: 'recall' | 'world_info' | 'recap' | 'bts'; label: string }[] = [
@@ -189,10 +202,11 @@
 		</label>
 	{/each}
 
-	<!-- Group 3 — rewrites and depth applied to projected history. -->
+	<!-- Group 3 — rewrites and the history knobs (depth · keep-last window · strip). -->
 	<h3>Earlier turns</h3>
 	<p class="sub">
-		Clean-ups applied to earlier turns before they are sent, plus how far back to send.
+		Clean-ups for earlier turns, how far back to send, and how many of the newest turns keep
+		their panels.
 	</p>
 	{#each regexRows as row, index (row.id)}
 		<div class="regex-row">
@@ -285,14 +299,33 @@
 			/>
 		</label>
 		<label class="tiny">
+			Keep panels for
+			<input
+				type="number"
+				class="surface-input depth"
+				aria-label="Turns that keep their panels"
+				title={KEEP_LAST_TITLE}
+				min="0"
+				step="1"
+				placeholder={String(DEFAULT_HISTORY_KEEP_LAST_DSL)}
+				value={historyKnobs.dsl_keep_last ?? ''}
+				oninput={(event) => setHistory({ dsl_keep_last: keepCount(event.currentTarget.value) })}
+			/>
+			turns
+		</label>
+		<label class="tiny">
 			<input
 				type="checkbox"
-				checked={historyKnobs.strip_dsl ?? false}
+				checked={historyKnobs.strip_dsl ?? DEFAULT_HISTORY_STRIP_DSL}
 				onchange={(event) => setHistory({ strip_dsl: event.currentTarget.checked })}
 			/>
-			Strip panel markup from earlier turns
+			Remove panel markup from older turns
 		</label>
 	</div>
+	<p class="hint">
+		On: older turns lose their panels, the last N keep theirs. Off: every turn keeps its
+		panels.
+	</p>
 
 	<!-- Group 4 — legacy override map, kept until migrated into the Rules rows. -->
 	<h3>Old rule overrides</h3>

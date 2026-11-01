@@ -96,7 +96,19 @@ export interface PromptRecalledSurfaces {
 export interface PromptHistorySurfaces {
 	depth?: number;
 	strip_dsl?: boolean;
+	/** How many of the NEWEST narrative turns keep their openui panels when
+	 * `strip_dsl` is on (`history.dsl_keep_last`, engine default 3; `0` strips
+	 * every turn). Omitted = fall back to the engine default. */
+	dsl_keep_last?: number;
 }
+
+
+/** Engine defaults for history knobs a preset may omit — mirrors
+ * `fabulist.prompts.surfaces` (`DEFAULT_HISTORY_STRIP_DSL` = True,
+ * `DEFAULT_HISTORY_KEEP_LAST_DSL` = 3). A preset that stores nothing gets
+ * these; the UI SHOWS them and never writes them back. */
+export const DEFAULT_HISTORY_STRIP_DSL = true;
+export const DEFAULT_HISTORY_KEEP_LAST_DSL = 3;
 
 
 /** The D27 `surfaces` block: every formerly code-only token surface, carried by
@@ -387,6 +399,11 @@ export function normalizePromptSurfaces(raw: unknown): PromptSurfaces {
 		const knobs: PromptHistorySurfaces = {};
 		if (typeof h.depth === 'number' && Number.isFinite(h.depth)) knobs.depth = h.depth;
 		if (typeof h.strip_dsl === 'boolean') knobs.strip_dsl = h.strip_dsl;
+		// The engine takes a whole count `>= 0` only (surfaces.normalize_surfaces
+		// drops anything else), so keep the UI reading the same value the engine
+		// will actually use.
+		if (typeof h.dsl_keep_last === 'number' && Number.isInteger(h.dsl_keep_last) && h.dsl_keep_last >= 0)
+			knobs.dsl_keep_last = h.dsl_keep_last;
 		if (Object.keys(knobs).length > 0) out.history = knobs;
 	}
 
