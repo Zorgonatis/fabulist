@@ -8,6 +8,17 @@ detail; this file is an index, not a report. Versioning follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The last N turns keep their panels in the model's history again: the keep-last window read the prose channel, which never holds panel markup (#100)
+
+### Changed
+
+- The keep-last panel window is editable next to History depth, and the panel-strip control now shows the engine's real default instead of its opposite (#100)
+- The studio's Queries pane is named Repair triggers — a row is the cause, the repair is the effect (#99)
+- Studio tab bands read as bands: band captions outrank their pills and the bands are spaced apart (#99)
+- The embedder's batch keys record why they exist: two llama.cpp asserts require them, and the 4x over ctx reserves nothing (#101)
+
 ## [0.0.6] - 2026-10-28
 
 ### Fixed

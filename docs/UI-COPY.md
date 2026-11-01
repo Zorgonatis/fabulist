@@ -74,6 +74,39 @@ Grouped by surface; every string below is display copy only.
 | Profile pane | "The roster rides the envelope and replaces it on import."; "…the envelope omits the assistant key…" | "Your assistants travel with the profile and replace the ones on the other side."; "…assistants stay out of the file…" |
 | Appearance | "Light is the strict preset (every divider holds 3:1)." | "Light is the highest-contrast choice — every divider stays clearly visible." |
 
+## Copy changes after the #58 sweep
+
+Display copy only, grouped by issue. Rule 6 held throughout: no key, id, route,
+component name or log anchor was renamed to fix a label.
+
+### Issue #100 — the earlier-turns knobs
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Advanced (prompt text) — history knobs | "Strip panel markup from earlier turns" | "Remove panel markup from older turns" |
+| Advanced (prompt text) — history knobs (new control) | no control for the keep-last window | "Keep panels for [N] turns", with the hint "On: older turns lose their panels, the last N keep theirs. Off: every turn keeps its panels." |
+| Advanced (prompt text) — group description | "Clean-ups applied to earlier turns before they are sent, plus how far back to send." | "Clean-ups for earlier turns, how far back to send, and how many of the newest turns keep their panels." |
+| Prompt drawer — Advanced door | "Token text — component library, recalled framing, regex, history" | "Text the engine fills in — the component list, recalled memories and older turns" |
+
+A label must state the engine's real default. A checkbox that renders `?? false`
+against an engine default of `true` describes the opposite of what the engine
+does; the control now reads the shipped default, and an inherited default is
+never written back into an untouched preset.
+
+### Issue #99 — Queries becomes Repair triggers
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Studio tab and pane title | "Queries" | "Repair triggers" |
+| Repair triggers pane — title, loading, save | "Decision queries"; "Loading decision queries…"; "Save queries" | "Repair triggers"; "Loading repair triggers…"; "Save triggers" |
+| Repair triggers pane — intro | "The checks the engine runs on every turn before the critic reviews the prose. A check that fires is handed to the critic as a specific issue…" | "Checks the engine runs on every turn. When a row fires, the turn is sent back to be repaired before you see it…" |
+
+The word choice is deliberate and is now the register's term: **a repair trigger
+is the cause, a repair is the effect.** "Repairs" was rejected for this tab
+because the app already uses "repair" for the effect — the `narrate (repair N)`
+stage labels and "the engine caught these and repaired them" in the transcript.
+"Critic" stays an internal word and is not surfaced as a label.
+
 ## Deliberately kept
 
 - **`Anti Injection`** — the feature's own name (`ANTI_INJECTION_FLAG`), pinned
