@@ -3738,6 +3738,72 @@ def _planner_messages(
     ]
 
 
+@dataclass(frozen=True)
+class PlannerRequest:
+    """One planner call's prepared request — the messages and their inputs.
+
+    Issue #104: the planner's list is composed in TWO halves (the authored
+    directive from its flow, then the structural context block + ask), so the
+    composer is a named seam both the node and the studio preview call. The
+    derived inputs ride along because the node's parse/repair path needs the
+    same ``fields``/``turn_seq``/``profile`` the messages were built under.
+    """
+
+    #: The exact list handed to the model: ``\n\n``-joined directive + context
+    #: (system) and the refresh/steer ask (user).
+    messages: list[dict]
+    #: The preset's planner ``fields`` (the tool schema's extra properties).
+    fields: Any
+    #: The committed-turn number the ask names.
+    turn_seq: int
+    #: The Tier A transport profile, or ``None`` for content mode.
+    profile: dict | None
+
+
+def planner_request(
+    *,
+    log: LogPort,
+    session_id: str,
+    state: TurnState,
+    directive: str,
+    planner_config: Callable[[], Any] | None = None,
+    request_profile_fn: Callable[[], dict | None] | None = None,
+) -> PlannerRequest:
+    """The planner's ONE request list — directive + context block + the ask.
+
+    Issue #104: this is the single composer. :func:`make_planner_node` calls it
+    for the plan phase, and ``POST /api/prompts/preview`` calls it through
+    :mod:`fabulist.prompts.request_parts`, so what the drawer shows is the list
+    the planner sends (the directive, the ``_planner_context`` block — canon
+    included since issue #106 — and the ask), never a flow render standing in
+    for it.
+
+    ``planner_config`` is the live reader of the preset's
+    ``{"cadence", "steer", "fields"}``; ``request_profile_fn`` resolves the
+    connection's Tier A transport (``None`` = content mode, which states the
+    schema in the system message). Both default to their no-preset behaviour so
+    a direct call renders the code defaults.
+    """
+    config = dict(planner_config() or {}) if planner_config is not None else {}
+    fields = config.get("fields") or []
+    steer = str(config.get("steer") or "")
+    turn_seq = committed_turn_count(log, session_id)
+    prior = load_last_plan(log, session_id)
+    profile = request_profile_fn() if request_profile_fn is not None else None
+    messages = _planner_messages(
+        directive=directive,
+        context=_planner_context(log, session_id, state),
+        prior=prior,
+        steer=steer,
+        fields=fields,
+        profile=profile,
+        turn_seq=turn_seq,
+    )
+    return PlannerRequest(
+        messages=messages, fields=fields, turn_seq=turn_seq, profile=profile
+    )
+
+
 def _seed_plan_state(
     log: LogPort, session_id: str, state: TurnState, plan: Plan
 ) -> dict:
@@ -3963,21 +4029,19 @@ def make_planner_node(
         try:
             from fabulist.state.structured import StructuredFailure, structured_result
 
-            config = dict(planner_config() or {}) if planner_config else {}
-            fields = config.get("fields") or []
-            steer = str(config.get("steer") or "")
-            turn_seq = committed_turn_count(log, session_id)
-            prior = load_last_plan(log, session_id)
-            profile = request_profile_fn() if request_profile_fn else None
-            messages = _planner_messages(
+            # Issue #104: ONE composer — the preview renders the same list.
+            request_messages = planner_request(
+                log=log,
+                session_id=session_id,
+                state=state,
                 directive=directive_text,
-                context=_planner_context(log, session_id, state),
-                prior=prior,
-                steer=steer,
-                fields=fields,
-                profile=profile,
-                turn_seq=turn_seq,
+                planner_config=planner_config,
+                request_profile_fn=request_profile_fn,
             )
+            messages = request_messages.messages
+            fields = request_messages.fields
+            turn_seq = request_messages.turn_seq
+            profile = request_messages.profile
 
             def _parse_plan(content: str, tool_args: str, finish_reason: str | None):
                 """One reply -> the plan payload, or a PARSE-class failure (#82).
@@ -4605,10 +4669,8 @@ class NpcLaneFanout:
                 active_members,
                 direct_address_members,
                 last_intents,
-                member_categories,
                 npc_dispatch_policy,
                 select_dispatch_members,
-                witnessed_turns,
             )
 
             # W9.24 §3.5: the session's dispatch policy, folded BEFORE the
@@ -4677,6 +4739,7 @@ class NpcLaneFanout:
                 # summary (it is attached to narrate, which this turn reaches).
                 return {"npc_lanes": {}, "lane_meta": meta, "lane_plan": []}
 
+            from fabulist.prompts.request_parts import npc_lane_context
             from fabulist.state.cast import member_by_id, roster
 
             cast = roster(log, session_id)
@@ -4685,18 +4748,17 @@ class NpcLaneFanout:
                 member = member_by_id(cast, member_id)
                 if member is None:
                     continue
+                # Issue #104: the lane's private context row is ONE function
+                # (the studio preview builds its row through the same one).
                 rows.append(
-                    {
-                        "member_id": member_id,
-                        "name": member.display_name,
-                        "aliases": list(member.aliases),
-                        "categories": member_categories(log, session_id, member_id),
-                        "witnessed": witnessed_turns(
-                            log, session_id, member_id, window=self.presence_window
-                        ),
-                        "beat": beat,
-                        "last_intent": prior_intents.get(member_id, ""),
-                    }
+                    npc_lane_context(
+                        log,
+                        session_id,
+                        member,
+                        beat=beat,
+                        last_intent=prior_intents.get(member_id, ""),
+                        presence_window=self.presence_window,
+                    )
                 )
             meta.update(
                 members=[row["member_id"] for row in rows],
@@ -4980,13 +5042,11 @@ class NpcLaneFanout:
         # appended, in the same order and with the same lane CONTENT framing
         # (<scene_digest>, <facts>, <user_message>); only the <preset_runtime>
         # wrapper is dropped, matching the unwrapped narrator prompt.
-        from fabulist.prompts.wrapper import wrap_runtime
+        # Issue #104: the wrap is ONE function the studio preview calls too, so a
+        # previewed tail carries the bytes the lane sends.
+        from fabulist.prompts.request_parts import wrap_lane_tail
 
-        if payload.get("anti_injection", True):
-            tail = [
-                {**message, "content": wrap_runtime(message.get("content"))}
-                for message in tail
-            ]
+        tail = wrap_lane_tail(tail, bool(payload.get("anti_injection", True)))
         messages = [*shared, *tail]
         content, tool_args, finish_reason = await _drain_lane(
             self.caller, messages, payload.get("profile")
@@ -5385,13 +5445,8 @@ class AssetProposalFanout:
         """
         from langgraph.types import Send
 
-        from fabulist.prompts.proposals import build_lane_payload, build_lane_system
-        from fabulist.state.proposal_lanes import (
-            MAX_ITEMS,
-            lane_spec,
-            patch_fields,
-            stored_digest,
-        )
+        from fabulist.prompts.request_parts import proposal_lane_blocks
+        from fabulist.state.proposal_lanes import lane_spec, stored_digest
 
         plan = [
             row
@@ -5407,21 +5462,14 @@ class AssetProposalFanout:
             if spec is None:
                 continue
             digest = stored_digest(self.log, spec)
-            blocks = {
-                "system": build_lane_system(
-                    lane_label=spec.label,
-                    kind=spec.kind,
-                    fields=patch_fields(spec.kind),
-                    max_items=MAX_ITEMS,
-                ),
-                "payload": build_lane_payload(
-                    lane=spec.lane,
-                    kind=spec.kind,
-                    touched=row.get("touched") or [],
-                    digest=digest,
-                    prose=prose,
-                ),
-            }
+            # Issue #104: the lane's two block bodies are ONE function (the
+            # studio preview renders the first data type through it).
+            blocks = proposal_lane_blocks(
+                self.log,
+                spec,
+                touched=row.get("touched") or [],
+                prose=prose,
+            )
             sends.append(
                 Send(
                     "asset_proposal_lane",
@@ -6079,6 +6127,33 @@ def _critic_state_line(log: LogPort, session_id: str, state: TurnState) -> str:
     )
 
 
+def critic_evidence(
+    log: LogPort, session_id: str, state: TurnState
+) -> dict[str, Any]:
+    """The critic's evidence bundle — the ONE shape its payload is rendered from.
+
+    Issue #104: the node and ``POST /api/prompts/preview`` both call this, so the
+    previewed payload carries the same keys from the same reads (the turn's user
+    message, its prose, the validator flags, a short prior-prose tail and the
+    rendered state line). A preview passes a blank turn state and therefore shows
+    the shape the next committed turn would produce.
+    """
+    narrative_event = state.get("narrative_event") or {}
+    prior_narratives = _prior_narratives(
+        log, session_id, exclude_id=narrative_event.get("id")
+    )
+    return {
+        "user_message": state.get("user_content") or "",
+        "prose": "".join(state.get("narrative_parts") or []),
+        "flags": list(state.get("critic_flags") or []),
+        "prior_prose": [
+            str(n.get("payload", {}).get("prose", ""))
+            for n in prior_narratives[-CRITIC_PRIOR_TURNS:]
+        ],
+        "state_line": _critic_state_line(log, session_id, state),
+    }
+
+
 def _emit_revision_frame(
     session_id: str, target_id: int, revision: Any, revised: dict, verdict: str, reason: str
 ) -> None:
@@ -6179,27 +6254,15 @@ async def _run_critic_stage(
     )
 
     session_id = state["session_id"]
-    user_msg = state["user_content"]
-    prose = "".join(state.get("narrative_parts", []))
+    narrative_event = state.get("narrative_event") or {}
     segments = state.get("segments") or []
     flags = list(state.get("critic_flags") or [])
-    narrative_event = state.get("narrative_event") or {}
-    prior_narratives = _prior_narratives(
-        log, session_id, exclude_id=narrative_event.get("id")
-    )
+
     def _log(payload: dict) -> None:
         log.append_event(session_id, "system", "critic", payload)
 
-    evidence = {
-        "user_message": user_msg,
-        "prose": prose,
-        "flags": list(flags),
-        "prior_prose": [
-            str(n.get("payload", {}).get("prose", ""))
-            for n in prior_narratives[-CRITIC_PRIOR_TURNS:]
-        ],
-        "state_line": _critic_state_line(log, session_id, state),
-    }
+    # Issue #104: the evidence shape is one function (the preview renders it too).
+    evidence = critic_evidence(log, session_id, state)
     # D42: the critic step brackets its model call. Nothing follows a verdict
     # into the narrator: the repair loop is the narrate node's business.
     critic_writer = _stream_writer()

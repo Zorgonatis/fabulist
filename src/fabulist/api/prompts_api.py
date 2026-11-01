@@ -54,17 +54,23 @@ test harness, which mounts this router without the wiring layer — does the
 ``preview_mode: "degraded"``. The live service (``wiring.build_app``) always
 carries the builder, so a production ``narrate`` preview is always ``"builder"``.
 
-Per-interaction flows (D18 completion)
---------------------------------------
+Per-interaction flows (D18 completion, rewritten by #104)
+--------------------------------------------------------
 ``interaction`` selects any of :data:`~fabulist.prompts.modules.INTERACTIONS`
 (default ``narrate``). The builder fast path stays **narrate-only**; every other
-interaction renders via :func:`~fabulist.prompts.modules.compile_flow` over the
-active preset (or :data:`~fabulist.prompts.modules.DEFAULT_FLOWS` when none) with
-best-effort parts resolved from the session, and reports
-``preview_mode: "flow"``. System-prompt defaults (``OOC_SYSTEM`` etc.) are
-imported **lazily inside the handler**: ``fabulist.wiring`` imports
-``fabulist.api`` at module top and this router is reached through the ``api``
-package, so a top-level import would be a cycle. Unknown ``interaction`` is 422.
+interaction renders through the SAME assembly its live call site uses
+(:mod:`fabulist.prompts.request_parts` for the post-turn/per-lane interactions,
+the planner node's composer for ``planner``) with the previewed preset (or the
+active one), and reports ``preview_mode: "flow"``. There is no second parts
+assembly in this router: the old ``_flow_parts`` copy covered six of eleven
+flows and returned a bare ``KeyError: 'system'`` for planner/npc/proposals and a
+list the engine never sends for critic (issue #104). Anything a preview cannot
+resolve (image bytes, an enabled assistant, an eligible lane member) is reported
+in a RESPONSE FIELD beside the list — never as text inside a message (ADR-005).
+The imports that reach the wiring/node layers stay **lazy inside the handler**:
+``fabulist.wiring`` imports ``fabulist.api`` at module top and this router is
+reached through the ``api`` package, so a top-level import would be a cycle.
+Unknown ``interaction`` is 422.
 
 Wiring (orchestrator-owned, one line)::
 
@@ -94,7 +100,6 @@ from fabulist.prompts.modules import (
     DEFAULT_MODULES,
     FLOW_STRUCTURAL_TYPES,
     INTERACTIONS,
-    compile_flow,
     compile_preset_messages,
 )
 from fabulist.prompts.parts import default_directives, directive_to_row
@@ -104,7 +109,6 @@ from fabulist.prompts.preset_store import (
     active_preset,
     append_preset,
     commit_default_to_factory,
-    compile_preset_flow,
     default_factory_status,
     default_preset,
     delete_preset,
@@ -921,129 +925,348 @@ def _transcript(log: "EventLog", session_id: str, limit: int = 20) -> str:
     return "\n\n".join(block for block in blocks if block.strip())
 
 
-def _flow_parts(
+#: Per-interaction preview builders (#104). Each entry calls the SAME assembly
+#: the interaction's live call site calls — the parts live in
+#: :mod:`fabulist.prompts.request_parts` (and, for the planner, in the node's
+#: composer), never here. This module only resolves the INPUTS a preview can
+#: honestly resolve (the session's log, the previewed preset, the live
+#: connection capabilities), so no second assembly can drift from the engine.
+#: ``tests/test_prompts_api.py`` pins that every interaction has an entry.
+_PREVIEW_BUILDERS: dict[str, Any] = {}
+
+
+def _active_preset_or_none(log: "EventLog") -> Any:
+    """The active preset, or ``None`` when the store cannot be read.
+
+    ``None`` is the store's documented "render the code defaults" state, so a
+    broken preset read previews the defaults instead of failing the drawer.
+    """
+    try:
+        return active_preset(log)
+    except Exception:  # noqa: BLE001 - the preview never hides the request (defaults)
+        return None
+
+
+def _builder_accepts_preset(builder: Any) -> bool:
+    """Whether ``builder`` takes this module's ``preset_override`` keyword."""
+    try:
+        parameters = inspect.signature(builder).parameters
+    except (TypeError, ValueError):  # builtins / C callables: assume no keyword
+        return False
+    if "preset_override" in parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+async def _run_builder(
+    builder: Any, state: dict, preset: Any = None
+) -> list[dict]:
+    """Call the app's message builder, honouring a non-active previewed preset.
+
+    The production builder (``wiring.make_narrator_message_builder.build``) takes
+    ``preset_override`` so the drawer can render a preset that is not active
+    (issue #104). A test double with the historical one-argument shape still
+    works — it is called plainly, exactly as before.
+    """
+    if preset is not None and _builder_accepts_preset(builder):
+        result = builder(state, preset_override=preset)
+    else:
+        result = builder(state)
+    if inspect.isawaitable(result):
+        result = await result
+    return list(result)
+
+
+def _ooc_vision(request: Request, log: "EventLog") -> bool:
+    """The OOC interaction's live vision capability (issue #79 parity)."""
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return False
+    from fabulist.wiring import interaction_vision
+
+    try:
+        return bool(interaction_vision(registry, log, "ooc", "narrator")())
+    except Exception:  # noqa: BLE001 - an unreadable slot is text-only
+        return False
+
+
+def _anti_injection(log: "EventLog") -> bool:
+    """The persisted Anti Injection setting (the lane tail's wrap gate)."""
+    from fabulist.state.settings import ANTI_INJECTION_DEFAULT, anti_injection_enabled
+
+    try:
+        return bool(anti_injection_enabled(log))
+    except Exception:  # noqa: BLE001 - the shipped default, never a failed preview
+        return ANTI_INJECTION_DEFAULT
+
+
+def _last_plan_render(log: "EventLog", session_id: str) -> str:
+    """The stored plan rendered the way the pre_turn stage hands it to a beat."""
+    try:
+        from fabulist.graph.plans import load_last_plan, render_plan_for_prompt
+
+        plan = load_last_plan(log, session_id)
+        return render_plan_for_prompt(plan) if plan is not None else ""
+    except Exception:  # noqa: BLE001 - a beat is advisory
+        return ""
+
+
+async def _preview_ooc(log, session_id, user_text, preset, request):
+    """OOC: the live OOC builder's list (history, envelope, ``[OOC]`` flag)."""
+    from fabulist.prompts.request_parts import ooc_request
+
+    vision = _ooc_vision(request, log)
+    return ooc_request(log, session_id, user_text, preset, vision=vision), {
+        "vision": vision
+    }
+
+
+async def _preview_extract(log, session_id, user_text, preset, request):
+    """Extract: the extractor's own two-message request."""
+    from fabulist.prompts.request_parts import extract_request
+
+    return extract_request(user_text, _last_narrative_prose(log, session_id), preset), {}
+
+
+async def _preview_summarize(log, session_id, user_text, preset, request):
+    """Summarize: compaction's request over the session's newest prose."""
+    from fabulist.prompts.request_parts import summarize_request
+
+    return summarize_request(_transcript(log, session_id), preset), {}
+
+
+async def _preview_caption(log, session_id, user_text, preset, request):
+    """Caption: the captioner's request shape (instruction + one image part).
+
+    A preview has no uploaded image to splice, so the image content part carries
+    no bytes. That is stated in a response field — never as text inside the
+    message list (ADR-005 / issue #104 condition 3).
+    """
+    from fabulist.prompts.request_parts import caption_request
+
+    return caption_request({"payload": {}}, preset), {
+        "notes": [
+            "caption previews the request shape: the image part carries no bytes "
+            "(the live call splices the stored asset)"
+        ]
+    }
+
+
+async def _preview_assistant(log, session_id, user_text, preset, request):
+    """Assistant: the enabled assistant's consult request (else the first one)."""
+    from fabulist.assistants.manager import AssistantContext
+    from fabulist.assistants.panel import (
+        latest_chat_assistant,
+        scene_facts_line,
+        scene_recent_prose,
+    )
+    from fabulist.prompts.request_parts import assistant_request
+
+    from fabulist.api.assistants_api import (
+        assistant_definitions,
+        resolve_assistant_definition,
+    )
+
+    definitions = assistant_definitions(log)
+    enabled = latest_chat_assistant(log, session_id)
+    definition = (
+        resolve_assistant_definition(log, enabled, definitions=definitions)
+        if enabled
+        else None
+    )
+    extra: dict[str, Any] = {}
+    if definition is None and definitions:
+        definition = definitions[0]
+        extra["notes"] = [
+            "this chat has no enabled assistant; previewed with "
+            f"{definition.id!r} (the first available definition)"
+        ]
+    if definition is None:  # pragma: no cover - the catalog always offers demos
+        return [], {"assistant_id": None, "notes": ["no assistant definition exists"]}
+    context = AssistantContext(
+        facts=scene_facts_line(log, session_id),
+        recent_prose=scene_recent_prose(log, session_id),
+        user_msg=user_text,
+    )
+    extra["assistant_id"] = definition.id
+    return assistant_request(definition, context, preset), extra
+
+
+async def _preview_critic(log, session_id, user_text, preset, request):
+    """Critic: the node's evidence bundle + payload (system + user)."""
+    from fabulist.graph.nodes import critic_evidence
+    from fabulist.prompts.request_parts import critic_request
+
+    state = initial_turn_state(session_id, user_text, "critic")
+    return critic_request(critic_evidence(log, session_id, state), preset), {}
+
+
+async def _preview_planner(log, session_id, user_text, preset, request):
+    """Planner: the node's own composer — directive + context block + the ask.
+
+    Issue #104: the node composes the list (the flow only carries the directive),
+    so the preview calls :func:`fabulist.graph.nodes.planner_request` — the same
+    function the planner node calls. The context block therefore shows exactly
+    what the planner reads (state, cast/world, world objects, the issue #106
+    ``LORE (fixed canon)`` section, recent turns) and the ask is last.
+    """
+    from fabulist.graph.nodes import planner_request
+    from fabulist.prompts.request_parts import planner_directive_messages
+
+    state = initial_turn_state(session_id, user_text, "planner")
+    compiled = planner_directive_messages(preset)
+    directive = str(compiled[0].get("content") or "") if compiled else ""
+    prepared = planner_request(
+        log=log,
+        session_id=session_id,
+        state=state,
+        directive=directive,
+        planner_config=lambda: planner_config(preset),
+        request_profile_fn=getattr(
+            request.app.state, "planner_request_profile", None
+        ),
+    )
+    return prepared.messages, {"planner_turn_seq": prepared.turn_seq}
+
+
+async def _preview_npc(log, session_id, user_text, preset, request):
+    """NPC: the narrator's prefix + ONE lane tail (a lane is never a request).
+
+    The prefix is the SAME builder the turn uses; the tail is
+    ``request_parts.npc_request`` wrapped by the same ``<preset_runtime>`` gate
+    the lane applies. The member it rendered is named in a response field — never
+    inside the list (ADR-005).
+    """
+    from fabulist.prompts.request_parts import (
+        npc_lane_context,
+        npc_request,
+        wrap_lane_tail,
+    )
+    from fabulist.state.cast import ensure_roster
+    from fabulist.state.presence import active_members
+
+    builder = getattr(request.app.state, "message_builder", None)
+    shared = (
+        await _run_builder(
+            builder, initial_turn_state(session_id, user_text, "narrate")
+        )
+        if callable(builder)
+        else []
+    )
+    members: list[Any] = []
+    try:
+        from fabulist.state.cast import member_by_id, roster
+
+        ensure_roster(log, session_id)
+        member_ids, _source = active_members(log, session_id)
+        cast = roster(log, session_id)
+        members = [
+            member
+            for member in (member_by_id(cast, member_id) for member_id in member_ids)
+            if member is not None
+        ]
+    except Exception:  # noqa: BLE001 - an empty set is a legal turn (no lanes)
+        members = []
+    beat = _last_plan_render(log, session_id)
+    extra: dict[str, Any] = {"lane_member": None, "lane_member_id": None}
+    if members:
+        member = members[0]
+        context = npc_lane_context(log, session_id, member, beat=beat)
+        extra.update(lane_member=member.display_name, lane_member_id=member.member_id)
+    else:
+        context = {
+            "name": "",
+            "aliases": [],
+            "categories": {},
+            "witnessed": [],
+            "beat": beat,
+            "last_intent": "",
+        }
+        extra["notes"] = [
+            "no eligible cast member in this chat; the lane tail is previewed "
+            "with an unnamed member"
+        ]
+    tail = npc_request(
+        initial_turn_state(session_id, user_text, "npc"), context, preset
+    )
+    tail = wrap_lane_tail(tail, _anti_injection(log))
+    return [*shared, *tail], extra
+
+
+async def _preview_proposals(log, session_id, user_text, preset, request):
+    """Proposals: ONE data-type lane's request (the LANE sends it standalone).
+
+    ``proposals`` is a ``LANE_INTERACTIONS`` member, but the engine's router hands
+    the lane these messages with NO narrator prefix (``AssetProposalFanout.route``
+    builds ``messages`` and the per-type node sends exactly that). The preview
+    renders the same list for the first data type and names that type in a
+    response field.
+    """
+    from fabulist.prompts.request_parts import proposal_lane_blocks, proposals_request
+    from fabulist.state.proposal_lanes import PROPOSAL_LANES
+
+    spec = PROPOSAL_LANES[0]
+    blocks = proposal_lane_blocks(
+        log,
+        spec,
+        touched=(),
+        prose=_last_narrative_prose(log, session_id),
+    )
+    messages = proposals_request(blocks, session_id, preset)
+    return messages, {
+        "lane": spec.lane,
+        "lane_kind": spec.kind,
+        "lane_label": spec.label,
+    }
+
+
+async def _preview_bts(log, session_id, user_text, preset, request):
+    """BTS: the world-state pass's request over the last committed turn."""
+    from fabulist.prompts.request_parts import bts_request
+
+    return (
+        bts_request(
+            user_text, _last_narrative_prose(log, session_id), None, preset=preset
+        ),
+        {},
+    )
+
+
+_PREVIEW_BUILDERS.update(
+    {
+        "ooc": _preview_ooc,
+        "extract": _preview_extract,
+        "summarize": _preview_summarize,
+        "caption": _preview_caption,
+        "assistant": _preview_assistant,
+        "bts": _preview_bts,
+        "critic": _preview_critic,
+        "planner": _preview_planner,
+        "npc": _preview_npc,
+        "proposals": _preview_proposals,
+    }
+)
+
+
+async def _flow_preview(
     interaction: str,
     log: "EventLog",
     session_id: str,
     user_text: str,
-    request: Request | None = None,
-) -> dict[str, Any]:
-    """Best-effort engine parts for a non-narrate flow preview.
-
-    System-prompt defaults are imported from their landed call sites (see the
-    module docstring for the lazy-import cycle rationale). Structural payloads
-    resolve from the live session where possible; caption/assistant payloads that
-    need live assets/definitions fall back to clearly-marked placeholders.
-    """
-    parts: dict[str, Any] = {
-        "variables": resolve_variables(log, session_id, user_text),
-    }
-    if interaction == "ooc":
-        from fabulist.wiring import (  # lazy: wiring imports fabulist.api
-            OOC_SYSTEM,
-            facts_line_from_log,
-            history_from_log,
-            interaction_vision,
+    preset: Any,
+    request: Request,
+) -> tuple[list[dict], dict]:
+    """Render one non-narrate interaction through its live assembly."""
+    build = _PREVIEW_BUILDERS.get(interaction)
+    if build is None:  # pragma: no cover - the completeness test pins the table
+        raise HTTPException(
+            status_code=500,
+            detail={"reason": f"no preview builder for interaction {interaction!r}"},
         )
-
-        # Issue #79: OOC preview parity — resolve the OOC interaction's live
-        # vision capability exactly like the live OOC turn builder does, so a
-        # text-only OOC connection previews the bracketed caption marker rather
-        # than image parts. Missing registry wiring degrades to text-only.
-        registry = (
-            getattr(request.app.state, "registry", None)
-            if request is not None
-            else None
-        )
-        vision = (
-            interaction_vision(registry, log, "ooc", "narrator")()
-            if registry is not None
-            else False
-        )
-        parts.update(
-            {
-                "system": OOC_SYSTEM,
-                "history": history_from_log(log, session_id, limit=8, vision=vision),
-                "facts": facts_line_from_log(log, session_id) or "",
-                "user_content": user_text,
-            }
-        )
-    elif interaction == "extract":
-        from fabulist.state.extractor import (  # lazy: keep import graph flat
-            EXTRACTOR_SYSTEM_PROMPT,
-            _turn_block,
-        )
-
-        parts.update(
-            {
-                "system": EXTRACTOR_SYSTEM_PROMPT,
-                "turn_payload": _turn_block(
-                    user_text, _last_narrative_prose(log, session_id)
-                ),
-            }
-        )
-    elif interaction == "summarize":
-        from fabulist.graph.compaction import (  # lazy: avoid graph import at boot
-            SUMMARIZER_SYSTEM_PROMPT,
-            build_summarizer_messages,
-        )
-
-        payload = build_summarizer_messages(_transcript(log, session_id))[1]["content"]
-        parts.update({"system": SUMMARIZER_SYSTEM_PROMPT, "payload": payload})
-    elif interaction == "caption":
-        from fabulist.media.images import (  # lazy: media layer is optional
-            CAPTION_INSTRUCTION,
-            CAPTION_SYSTEM,
-        )
-
-        parts.update(
-            {
-                "system": CAPTION_SYSTEM,
-                "payload": (
-                    "[preview] caption payload — the live call splices the uploaded "
-                    "image content part (media.images.build_caption_messages); "
-                    f"text: {CAPTION_INSTRUCTION}"
-                ),
-            }
-        )
-    elif interaction == "bts":
-        from fabulist.state.bts import (  # lazy: keep import graph flat
-            BTS_SYSTEM_PROMPT,
-            build_bts_messages,
-        )
-
-        base = build_bts_messages(
-            user_text, _last_narrative_prose(log, session_id), None, checkpoint=False
-        )
-        parts.update(
-            {
-                "system": str(base[0].get("content", BTS_SYSTEM_PROMPT)),
-                "payload": str(base[1].get("content", "")) if len(base) > 1 else "",
-            }
-        )
-    elif interaction == "assistant":
-        from fabulist.assistants.manager import (  # lazy: optional feature module
-            AssistantContext,
-            render_scene_digest,
-        )
-
-        digest = render_scene_digest(
-            AssistantContext(
-                recent_prose=_last_narrative_prose(log, session_id),
-                user_msg=user_text,
-            )
-        )
-        parts.update(
-            {
-                "system": (
-                    "[preview] assistant system prompt is per-definition "
-                    "(assistants.manager.render_assistant_system)"
-                ),
-                "history": [],
-                "user_content": digest,
-            }
-        )
-    return parts
+    return await build(log, session_id, user_text, preset, request)
 
 
 @router.post("/api/prompts/preview")
@@ -1051,11 +1274,21 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
     """Render a model-facing message list for one turn (parity by construction).
 
     404 on an unknown session, 422 on empty ``user_text`` or an unknown
-    ``interaction``. When a ``preset_id`` is given it must exist (404).
-    ``interaction == "narrate"`` uses the production builder (``preview_mode:
-    "builder"``) or, with no builder mounted, the degraded defaults path
-    (``"degraded"``); any other interaction renders its flow over the active
-    preset (or the built-in default flow) and reports ``"flow"``.
+    ``interaction``. When a ``preset_id`` is given it must exist (404) and it is
+    the preset RENDERED — including ``narrate``, whose builder takes the override
+    (issue #104: the drawer used to preview the active preset's prompt while the
+    drawer said otherwise).
+
+    Every branch renders through the interaction's ONE live assembly
+    (:mod:`fabulist.prompts.request_parts`, or the planner node's composer), so
+    the list is the list the engine sends. Nothing preview-only is ever added to
+    a message: substituted inputs (no image bytes, no enabled assistant, no
+    eligible lane member) and the lane member/data type are reported in response
+    FIELDS beside the list (ADR-005).
+
+    ``preview_mode``: ``"builder"`` (narrate, production builder),
+    ``"degraded"`` (narrate with no builder mounted — the test harness), or
+    ``"flow"`` (any other interaction).
     """
     log = _log_for(request)
     _ensure_known_session(request, body.session_id)
@@ -1081,12 +1314,10 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
             raise HTTPException(status_code=404, detail="unknown preset")
 
     builder = getattr(request.app.state, "message_builder", None)
+    extra: dict[str, Any] = {}
     if interaction == "narrate" and callable(builder):
         state = initial_turn_state(body.session_id, user_text, "narrate")
-        result = builder(state)
-        if inspect.isawaitable(result):
-            result = await result
-        messages = list(result)
+        messages = await _run_builder(builder, state, preview_preset)
         mode = "builder"
     elif interaction == "narrate":
         modules = (
@@ -1096,13 +1327,24 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
             modules, _degraded_parts(log, body.session_id, user_text)
         )
         mode = "degraded"
+        extra["notes"] = [
+            "no live message builder is mounted; structural parts are "
+            "placeholders (the live service always mounts one)"
+        ]
     else:
-        parts = _flow_parts(interaction, log, body.session_id, user_text, request)
-        flow_preset = preview_preset or active_preset(log)
-        if flow_preset is not None:
-            messages = compile_preset_flow(flow_preset, interaction, parts)
-        else:
-            messages = compile_flow(interaction, DEFAULT_FLOWS[interaction], parts)
+        flow_preset = (
+            preview_preset
+            if preview_preset is not None
+            else _active_preset_or_none(log)
+        )
+        messages, extra = await _flow_preview(
+            interaction,
+            log,
+            body.session_id,
+            user_text,
+            flow_preset,
+            request,
+        )
         mode = "flow"
 
     # Issue #79: image history rows carry transient render metadata so a
@@ -1115,4 +1357,11 @@ async def preview_route(body: PreviewRequest, request: Request) -> dict:
         for message in messages
     ]
     chars = sum(len(str(message.get("content", ""))) for message in messages)
-    return {"messages": messages, "chars": chars, "preview_mode": mode}
+    return {
+        "messages": messages,
+        "chars": chars,
+        "preview_mode": mode,
+        "interaction": interaction,
+        "preset_id": preview_preset.preset_id if preview_preset is not None else None,
+        **extra,
+    }

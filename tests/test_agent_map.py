@@ -51,7 +51,13 @@ def test_every_interaction_appears_as_a_registry_agent():
         entry = agents[name]
         assert entry["registry"] is True
         assert entry["default_agent"], name
-        assert entry["input_builder"].startswith("fabulist.wiring.")
+        # Issue #104: each interaction's parts assembly is ONE named function —
+        # the two builder factories/narrate+OOC live in wiring, every other flow
+        # is ``fabulist.prompts.request_parts.<interaction>_request`` and the
+        # planner's request is composed by its node.
+        assert entry["input_builder"].startswith(
+            ("fabulist.wiring.", "fabulist.prompts.request_parts.", "fabulist.graph.nodes.")
+        )
 
 
 def test_agent_roster_is_exactly_interactions_plus_non_registry_callers():

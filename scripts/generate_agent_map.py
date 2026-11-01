@@ -52,14 +52,24 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT_MAP_PATH = REPO_ROOT / "prompts" / "generated" / "agent-map.json"
 WIRING_PATH = REPO_ROOT / "src" / "fabulist" / "wiring.py"
+REQUEST_PARTS_PATH = REPO_ROOT / "src" / "fabulist" / "prompts" / "request_parts.py"
 
-#: The narrator/OOC builders do not follow the ``_*_flow_messages`` naming
-#: convention (narrate compiles through the W2.1 directive compiler, OOC through
-#: ``assemble_messages``), so they are named here and verified present by AST —
-#: a rename still fails loudly.
+#: The narrator/OOC builders do not follow the ``*_request`` naming convention
+#: (narrate compiles through the W2.1 directive compiler, OOC through the shared
+#: OOC request), so they are named here and verified present by AST — a rename
+#: still fails loudly.
 _ENGINE_BUILDERS: dict[str, str] = {
     "narrate": "make_narrator_message_builder",
     "ooc": "make_ooc_message_builder",
+}
+
+#: Issue #104: every OTHER interaction's parts assembly is ONE named function in
+#: :mod:`fabulist.prompts.request_parts` (``<interaction>_request``), discovered
+#: by AST below. The planner is the one exception — its flow carries only the
+#: directive, and the NODE composes the request (directive + context + ask), so
+#: its input builder is the node's composer.
+_REQUEST_BUILDERS: dict[str, str] = {
+    "planner": "fabulist.graph.nodes.planner_request",
 }
 
 #: Authored per-interaction contract fields the code does not spell out
@@ -296,34 +306,29 @@ def _literal_str(node: ast.AST) -> str | None:
     return None
 
 
-def _compiled_interaction(fn: ast.FunctionDef) -> str | None:
-    """The interaction a flow builder compiles, from its ``compile_preset_flow`` call."""
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-        if name != "compile_preset_flow" or len(node.args) < 2:
-            continue
-        interaction = _literal_str(node.args[1])
-        if interaction:
-            return interaction
-    return None
-
-
 def _discover_builders() -> dict[str, str]:
-    """interaction -> dotted ``wiring`` builder, read from ``wiring.py`` source."""
-    tree = ast.parse(WIRING_PATH.read_text(encoding="utf-8"))
+    """interaction -> dotted message builder, read from the source (issue #104).
+
+    ONE assembly per interaction: ``request_parts.<interaction>_request`` for the
+    post-turn/per-lane flows (discovered by AST, so a missing one fails loudly),
+    the two builder factories for narrate/OOC, and the planner node's composer
+    (its request is directive + context + ask, not a flow render).
+    """
+    wiring_tree = ast.parse(WIRING_PATH.read_text(encoding="utf-8"))
+    names = {
+        node.name
+        for node in ast.walk(wiring_tree)
+        if isinstance(node, ast.FunctionDef)
+    }
     builders: dict[str, str] = {}
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        names.add(node.name)
-        if node.name.endswith("_flow_messages"):
-            interaction = _compiled_interaction(node)
+    parts_tree = ast.parse(REQUEST_PARTS_PATH.read_text(encoding="utf-8"))
+    for node in ast.walk(parts_tree):
+        if isinstance(node, ast.FunctionDef) and node.name.endswith("_request"):
+            interaction = node.name[: -len("_request")]
             if interaction:
-                builders[interaction] = f"fabulist.wiring.{node.name}"
+                builders[interaction] = (
+                    f"fabulist.prompts.request_parts.{node.name}"
+                )
     for interaction, fn_name in _ENGINE_BUILDERS.items():
         if fn_name not in names:
             raise RuntimeError(
@@ -331,6 +336,7 @@ def _discover_builders() -> dict[str, str]:
                 "flow builder could not be resolved"
             )
         builders[interaction] = f"fabulist.wiring.{fn_name}"
+    builders.update(_REQUEST_BUILDERS)
     return builders
 
 
