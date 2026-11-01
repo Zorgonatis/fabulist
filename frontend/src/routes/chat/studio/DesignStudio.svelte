@@ -714,15 +714,25 @@
 		align-items: center;
 	}
 
-	/* Band caption between pill groups — the same mono-uppercase micro register
-	   the rail's `.layer-head` uses, one step quieter than the pills. */
+	/* Band caption above pill groups (#99). It NAMES the pills that follow, so it
+	   is the heaviest thing in the row: a step UP from the pills in size
+	   (--font-ui vs --font-small) and in colour (--text vs --text-muted), not a
+	   step down. Still decoration — aria-hidden, because the group's own
+	   aria-label is what gets announced. */
 	.tab-group-label {
-		font-size: var(--font-micro);
+		font-size: var(--font-ui);
 		font-weight: 600;
 		line-height: 1;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-		color: var(--text-dim);
+		color: var(--text);
+	}
+
+	/* The BAND break rides on the caption's leading edge, so the space between
+	   bands (this margin plus the nav's column gap) is several times the space
+	   between two pills of the same band (.tab-group's 0.2rem gap). */
+	.tab-group-label:not(:first-child) {
+		margin-inline-start: 0.75rem;
 	}
 
 	.tab-group {
