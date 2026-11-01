@@ -37,8 +37,46 @@ def _uv_lock(version: str) -> str:
     )
 
 
-def _versions(tmp_path: Path, version: str = "0.0.7", *, lock: str | None = None) -> dict:
-    """The three M1 points, as keyword arguments for the check."""
+def _package_lock(version: str, *, top: str | None = None, installed: str | None = None) -> str:
+    """npm's lockfile: the version twice — top-level, then ``packages[""]``.
+
+    The line numbers match the real file (3 and 9), and the installed packages
+    below carry ``version`` keys of their own that a scan must not confuse with
+    the root's.
+    """
+    top = version if top is None else top
+    installed = version if installed is None else installed
+    return (
+        "{\n"
+        '  "name": "fabulist-frontend",\n'
+        f'  "version": "{top}",\n'
+        '  "lockfileVersion": 3,\n'
+        '  "requires": true,\n'
+        '  "packages": {\n'
+        '    "": {\n'
+        '      "name": "fabulist-frontend",\n'
+        f'      "version": "{installed}",\n'
+        '      "dependencies": {\n'
+        '        "dompurify": "^3.4.17"\n'
+        "      }\n"
+        "    },\n"
+        '    "node_modules/dompurify": {\n'
+        '      "version": "3.4.17",\n'
+        '      "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz"\n'
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _versions(
+    tmp_path: Path,
+    version: str = "0.0.7",
+    *,
+    uv_lock: str | None = None,
+    package_lock: dict[str, str] | None = None,
+) -> dict:
+    """The M1 points, as keyword arguments for the check."""
     return {
         "pyproject": _write(
             tmp_path / "pyproject.toml",
@@ -48,7 +86,11 @@ def _versions(tmp_path: Path, version: str = "0.0.7", *, lock: str | None = None
             tmp_path / "frontend" / "package.json",
             '{\n\t"name": "fabulist-frontend",\n\t"version": "%s"\n}\n' % version,
         ),
-        "uv_lock": _write(tmp_path / "uv.lock", _uv_lock(lock or version)),
+        "uv_lock": _write(tmp_path / "uv.lock", _uv_lock(uv_lock or version)),
+        "package_lock": _write(
+            tmp_path / "frontend" / "package-lock.json",
+            _package_lock(version, **(package_lock or {})),
+        ),
     }
 
 
@@ -63,23 +105,54 @@ def _fake_git(*, tags: str, subjects: str):
     return run
 
 
-# --- M1: three version points ---------------------------------------------------
+# --- M1: four version points ----------------------------------------------------
 
 
-def test_m1_passes_when_all_three_points_agree(capsys, tmp_path):
+def test_m1_passes_when_all_four_points_agree(capsys, tmp_path):
     assert gate.check_version_agreement("0.0.7", **_versions(tmp_path)) is True
     out = capsys.readouterr().out.strip()
     assert out.startswith("PASS M1")
-    assert "pyproject.toml:3" in out and "frontend/package.json:3" in out and "uv.lock:9" in out
+    for point in (
+        "pyproject.toml:3",
+        "frontend/package.json:3",
+        "uv.lock:9",
+        "frontend/package-lock.json:3",
+        "frontend/package-lock.json:9",
+    ):
+        assert point in out, point
 
 
 def test_m1_names_a_stale_lockfile(capsys, tmp_path):
     """The release the owner remembers: manifests bumped, lockfile left behind."""
-    points = _versions(tmp_path, lock="0.0.6")
+    points = _versions(tmp_path, uv_lock="0.0.6")
     assert gate.check_version_agreement("0.0.7", **points) is False
     out = capsys.readouterr().out.strip()
     assert out.startswith("FAIL M1")
     assert "uv.lock:9 = 0.0.6" in out and "pyproject.toml" not in out
+
+
+def test_m1_names_a_stale_package_lock(capsys, tmp_path):
+    """The v0.0.5/uv.lock failure, one third point over: the whole lock left behind."""
+    points = _versions(tmp_path, package_lock={"top": "0.0.6", "installed": "0.0.6"})
+    assert gate.check_version_agreement("0.0.7", **points) is False
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("FAIL M1")
+    assert "frontend/package-lock.json:3 (top-level version) = 0.0.6" in out
+    assert "frontend/package-lock.json:9 (packages[\"\"].version) = 0.0.6" in out
+    assert "disagrees with itself" not in out
+
+
+def test_m1_says_when_the_package_lock_disagrees_with_itself(capsys, tmp_path):
+    """One field bumped, the other missed: a contradiction, not a stale lock."""
+    points = _versions(tmp_path, package_lock={"top": "0.0.6"})
+    assert gate.check_version_agreement("0.0.7", **points) is False
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("FAIL M1")
+    assert "frontend/package-lock.json disagrees with itself" in out
+    assert "top-level version = 0.0.6 at frontend/package-lock.json:3" in out
+    assert 'packages[""].version = 0.0.7 at frontend/package-lock.json:9' in out
+    # pyproject and ``uv.lock`` agree; the contradiction is the lock's own.
+    assert "pyproject.toml" not in out and "uv.lock" not in out
 
 
 # --- M2: changelog shape --------------------------------------------------------

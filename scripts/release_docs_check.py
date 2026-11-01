@@ -17,9 +17,13 @@ exit status is 1 if any of them failed; ``SKIP`` is not a failure.
 
 Checks:
 
-* **M1** — ``pyproject.toml``, ``frontend/package.json`` and the root package in
-  ``uv.lock`` all name the requested version. All three: at tag ``v0.0.5`` the
-  first two said 0.0.5 while the lock still pinned 0.0.4, and nothing noticed.
+* **M1** — ``pyproject.toml``, ``frontend/package.json``, the root package in
+  ``uv.lock`` and both ``version`` fields of ``frontend/package-lock.json`` (the
+  top-level one and ``packages[""].version``) all name the requested version.
+  All of them: at tag ``v0.0.5`` the manifests said 0.0.5 while ``uv.lock`` still
+  pinned 0.0.4, and nothing noticed. The four points move together — a release
+  commit runs ``npm version`` (which rewrites both ``package-lock.json`` fields)
+  and ``uv lock`` — so a gate that skipped one would ship that miss again.
 * **M2** — ``CHANGELOG.md`` has ``## [<version>] - <YYYY-MM-DD>`` and every
   bullet in it carries the issue reference ``(#NN)`` (AGENTS.md, Releases).
 * **M3** — every ``(#NN)`` in the release's commit subjects (``git log
@@ -40,6 +44,7 @@ Checks:
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -51,6 +56,7 @@ from typing import Callable, Iterator
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
+PACKAGE_LOCK = REPO_ROOT / "frontend" / "package-lock.json"
 UV_LOCK = REPO_ROOT / "uv.lock"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
@@ -93,6 +99,7 @@ HISTORICAL_PATHS = ("CHANGELOG.md", "docs/UI-COPY.md", "docs/decisions", "docs/a
 
 _PYPROJECT_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"')
 _PACKAGE_VERSION = re.compile(r'^\s*"version"\s*:\s*"([^"]+)"')
+_JSON_KEY = re.compile(r'^(\s*)"((?:[^"\\]|\\.)*)"\s*:')
 _ROOT_PACKAGE_NAME = 'name = "fabulist"'
 _SECTION_HEADER = re.compile(r"^## \[([^\]]+)\] - (\d{4}-\d{2}-\d{2})\s*$")
 _UNRELEASED_HEADER = re.compile(r"^## \[Unreleased\]\s*$")
@@ -155,27 +162,95 @@ def _lock_version(path: Path) -> tuple[str | None, int | None]:
     return None, None
 
 
+def _json_member_lines(path: Path) -> dict[tuple[str, ...], int]:
+    """The 1-based line of each object member in ``path``, keyed by its key path.
+
+    ``json`` reports values, not positions, so the positions are scanned: the
+    indentation of a key line is its nesting depth, which is all that is needed
+    to tell the root ``"version"`` from ``packages[""].version`` from the
+    ``"version"`` of every installed package.
+    """
+    found: dict[tuple[str, ...], int] = {}
+    opened: list[tuple[int, str]] = []  # (indent, key) of every object still open
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        indent = len(line) - len(line.lstrip())
+        while opened and opened[-1][0] >= indent:
+            opened.pop()
+        match = _JSON_KEY.match(line)
+        if match is None:
+            continue
+        key = match.group(2)
+        found.setdefault(tuple(k for _, k in opened) + (key,), number)
+        if stripped.endswith(("{", "[")):
+            opened.append((indent, key))
+    return found
+
+
+#: npm writes the version twice per lockfile, so a FAIL names the field: a lock
+#: that is simply stale is a different fault from one that contradicts itself.
+LOCK_TOP_FIELD = "top-level version"
+LOCK_PACKAGES_FIELD = 'packages[""].version'
+
+
+def _package_lock_fields(path: Path) -> dict[str, tuple[str | None, int | None]]:
+    """Both ``version`` fields of an npm lockfile: ``{field: (value, line)}``."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    lines = _json_member_lines(path)
+    root = (document.get("packages") or {}).get("") or {}
+    return {
+        LOCK_TOP_FIELD: (document.get("version"), lines.get(("version",))),
+        LOCK_PACKAGES_FIELD: (
+            root.get("version"),
+            lines.get(("packages", "", "version")),
+        ),
+    }
+
+
 def check_version_agreement(
     version: str,
     *,
     pyproject: Path = PYPROJECT,
     package_json: Path = PACKAGE_JSON,
     uv_lock: Path = UV_LOCK,
+    package_lock: Path = PACKAGE_LOCK,
 ) -> bool:
-    """M1: the three version points a release cuts must all say ``version``."""
+    """M1: the four version points a release cuts must all say ``version``."""
+    lock_name = "frontend/package-lock.json"
     sites = (
         ("pyproject.toml", _first_value(pyproject, _PYPROJECT_VERSION)),
         ("frontend/package.json", _first_value(package_json, _PACKAGE_VERSION)),
         ("uv.lock", _lock_version(uv_lock)),
     )
+    lock = _package_lock_fields(package_lock)
+    top_value, top_line = lock[LOCK_TOP_FIELD]
+    installed_value, installed_line = lock[LOCK_PACKAGES_FIELD]
     stale = [
         f"{name}:{line} = {found}"
         for name, (found, line) in sites
         if found != version
     ]
+    if top_value != installed_value:
+        return _emit(
+            "FAIL",
+            "M1",
+            f"want {version}; {lock_name} disagrees with itself: "
+            f"{LOCK_TOP_FIELD} = {top_value} at {lock_name}:{top_line}, "
+            f"{LOCK_PACKAGES_FIELD} = {installed_value} at {lock_name}:{installed_line}"
+            + (f"; also stale: {', '.join(stale)}" if stale else ""),
+        )
+    stale += [
+        f"{lock_name}:{line} ({field}) = {value}"
+        for field, (value, line) in lock.items()
+        if value != version
+    ]
     if stale:
         return _emit("FAIL", "M1", f"want {version}; stale: " + ", ".join(stale))
-    return _emit("PASS", "M1", f"{version} at " + ", ".join(f"{n}:{ln}" for n, (_, ln) in sites))
+    lines = [f"{name}:{line}" for name, (_, line) in sites]
+    lines += [f"{lock_name}:{line}" for _, line in lock.values()]
+    return _emit("PASS", "M1", f"{version} at " + ", ".join(lines))
 
 
 # ---------------------------------------------------------------------------
