@@ -380,11 +380,16 @@ async def fork_branch(
     # existed. This row is that anchor: branch-local, superseded by the branch's
     # own next rename, and never consulted by the parent's supersede chain.
     #
+    # The value comes from the source's CHAIN, not its own rows (issue #108): a
+    # source that owns no title row (a pre-#86 branch, a compaction successor of
+    # an untitled chat) read ``""`` here and pinned it onto every descendant. The
+    # chain read takes the name the reader can actually see on that line.
+    #
     # ALWAYS append it, empty title included: a branch with zero own rows is
     # dropped from the list (``_summarize`` returns ``None``); fork_session
     # always writes the snapshot, so this only matters for an UNTITLED source,
     # where the row still pins a branch-local title anchor.
-    title = session_title(log.get_events(session_id))
+    title = session_title(log.get_chain_events(session_id))
     log.append_event(
         new_session_id,
         "system",
@@ -467,11 +472,14 @@ async def delete_tail(
     # line the reader just switched to vanish from the rail until its next turn.
     # Compaction reaches the same guarantee through its marker row; this fork
     # has no marker, so the carry row IS the branch's own-row anchor. An
-    # empty-title rename row is harmless downstream: ``_summarize`` folds it to
-    # ``title: ""`` (what an untitled chat already reads) and
-    # ``context_monitor.session_title`` ignores blank titles and falls back to
-    # the parent, exactly as it does for the unanchored child today.
-    title = session_title(log.get_events(session_id))
+    # empty-title rename row is harmless downstream: ``_summarize``'s DISPLAY
+    # fold treats a blank own title as absent and walks the chain (issue #108),
+    # and ``context_monitor.session_title`` already did -- so the row anchors the
+    # branch in the rail without hiding an ancestor's name.
+    #
+    # Chain read (issue #108), same as the /fork carry above: a source that owns
+    # no title row must not pin ``""`` onto its descendants.
+    title = session_title(log.get_chain_events(session_id))
     log.append_event(
         new_session_id,
         "system",

@@ -913,14 +913,16 @@ def recap_texts(events: Iterable[Any]) -> list[str]:
 
 
 def session_title(rows: Iterable[Any]) -> str:
-    """The session's OWN title (latest ``session_created``/``session_renamed``).
+    """The latest ``session_created``/``session_renamed`` title in ``rows``.
 
     Public because a second writer needs the same carry rule: a lazily created
     branch (the delete-tail fork) inherits the conversation's title by
-    re-appending it, exactly as a compaction successor era does. ``rows`` are
-    the SOURCE session's own rows (``get_events``), never the chain: the carry
-    copies the title onto the new branch, so reading the chain would be
-    redundant where it is not stale.
+    re-appending it, exactly as a compaction successor era does. ``rows`` is a
+    plain row iterable -- the compaction successor passes the source's OWN rows
+    (``get_events``), where the copy is about that chat's own title; the fork
+    carries (``api/branches.py``) pass the source's CHAIN (``get_chain_events``),
+    because a source that owns no title row must not pin an empty name onto its
+    descendants (issue #108).
     """
     title = ""
     for event in rows:

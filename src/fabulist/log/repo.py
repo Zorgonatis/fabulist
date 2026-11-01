@@ -811,32 +811,56 @@ class EventLog:
     def _carry_config(
         self, source_session: str, new_session_id: str, at_seq: int
     ) -> None:
-        """Re-append the source's post-cut session-constant config to a branch.
+        """Re-append the source's effective session-constant config to a branch.
 
         Called inside :meth:`fork_session`'s transaction. A fork cuts *history*
         at ``at_seq`` (F2), but session-constant config is a live setting: a
-        persona/world/assistant/memory choice assigned to the source after the
-        swiped turn would otherwise fall outside the inherited chain window
-        (``seq <= at_seq``) and vanish from the branch.
+        persona/world/assistant/memory choice in force on the source would
+        otherwise fall outside the new branch's inherited chain window and
+        vanish from the branch.
 
-        Only the source's own ``system`` rows of a whitelisted kind
-        (:data:`FORK_CONFIG_EVENTS`) with ``seq > at_seq`` are re-appended --
-        rows at or before the cut already arrive through the chain, so copying
-        them would duplicate them. The readers' latest-wins folds make the
-        newest value per key win, whichever session owns it. The new rows get
-        the branch's own ``seq`` space (continuing from ``at_seq + 1``) via
-        :meth:`_insert_event`, so ordering and pruning stay correct.
+        Reads the source's CHAIN, not its own rows (issue #108). The source may
+        itself be a branch: its effective persona/actor row can live in an
+        ancestor segment, which the source inherited rather than owned. An
+        own-row read carried nothing there, and the new branch's window
+        (truncated at the new cut) dropped that ancestor row -- generation 2
+        lost the persona. So the fold is the one every reader already runs:
+        the source's chain, latest-wins per whitelisted kind
+        (:data:`FORK_CONFIG_EVENTS`).
+
+        ONE row per key is re-appended, and only when the winning row sits
+        ABOVE the new cut (``seq > at_seq``): a winning row at or below the cut
+        is inherited by the branch's chain window, so copying it would
+        duplicate it. ``seq`` restarts per segment, so that test is applied to
+        the winning row's own ``seq`` AFTER the chain fold -- never as a numeric
+        filter over the merged chain (a filter across segments would compare
+        unrelated sequence spaces).
+
+        Carried rows get the branch's own ``seq`` space (continuing from
+        ``at_seq + 1``) via :meth:`_insert_event`, in chain order, so the
+        branch's first own row stays the carried config (the era-marker and
+        branch-kind readers depend on that) and a branch-local write keeps
+        winning over the carry.
         """
-        carried: list[Event] = []
-        for event in self.get_events(source_session):
-            if event.seq <= at_seq or event.ephemeral or event.type != "system":
+        #: Winning row per whitelisted key, plus its chain position (chain order
+        #: is root-first, so a branch's own row always wins an inherited one).
+        winners: dict[str, Event] = {}
+        positions: dict[str, int] = {}
+        for index, event in enumerate(self.get_chain_events(source_session)):
+            if event.ephemeral or event.type != "system":
                 continue
             payload = event.payload
             if not isinstance(payload, dict):
                 continue
-            if payload.get("event") in FORK_CONFIG_EVENTS:
-                carried.append(event)
-        for source in carried:
+            kind = payload.get("event")
+            if kind in FORK_CONFIG_EVENTS:
+                winners[kind] = event
+                positions[kind] = index
+        for kind in sorted(winners, key=lambda name: positions[name]):
+            source = winners[kind]
+            if source.seq <= at_seq:
+                # Inherited through the new branch's chain window: no copy.
+                continue
             self._insert_event(
                 session_id=new_session_id,
                 type=source.type,

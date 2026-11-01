@@ -320,13 +320,17 @@ def test_clear_rides_a_fork(log: EventLog):
         "user",
         {"event": "persona", "persona_id": "p1", "name": "Alice"},
     )
-    # Fork before the clear: the assignment AND the clear are carried onto the
-    # branch; latest wins -> still explicitly no persona.
+    # Fork before the clear: the EFFECTIVE record (the clear, latest-wins) is
+    # carried onto the branch -> still explicitly no persona. Issue #108 folds
+    # the source's chain to ONE row per config key, so the superseded ``p1``
+    # assignment is no longer copied raw -- the branch cannot read it anyway.
     cut = log.get_events(parent)[0].seq  # after session_created
     log.fork_session(parent, at_seq=cut, new_session_id=branch)
     carried = [r.payload.get("persona_id") for r in _chat_persona_rows(log, branch)]
-    assert carried == ["p1", None]
+    assert carried == [None]
     assert persona_for_chat(log, branch) is None
+    # The clear is an EXPLICIT statement ("no persona"), not "never set".
+    assert chat_persona_state(log, branch) == (True, None)
 
 
 # -- PART 2: {{user}} -> the word "user" -------------------------------------
