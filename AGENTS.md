@@ -156,3 +156,9 @@ generator's inline `INFRASTRUCTURE` block (four infra components), which must tr
 - A full turn is slow by design (serial agent work plus model latency) — measured turn times and
   what is normal for this stack are in `the maintainer's private state snapshot (unshipped)`; a quiet minute is latency, not a
   hang, and nothing should serialize the turn lock waiting on it.
+- A flex header whose tallest item is a column anchors its centred items to the MIDDLE row —
+  the studio head's drag handle and window buttons sat on the middle tab band, because the tab
+  strip is a column of bands (#103). Start the head's items at the top and size each control to
+  one band row. In a column, DOM order is vertical order: the collapsed state bar's control was
+  the strip's last child and therefore bottom-anchored, so it is ordered first, and the undock
+  reserve is the head's margin, not its padding.

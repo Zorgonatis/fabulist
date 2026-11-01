@@ -15,10 +15,11 @@ One llama.cpp server, Vulkan build, in router mode. The models run on the CPU by
 | `qwen3-reranker` | `POST /v1/rerank` | recall reranking (on by default) |
 | `d1-3b` | `POST /v1/systemone` | the native decision model behind the yes/no checks |
 
-Nothing ships in the image. The compose file names each model as a HuggingFace reference, and your
-first request for one downloads it. The router starts with all three unloaded. The child it spawns
-for a model fetches that model's files, then serves it. All three repos are public and ungated, so
-nothing asks for a token.
+Nothing ships in the image. The compose file names each model as a HuggingFace reference, and the
+default warm-up downloads all three at container start (with `FABULIST_SIDECAR_WARMUP=off` a
+model's first request pays it instead). The router starts with all three unloaded. The child it
+spawns for a model fetches that model's files, then serves it. All three repos are public and
+ungated, so nothing asks for a token.
 
 ## Sizes
 
@@ -37,7 +38,8 @@ The pull lands in llama.cpp's HuggingFace cache. `LLAMA_CACHE=/cache` points the
 named volume backs it: `fabulist-model-cache`, or `<project>_fabulist-model-cache` per project.
 
 The volume survives `docker compose down`, `up`, image pulls and recreates, so you pay for the
-download once. The first request after a fresh volume is slow — a few minutes on a home connection.
+download once. The first container start after a fresh volume is slow — a few minutes on a home
+connection; with `FABULIST_SIDECAR_WARMUP=off` the first request pays it instead.
 Every request after that is a normal cold model load. To force a fresh pull, run
 `docker compose down -v`, or `docker volume rm <project>_fabulist-model-cache`. Bind a host
 directory at `/cache` instead if you would rather see the blobs.
@@ -144,8 +146,9 @@ rerank per recall, one embed per query and per write:
 | GPU (opt-in) | 64-71 ms | ~4.5 GiB resident, 6 GiB comfortable |
 
 About 15x on that call, measured on the same binary with the Vulkan ICD hidden for the CPU figure.
-Both answered `healthy` with `truncated = 0` on every sequence. The figures live in
-`deploy/sidecar/models.ini`, beside the flags they were taken with.
+Both answered `healthy` with `truncated = 0` on every sequence. The latency figures live in
+`deploy/sidecar/models.ini`, beside the flags they were taken with; the memory floor is in
+`deploy/sidecar/entrypoint.sh`, in the warning that checks a requested device against it.
 
 To use a GPU, set one line in `.env`:
 
@@ -196,7 +199,8 @@ That is the engine alone, against your own host model server or a hosted API.
 
 ## Troubleshooting
 
-If a model's first request fails with a download error, look at the weight cache first.
+If a download fails at container start (or, with `FABULIST_SIDECAR_WARMUP=off`, at a model's first
+request), look at the weight cache first.
 `docker compose exec fabulist-models du -sh /cache` shows what is already there. A half-finished blob
 is re-fetched automatically, because llama.cpp stores partials by content hash.
 
