@@ -32,6 +32,7 @@
 		Projection,
 		ProjectionItem,
 		RevisionFrame,
+		SessionSummary,
 		StageFrame,
 		StreamOutcome,
 		ValidationNotice
@@ -200,6 +201,57 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	const stateSurfaceOpen = $derived(stateUndocked || !statebarCollapsed);
 	let inspectorOpen = $state(false);
 	let promptsOpen = $state(false);
+
+	// --- chat versions (issue #107, Option A) ---
+	// A chat is a READ-ONLY PROJECTION: the root of the session's fork chain plus
+	// every session that climbs to it. A reroll or a delete forks the session the
+	// reader is on, so those forks are VERSIONS of one chat — they must be
+	// reachable, not listed as separate chats. The rail folds them into one row;
+	// this dropdown (mounted under the chat header's title) is where the other
+	// members of the open chat are listed and switched to.
+	let versionsOpen = $state(false);
+
+	/** Every session of the OPEN chat, newest activity first. */
+	const chatMembers = $derived.by((): SessionSummary[] => {
+		const id = $sessionId;
+		if (!id) return [];
+		const open = $sessions.find((row) => row.id === id);
+		const chatId = open?.chat_id ?? id;
+		return $sessions
+			.filter((row) => (row.chat_id ?? row.id) === chatId)
+			.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+	});
+
+	/** One-line time for a member row (local, like the rail's). */
+	function formatVersionWhen(iso: string | null): string {
+		if (!iso) return '';
+		const date = new Date(iso);
+		if (Number.isNaN(date.getTime())) return '';
+		return date.toLocaleString(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit'
+		});
+	}
+
+	/**
+	 * Open one member of the chat. It becomes the reader's line AND the promoted
+	 * rail row: the list is re-read after the switch so the fold promotes it.
+	 */
+	async function chooseVersion(id: string): Promise<void> {
+		versionsOpen = false;
+		if (id === $sessionId) return;
+		await openSession(id);
+		await refreshSessions();
+	}
+
+	/** Escape closes the versions menu from the door or from any member row. */
+	function closeVersionsOnEscape(event: KeyboardEvent): void {
+		if (event.key !== 'Escape' || !versionsOpen) return;
+		event.preventDefault();
+		versionsOpen = false;
+	}
 	// D51: entity DEFINITIONS live in the Design Studio (personas · worlds ·
 	// books · assistants · profiles); assembly stays in chat. The shell owns its
 	// layout — dock/width/kind, persisted in `fabulist.studio.state` — while the
@@ -2208,11 +2260,74 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	<main class="thread">
 		<header class="thread-head">
 			<div class="thread-title" class:has-identity={activeWorld || activeCast.length}>
-				<!-- Issue #22: the session id is a TOOLTIP, not a row item. It is a
-				     debug handle, and printing it beside the title cost a line of
-				     header on every chat for information nobody reads at a glance. -->
-				<h1 title={headTitle}>{$sessionTitle || 'New chat'}</h1>
-				{#if USE_MOCK}<span class="mock-badge" title="VITE_MOCK=1 — scripted responses, no backend, no LLM">MOCK — no LLM</span>{/if}
+				<!-- Issue #107: the title and its chat-versions door are ONE stack. The
+				     chat header is where the members of the OPEN chat are listed — the
+				     rail shows one row per chat, so the versions a reroll or a delete
+				     created stay reachable here (and through the transcript's swipes). -->
+				<div class="title-stack">
+					<div class="title-line">
+						<!-- Issue #22: the session id is a TOOLTIP, not a row item. It is a
+						     debug handle, and printing it beside the title cost a line of
+						     header on every chat for information nobody reads at a glance. -->
+						<h1 title={headTitle}>{$sessionTitle || 'New chat'}</h1>
+						{#if USE_MOCK}<span class="mock-badge" title="VITE_MOCK=1 — scripted responses, no backend, no LLM">MOCK — no LLM</span>{/if}
+					</div>
+					{#if chatMembers.length > 1}
+						<div class="chat-versions">
+							<button
+								type="button"
+								class="versions-toggle"
+								class:open={versionsOpen}
+								aria-expanded={versionsOpen}
+								aria-haspopup="menu"
+								title={`This chat has ${chatMembers.length} sessions — rerolls and deletes are versions of it`}
+								onclick={() => (versionsOpen = !versionsOpen)}
+								onkeydown={closeVersionsOnEscape}
+							>
+								{chatMembers.length} versions
+								<span class="versions-caret" aria-hidden="true">▾</span>
+							</button>
+							{#if versionsOpen}
+								<ul
+									class="versions-menu"
+									role="menu"
+									aria-label="Sessions in this chat"
+									onkeydown={closeVersionsOnEscape}
+								>
+									{#each chatMembers as member (member.id)}
+										<li role="none">
+											<button
+												type="button"
+												role="menuitem"
+												class="version-row"
+												class:current={member.id === $sessionId}
+												aria-current={member.id === $sessionId ? 'true' : undefined}
+												onclick={() => void chooseVersion(member.id)}
+											>
+												<span class="version-snippet"
+													>{member.snippet || 'No reply of its own yet.'}</span
+												>
+												<span class="version-meta">
+													<!-- The mark: exactly one member is the line the reader is on. -->
+													{#if member.id === $sessionId}
+														<span class="version-open" title="You are on this session"
+															>● open</span
+														>
+													{/if}
+													{member.turns}
+													{member.turns === 1 ? 'turn' : 'turns'}
+													{#if member.updated_at}
+														· {formatVersionWhen(member.updated_at)}
+													{/if}
+												</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+					{/if}
+				</div>
 				{#if activeWorld || activeCast.length}
 					<!-- The identity art at the top of the chat is the reader's anchor to the
 					     characters on stage, so it renders at 2.5rem (owner request: the
@@ -2745,6 +2860,112 @@ import { hydrateAvatars } from '#lib/openui/avatars';
 	   count) is what keeps it from growing a second row. */
 	.thread-title.has-identity {
 		align-items: center;
+	}
+	/* Issue #107: the title + the chat-versions door are a column so the door can
+	   sit UNDER the title without becoming a third header band. The menu is
+	   absolutely positioned, so opening it never reflows the head. */
+	.title-stack {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.1rem;
+		min-width: 0;
+	}
+	.title-line {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+	.chat-versions {
+		position: relative;
+		display: flex;
+	}
+	/* A door, not a badge: quiet until hovered, the same chrome as the head's
+	   other secondary controls. */
+	.versions-toggle {
+		font: inherit;
+		font-size: var(--font-micro);
+		color: var(--text-muted);
+		background: transparent;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		padding: 0.05rem 0.45rem;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.versions-toggle:hover,
+	.versions-toggle.open {
+		color: var(--text);
+		background: var(--bg-raised);
+	}
+	.versions-caret {
+		margin-left: 0.2rem;
+		font-size: 0.75em;
+	}
+	/* The members of the OPEN chat: reply snippet, turns, time, and a mark on the
+	   line the reader is on. One selection opens that session (and the rail's
+	   fold then promotes it). */
+	.versions-menu {
+		position: absolute;
+		top: calc(100% + 0.25rem);
+		left: 0;
+		z-index: 40;
+		margin: 0;
+		padding: 0.25rem;
+		list-style: none;
+		min-width: 20rem;
+		max-width: min(32rem, 70vw);
+		max-height: 45vh;
+		overflow-y: auto;
+		background: var(--bg-panel);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		box-shadow: 0 10px 28px rgb(0 0 0 / 35%);
+	}
+	.version-row {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		width: 100%;
+		text-align: left;
+		font: inherit;
+		color: var(--text);
+		background: transparent;
+		border: 0;
+		border-radius: 6px;
+		padding: 0.35rem 0.45rem;
+		cursor: pointer;
+	}
+	.version-row:hover {
+		background: var(--bg-raised);
+	}
+	.version-row.current {
+		background: var(--bg-raised);
+		outline: 1px solid var(--accent-line);
+	}
+	.version-snippet {
+		font-size: var(--font-small);
+		line-height: 1.3;
+		/* Two lines is a snippet; the dropdown is a chooser, not a reader. */
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.version-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: var(--font-micro);
+		color: var(--text-muted);
+		font-variant-numeric: tabular-nums;
+	}
+	.version-open {
+		color: var(--accent-strong);
+		font-weight: 600;
 	}
 	h1 {
 		margin: 0;

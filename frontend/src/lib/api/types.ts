@@ -249,6 +249,22 @@ export interface SessionSummary {
 	 *  engine that predates W9.26 degrades to "not compacted". The era child
 	 *  (the live continuation) carries no badge. */
 	compacted?: boolean;
+	/** Issue #107 (Option A): the chat this session belongs to — the id of the
+	 *  root of its fork chain. A chat is a READ-ONLY PROJECTION (no table, no
+	 *  event, no backfill): a reroll or a delete forks the session the reader is
+	 *  on, and every fork climbs back to the one root. The rail folds by this
+	 *  key, so a story with four rerolls is ONE row. Optional so an engine that
+	 *  predates the fold (and mock mode) degrades to "this session is its own
+	 *  chat". */
+	chat_id?: string;
+	/** Issue #107: the number of sessions in the chat, i.e. the member count the
+	 *  rail's "N versions" mark shows. Optional for the same reason as
+	 *  `chat_id`. */
+	chat_size?: number;
+	/** Issue #107: the first reply this session OWNS (inherited narrative is
+	 *  ignored), used as the one-line snippet in the chat's versions dropdown.
+	 *  Optional so a pre-#107 engine degrades to no snippet. */
+	snippet?: string;
 }
 
 

@@ -138,7 +138,14 @@ function normalizeSession(raw: unknown): SessionSummary | null {
 			? obj.actor_ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
 			: [],
 		// W9.26: absent on an engine that predates the compaction marker → false.
-		compacted: obj.compacted === true
+		compacted: obj.compacted === true,
+		// Issue #107: the derived chat fold. Absent on a pre-#107 engine → the
+		// session is its own chat (exactly what the old rail assumed), and the
+		// versions dropdown then never renders.
+		chat_id: typeof obj.chat_id === 'string' && obj.chat_id ? obj.chat_id : id,
+		chat_size: typeof obj.chat_size === 'number' && obj.chat_size > 0 ? obj.chat_size : 1,
+		// Issue #107: the member's own reply snippet (versions dropdown).
+		snippet: typeof obj.snippet === 'string' ? obj.snippet : ''
 	};
 }
 

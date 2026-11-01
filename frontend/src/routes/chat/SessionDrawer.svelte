@@ -388,6 +388,55 @@
 		return { actorChats, chats };
 	});
 
+	// --- chat fold (issue #107, Option A) ---
+	// A chat is a READ-ONLY PROJECTION, never a stored unit: one root session
+	// plus every session that climbs to it through `base_session`. The backend
+	// derives `chat_id` / `chat_size` per row (sessions.py, the same climb the
+	// engine's cut canonicalisation walks), and this rail folds by `chat_id`
+	// INSIDE a layer -- after the scope filter -- so the world/persona/actor
+	// layers keep their behaviour and only the CHATS list collapses.
+	//
+	// ONE row per chat renders: the PROMOTED session, i.e. the one the reader has
+	// open. A reroll or a delete forks the session the reader is on and then
+	// opens the fork, so the new fork is promoted and the old lines move into the
+	// header's versions dropdown instead of adding rail rows.
+	interface ChatGroup {
+		chatId: string;
+		row: SessionSummary;
+		size: number;
+		members: SessionSummary[];
+	}
+
+	function foldChats(rows: SessionSummary[]): ChatGroup[] {
+		const groups = new Map<string, ChatGroup>();
+		for (const row of rows) {
+			const chatId = row.chat_id ?? row.id;
+			let group = groups.get(chatId);
+			if (!group) {
+				group = { chatId, row, size: 1, members: [] };
+				groups.set(chatId, group);
+			}
+			group.members.push(row);
+			// The server's count is the GROUP's, so a scoped view still marks the
+			// whole story ("4 versions"), never just its visible members.
+			group.size = Math.max(group.size, row.chat_size ?? 1);
+			// Promote the session the reader is on; otherwise the first member wins
+			// (the list is newest-activity first, so the newest line is shown).
+			if (row.id === currentId) group.row = row;
+		}
+		return [...groups.values()];
+	}
+
+	const foldedBuckets = $derived.by(() => {
+		if (scope.kind === 'all') {
+			return {
+				actorChats: foldChats(unscopedBuckets.actorChats),
+				chats: foldChats(unscopedBuckets.chats)
+			};
+		}
+		return { actorChats: foldChats(chatRows), chats: [] as ChatGroup[] };
+	});
+
 	/** One breadcrumb step; the label is resolved late (catalogs load async). */
 	interface Crumb {
 		kind: Scope['kind'];
@@ -668,7 +717,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-{#snippet chatRow(session: SessionSummary, showBadge: boolean)}
+{#snippet chatRow(session: SessionSummary, showBadge: boolean, chatSize: number = 1)}
 	{@const memOn = rowMemory(session)}
 	{@const pid = rowPersonaId(session)}
 	{@const label = session.title || 'Untitled chat'}
@@ -718,6 +767,16 @@
 							class="badge-era"
 							title="Compacted — this chat continues in a newer era"
 							>compacted</span
+						>
+					{/if}
+					<!-- Issue #107: the chat's member count. One row stands for the whole
+					     story, so the rail has to say how many sessions it holds; the rest
+					     of them live in the chat header's versions dropdown. -->
+					{#if chatSize > 1}
+						<span
+							class="badge-versions"
+							title={`${chatSize} sessions in this chat — rerolls and deletes are versions of it`}
+							>{chatSize} versions</span
 						>
 					{/if}
 					{formatWhen(session.updated_at)} · {session.turns}
@@ -1073,24 +1132,24 @@
 
 				{#if scope.kind === 'all'}
 					<ul class="chat-rows">
-						{#each unscopedBuckets.actorChats as session (`chat:${session.id}`)}
-							{@render chatRow(session, true)}
+						{#each foldedBuckets.actorChats as group (`chat:${group.chatId}`)}
+							{@render chatRow(group.row, true, group.size)}
 						{:else}
-							{#if unscopedBuckets.chats.length === 0}
+							{#if foldedBuckets.chats.length === 0}
 								<li class="empty">No chats yet — start one above.</li>
 							{/if}
 						{/each}
-						{#if unscopedBuckets.chats.length > 0}
+						{#if foldedBuckets.chats.length > 0}
 							<li class="bucket-label">Chats</li>
-							{#each unscopedBuckets.chats as session (`chat:${session.id}`)}
-								{@render chatRow(session, true)}
+							{#each foldedBuckets.chats as group (`chat:${group.chatId}`)}
+								{@render chatRow(group.row, true, group.size)}
 							{/each}
 						{/if}
 					</ul>
 				{:else}
 					<ul class="chat-rows">
-						{#each chatRows as session (`chat:${session.id}`)}
-							{@render chatRow(session, false)}
+						{#each foldedBuckets.actorChats as group (`chat:${group.chatId}`)}
+							{@render chatRow(group.row, false, group.size)}
 						{:else}
 							<li class="empty">{scopeEmptyText}</li>
 						{/each}
@@ -1487,6 +1546,19 @@
 		font-size: var(--font-micro);
 		font-style: italic;
 		letter-spacing: 0.02em;
+	}
+	/* Issue #107: the chat's member count ("4 versions"). Quieter than the
+	   compacted badge — it is a fact about the row, not a warning. */
+	.badge-versions {
+		margin-right: 0.25rem;
+		padding: 0 0.3rem;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: var(--bg-raised);
+		color: var(--text-muted);
+		font-size: var(--font-micro);
+		letter-spacing: 0.02em;
+		white-space: nowrap;
 	}
 	/* Reassign picker stays out of the way until the row is hovered/current.
 	   Visually hidden, NOT `display: none` — a nav rail must keep every control

@@ -4,10 +4,12 @@ The log owns everything (D9): this router never mutates history. It *derives*
 the session list from the append-only event log and expresses every user
 intent as new rows.
 
-  GET    /api/sessions          list visible sessions (id, title, updated_at, turns)
-                                plus the ``persona_id`` / ``persona_cleared`` /
-                                ``world_id`` / ``memory_enabled`` / ``actor_id`` /
-                                ``actor_ids`` rail keys, with optional
+  GET    /api/sessions          list visible sessions (id, title, updated_at, turns,
+                                snippet) plus the ``persona_id`` /
+                                ``persona_cleared`` / ``world_id`` /
+                                ``memory_enabled`` / ``actor_id`` / ``actor_ids``
+                                rail keys and the derived ``chat_id`` /
+                                ``chat_size`` fold keys (issue #107), with optional
                                 ``?persona_id=`` / ``?world_id=`` / ``?actor_id=``
                                 scoping
   PATCH  /api/sessions/{id}     rename -> revision event superseding the title (D10)
@@ -142,6 +144,12 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
     title_payload: dict | None = None
     updated_at: str | None = None
     turns = 0
+    # Issue #107: the reply this session's OWN rows carry, for the chat's
+    # versions dropdown. Same rule as the branch snippet
+    # (:func:`fabulist.api.branches._first_prose`): inherited narrative is
+    # ignored, so the snippet says what THIS line answered. Free here -- the
+    # own-row read below already visits every event.
+    snippet = ""
     # D16 derived config (latest-wins folds over the chat's system events):
     # parent persona + per-chat embedding opt-out ride the list row so the
     # drawer groups without per-session round-trips. D32's ``world_ref``
@@ -193,6 +201,11 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
                 title = revised["title"]
                 title_event = event
                 title_payload = dict(revised)
+        if event.type == "narrative" and not event.ephemeral and not snippet:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            prose = payload.get("prose") or payload.get("text") or ""
+            if isinstance(prose, str) and prose.strip():
+                snippet = prose.strip()[:140]
 
     # Chain-walked config: latest-wins across the inherited rows (at/below the
     # fork cut) and the branch's own rows (a carried row or a branch-local
@@ -229,6 +242,8 @@ def _summarize(log: "EventLog", session_id: str) -> dict | None:
         "actor_id": actor_ids[0] if actor_ids else None,
         "actor_ids": list(actor_ids),
         "compacted": compacted,
+        # Issue #107: the versions dropdown's one-line answer for this member.
+        "snippet": snippet,
         "_title_event": title_event,
         "_title_payload": title_payload,
     }
@@ -259,7 +274,63 @@ def _public(summary: dict) -> dict:
         # (i.e. it is superseded). The drawer badges the row so a reader knows the
         # story lives in the continuation; a fresh engine/legacy log reads False.
         "compacted": summary.get("compacted", False),
+        # Issue #107 (Option A): a chat is a READ-ONLY PROJECTION -- the root of
+        # this session's fork chain plus every session that climbs to it. No
+        # table, no event, no backfill; the rail folds by ``chat_id`` and marks
+        # the group with ``chat_size``. A root (or a log with no forks) is its
+        # own chat, so legacy logs group correctly as they are.
+        "chat_id": summary.get("chat_id") or summary["session_id"],
+        "chat_size": summary.get("chat_size", 1),
+        # The chat's versions dropdown reads the reply each member owns.
+        "snippet": summary.get("snippet", ""),
     }
+
+
+def _chat_groups(log: "EventLog") -> tuple[dict[str, str], dict[str, int]]:
+    """Derive every session's chat root, plus each group's size (issue #107).
+
+    A chat is ONE READ-ONLY PROJECTION, never a stored unit: one root session
+    plus every session that climbs to it through ``sessions.base_session``. No
+    table, no event kind, no backfill (the approved Option A). The climb is the
+    one the engine's cut canonicalisation already walks
+    (:meth:`EventLog._fork_pivot`, repo.py) continued to the root, and the map
+    is the engine's own single-read bookkeeping read
+    (:meth:`EventLog._session_map`) -- so the rail and the engine agree on what
+    one story is.
+
+    Why the root and not the fork cut: a reroll forks the session the reader is
+    ON, so three rerolls form a chain ``A -> B -> C -> D``. Every one of them
+    descends from ``A``, which is the chat; the cut-level pivot is what the
+    SWIPE group needs, not what the chat needs. A delete-tail fork also lands in
+    the same group, because it forks a session of the same chain.
+
+    Returns ``(roots, sizes)``: ``session_id -> chat_id`` and
+    ``chat_id -> member count``. Hidden members are counted (the group is the
+    log's, not the rail's view); the rail lists visible members and keeps the
+    count honest with the log.
+    """
+    try:
+        sessions = log._session_map()
+    except Exception:  # pragma: no cover - defensive: no bookkeeping table
+        return {}, {}
+    roots: dict[str, str] = {}
+    for session_id in sessions:
+        anchor = session_id
+        seen = {session_id}
+        while True:
+            info = sessions.get(anchor)
+            parent = info.get("base_session") if info else None
+            # Unknown parent = a dangling pointer; stop at the last known row so
+            # a corrupt pointer can never hang the list.
+            if not parent or parent in seen or parent not in sessions:
+                break
+            seen.add(parent)
+            anchor = parent
+        roots[session_id] = anchor
+    sizes: dict[str, int] = {}
+    for root in roots.values():
+        sizes[root] = sizes.get(root, 0) + 1
+    return roots, sizes
 
 
 def _sync_registry(request: Request, session_id: str, title: str) -> None:
@@ -296,11 +367,16 @@ async def list_sessions(
     with no matching event; with no parameters the list stays unfiltered.
     """
     log = _log_for(request)
+    # Issue #107: ONE bookkeeping read per list call serves the whole fold.
+    chat_roots, chat_sizes = _chat_groups(log)
     summaries: list[dict] = []
     for session_id in _session_ids(log):
         summary = _summarize(log, session_id)
         if summary is None or summary["hidden"]:
             continue
+        chat_id = chat_roots.get(session_id, session_id)
+        summary["chat_id"] = chat_id
+        summary["chat_size"] = chat_sizes.get(chat_id, 1)
         if persona_id is not None and summary.get("persona_id") != persona_id:
             continue
         if world_id is not None and summary.get("world_id") != world_id:
