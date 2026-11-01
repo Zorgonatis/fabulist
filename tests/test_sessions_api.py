@@ -243,6 +243,11 @@ def test_list_row_carries_world_id_and_keeps_existing_keys(build_app):
         # W9.26 §2.6: the superseded-era flag the drawer badges (always present;
         # False until a marker-bearing compaction child exists).
         "compacted",
+        # Issue #107: the derived chat fold (root id + member count) and the
+        # versions dropdown's own-reply snippet.
+        "chat_id",
+        "chat_size",
+        "snippet",
     }
     # A plain session has no ``world_ref`` snapshot -> consistent null.
     assert entry["world_id"] is None
@@ -258,6 +263,145 @@ def test_list_row_carries_world_id_and_keeps_existing_keys(build_app):
     # D53: a plain session records no actor -> null primary, empty set.
     assert entry["actor_id"] is None
     assert entry["actor_ids"] == []
+    # Issue #107 (Option A): no fork -> the session IS its own chat.
+    assert entry["chat_id"] == sid
+    assert entry["chat_size"] == 1
+    assert entry["snippet"] == ""
+
+
+def test_reroll_chain_folds_into_one_chat(build_app):
+    """A reroll chain (three forks of the open session) is ONE chat (#107).
+
+    This is the measured defect: five rail rows for one story. The fold is a
+    read-only projection over ``sessions.base_session`` -- no write path -- and
+    every existing list key must still ride the row.
+    """
+    build, log_path = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            root = await _create(client, title="Tavern night")
+            await _run_turn(client, root, "one")
+            await _run_turn(client, root, "two")
+            return root, (await client.get("/api/sessions")).json()
+
+    root, body = run(scenario())
+    log = app.state.log
+    # The reroll shape: each fork targets the session the reader is ON.
+    current = root
+    for index in range(3):
+        at_seq = max(event.seq for event in log.get_events(current))
+        forked = f"reroll-{index}"
+        log.fork_session(current, at_seq, forked)
+        current = forked
+
+    final = run(_list(app))
+    assert len(final["sessions"]) == 4
+    assert {row["chat_id"] for row in final["sessions"]} == {root}
+    assert {row["chat_size"] for row in final["sessions"]} == {4}
+    # Every row still carries the whole existing wire shape.
+    for row in final["sessions"]:
+        assert set(row) >= {
+            "session_id",
+            "title",
+            "updated_at",
+            "turns",
+            "persona_id",
+            "persona_cleared",
+            "world_id",
+            "memory_enabled",
+            "actor_id",
+            "actor_ids",
+            "compacted",
+            "chat_id",
+            "chat_size",
+            "snippet",
+        }
+    assert body["sessions"][0]["chat_size"] == 1
+
+
+async def _list(app) -> dict:
+    async with client_for(app) as client:
+        return (await client.get("/api/sessions")).json()
+
+
+def test_delete_tail_fork_joins_the_same_chat(build_app):
+    """A delete-tail fork is a member of the chat it was cut from (#107)."""
+    build, _ = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            root = await _create(client, title="Story")
+            await _run_turn(client, root, "one")
+            await _run_turn(client, root, "two")
+            return root
+
+    root = run(scenario())
+    log = app.state.log
+    chain = log.get_chain_events(root)
+    pivot = max(event.seq for event in chain)
+    log.fork_session(root, pivot, "cut-tail")
+
+    body = run(_list(app))
+    assert len(body["sessions"]) == 2
+    assert {row["chat_id"] for row in body["sessions"]} == {root}
+    assert {row["chat_size"] for row in body["sessions"]} == {2}
+
+
+def test_independent_roots_are_separate_chats(build_app):
+    """Two stories stay two chats; the fold never merges unrelated sessions."""
+    build, _ = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            first = await _create(client, title="First")
+            second = await _create(client, title="Second")
+            return first, second, (await client.get("/api/sessions")).json()
+
+    first, second, body = run(scenario())
+    by_id = {row["session_id"]: row for row in body["sessions"]}
+    assert by_id[first]["chat_id"] == first
+    assert by_id[second]["chat_id"] == second
+    assert by_id[first]["chat_size"] == 1
+    assert by_id[second]["chat_size"] == 1
+
+
+def test_chat_snippet_is_the_branchs_own_reply(build_app):
+    """The dropdown snippet reads the reply the session OWNS (#107).
+
+    Inherited narrative is ignored -- the point of the members list is to say
+    what each line answered, like the swipe group's branch snippet.
+    """
+    build, _ = build_app
+    app = build()
+
+    async def scenario():
+        async with client_for(app) as client:
+            root = await _create(client, title="Story")
+            await _run_turn(client, root, "one")
+            return root
+
+    root = run(scenario())
+    log = app.state.log
+    user_seq = max(
+        event.seq for event in log.get_events(root) if event.type == "user"
+    )
+    log.fork_session(root, user_seq, "regenerated")
+    log.append_event(
+        "regenerated",
+        "narrative",
+        "narrator",
+        {"prose": "A wholly different answer."},
+    )
+
+    body = run(_list(app))
+    by_id = {row["session_id"]: row for row in body["sessions"]}
+    # The fork owns only the regenerated reply; the root keeps its own.
+    assert by_id["regenerated"]["snippet"].startswith("A wholly different answer.")
+    assert by_id[root]["snippet"] != by_id["regenerated"]["snippet"]
 
 
 def test_world_materialised_session_reports_its_world_id(build_app):
