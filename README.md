@@ -119,13 +119,13 @@ a toggle for including assistants. This is what you send a friend instead of a z
 
 *Your whole setup in one file: the world, the cast, the books, the prompt — the thing a card plus a preset plus a world plus a persona used to be.*
 
-### 6. Queries — Engine
+### 6. Repair triggers — Engine
 
 First the anti-slop table: phrase rows, each with a switch. Then a custom question, open: the
 instruction, what *yes* and *no* mean, the threshold, the probability. "I keep telling the model not
 to do that" becomes something you own.
 
-*Write down the things that ruin a scene. When one turns up, the turn gets sent back to be fixed instead of shipped to you.*
+*Write down the things that ruin a scene. When one turns up, the turn gets sent back to be repaired instead of shipped to you.*
 
 ### 7. Templates — Engine
 
