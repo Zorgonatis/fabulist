@@ -14,6 +14,7 @@ detail; this file is an index, not a report. Versioning follows
 
 ### Changed
 
+- The models sidecar runs on the CPU unless a GPU is asked for; unset no longer takes a visible device or fails on two, and the GPU opt-in carries its measured cost (#102)
 - The keep-last panel window is editable next to History depth, and the panel-strip control now shows the engine's real default instead of its opposite (#100)
 - The studio's Queries pane is named Repair triggers — a row is the cause, the repair is the effect (#99)
 - Studio tab bands read as bands: band captions outrank their pills and the bands are spaced apart (#99)
