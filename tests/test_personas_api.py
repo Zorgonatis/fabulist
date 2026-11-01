@@ -739,6 +739,11 @@ def _wire_keys() -> set[str]:
         "actor_ids",
         # W9.26 §2.6: branches-derived superseded-parent flag (drawer badge).
         "compacted",
+        # Issue #107: the derived chat fold — root id, member count — and the
+        # versions dropdown's own-reply snippet.
+        "chat_id",
+        "chat_size",
+        "snippet",
     }
 
 
