@@ -2,7 +2,7 @@
 	// Design Studio shell (D51 §2.3).
 	//
 	// A NON-modal, anchorable surface that hosts per-kind editor panes (Flow ·
-	// Proposals · Personas · Worlds · Books · Assistants · Profiles · Queries ·
+	// Proposals · Personas · Worlds · Books · Assistants · Profiles · Repair triggers ·
 	// Templates · Planner). The shell owns layout only: kind
 	// tabs, dock/float placement, collapse, persistence, the Escape registration
 	// and the dirty guard. It reads NO page stores and makes NO fetches — panes
