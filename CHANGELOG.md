@@ -11,6 +11,7 @@ detail; this file is an index, not a report. Versioning follows
 ### Fixed
 
 - The last N turns keep their panels in the model's history again: the keep-last window read the prose channel, which never holds panel markup (#100)
+- A studio band caption opens its own band: the bands wrap as units, so no caption trails the previous band's row (#99)
 
 ### Changed
 
