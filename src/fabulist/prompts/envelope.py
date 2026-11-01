@@ -13,7 +13,7 @@ trust.
 
 This module owns the ONE shape every turn's tail takes:
 
-    <engine_state>     world ground truth (EnvTracker facts)
+    <engine_state>     world ground truth (EnvTracker facts, then fixed canon)
     <engine_notice>    engine session facts (cast delta, set swap, BTS continuity)
     <engine_memory>    recalled reference (RECALLED_FRAMING + sections)
     <engine_lane>      this turn's NPC narration constraint
@@ -104,6 +104,14 @@ ENGINE_PALETTE_OPEN = "<engine_palette>"
 ENGINE_PALETTE_CLOSE = "</engine_palette>"
 
 #: The served order (§3.3). Never reorder, rename or strip for token savings.
+#:
+#: The STATE block is the whole truth tier for world facts: the tracked state
+#: facts first, the fixed-canon section LAST (issue #106). The canon is not a
+#: sibling block — it is a section of the state body, composed by
+#: :func:`fabulist.context.facts.assemble_turn_context` (``state_parts``), which
+#: is why no author can drop it from the tail and why it can never drift into the
+#: ``memory`` block's "ignore the rest" framing. Tail content, rebuilt every turn:
+#: the stable prefix does not move (ADR-005).
 BLOCK_ORDER: tuple[str, ...] = (
     "state",
     "notice",
@@ -124,7 +132,21 @@ BLOCK_ORDER: tuple[str, ...] = (
 
 #: Truth tier: authoritative world state. Prose stays consistent with it and
 #: never restates it (the HUD owns display).
-STATE_HEADER = "ENGINE STATE — ground truth at this turn's open."
+#:
+#: Issue #106: the state block also carries the FIXED CANON — every ``constant``
+#: lorebook entry — as its LAST section, so the state header states the
+#: precedence the reader must apply when the two disagree. An entry the author
+#: marked constant is authored truth; the tracked state is derived (the planner
+#: and the tracker WRITE it), so the entry wins and the state is the side that
+#: needs repair. Without this rule the tier order itself called the planner
+#: state "ground truth" and the lore "reference material", which is exactly how
+#: a plan came to contradict fixed canon and the narrator had to arbitrate.
+STATE_HEADER = (
+    "ENGINE STATE — ground truth at this turn's open. The fixed canon below the "
+    "state is authored truth that outranks it: where a fixed-canon entry and "
+    "this state disagree, the entry wins — keep the prose on the entry, and "
+    "treat the state as the thing that needs repair."
+)
 
 #: Truth tier (session): authoritative engine facts; act on them without remark.
 NOTICE_HEADER = "ENGINE NOTICE — engine facts about this session; true from this turn on."

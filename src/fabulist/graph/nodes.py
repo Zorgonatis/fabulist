@@ -3515,8 +3515,27 @@ def _world_objects_block(log: LogPort, session_id: str) -> str:
     return "WORLD OBJECTS:\n" + "\n".join(lines)
 
 
+def _planner_surfaces(log: LogPort) -> dict | None:
+    """The active preset's normalized ``surfaces`` block, or ``None``.
+
+    Only the editable section headings are read from it (the planner's
+    ``LORE (fixed canon)`` heading, issue #106). A missing preset or an unreadable
+    store is normal for a direct node call (tests, a pre-boot log) and simply
+    leaves the code constants in place — never a failed context block.
+    """
+
+    try:
+        from fabulist.prompts.preset_store import active_preset
+        from fabulist.prompts.surfaces import preset_surfaces
+
+        return preset_surfaces(active_preset(log))
+    except Exception:  # noqa: BLE001 - headings fall back to the constants
+        logger.debug("planner context: preset surfaces unreadable", exc_info=True)
+        return None
+
+
 def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
-    """The planner's context block: current state, cast, world, recent turns.
+    """The planner's context block: current state, cast, world, lore, recent turns.
 
     Built from the existing seams the other agents use — the fork-aware folded
     state (plus this turn's rules-clock facts, which pre_turn advanced but whose
@@ -3540,6 +3559,13 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
     W9.31 §3.3 adds the ``WORLD OBJECTS:`` block (:func:`_world_objects_block`):
     the live registry's places and occupants, so a plan written AFTER the seed
     phase rests on the skeleton instead of inventing one beside it.
+
+    Issue #106 adds the ``LORE (fixed canon):`` block: every enabled lorebook
+    entry the session can reach (card ``character_book``, legacy ``world_info``,
+    entity books), rendered with NO activation scan and WITHOUT the
+    world-definition prefix. This one function feeds BOTH planner phases — the
+    seed tool loop and the plan call — so the canon lands in the pass that writes
+    the tracked state, once.
     """
     parts: list[str] = []
     # Issue #70: a failed source is no longer SILENT — each names itself in the
@@ -3606,6 +3632,29 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
     except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
         logger.warning("planner context: WORLD OBJECTS block failed", exc_info=True)
         failed.append("WORLD OBJECTS")
+
+    # Issue #106: the authored lore, and ALL of it. The planner is the pass that
+    # WRITES the tracked state (the seed loop's ``entity_establish`` rows and the
+    # plan's ``state-delta``), so a canon entry it never saw is a canon entry the
+    # plan can contradict — and the narrator then inherits two truths. Every
+    # enabled entry is relevant to planning, so no activation scan runs here
+    # (owner constraint, 2026-11-01): at seed time there is no narrative tail to
+    # scan, and the measured scan would fire 1-2 of 4 entries on turn 1.
+    # ``session_lore_block`` pools the same sources the narrator's world-info
+    # block pools, minus the world-definition prefix (this context already renders
+    # the live definition in its WORLD block). Authored data, so the section is
+    # byte-stable inside one run: the seed loop keeps its cached prefix (ADR-005).
+    try:
+        from fabulist.context.facts import session_lore_block
+
+        lore = session_lore_block(
+            log, session_id, surfaces=_planner_surfaces(log), variables=variables
+        )
+        if lore:
+            parts.append(lore)
+    except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
+        logger.warning("planner context: LORE block failed", exc_info=True)
+        failed.append("LORE")
 
     try:
         tail = _prior_narratives(log, session_id)[-PLANNER_TAIL_TURNS:]

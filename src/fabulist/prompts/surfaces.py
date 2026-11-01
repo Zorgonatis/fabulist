@@ -18,6 +18,10 @@ Schema (every key optional; absent/empty means "fall back to the constant")::
             "headers": {"recall": str, "world_info": str,
                         "recap": str, "bts": str},
         },
+        "lore": {                                 # fixed-canon section headings
+            "planner_header": str,                # the planner's LORE section
+            "canon_header": str,                  # the narrator's truth-tier section
+        },
         "regexes": [                              # full-list replace (no merges)
             {"id": str, "name": str, "find": str, "replace": str,
              "flags": str, "prompt_only": bool, "min_depth": int,
@@ -78,6 +82,7 @@ DEFAULT_HISTORY_KEEP_LAST_DSL = 3
 
 _RECALLED_TEXT_KEYS = ("framing", "open", "close")
 _RECALLED_HEADER_KEYS = ("recall", "world_info", "recap", "bts")
+_LORE_TEXT_KEYS = ("planner_header", "canon_header")
 
 #: Canonical serialization field order for one regex row.
 _REGEX_KEYS = (
@@ -152,6 +157,16 @@ def normalize_surfaces(raw: Any) -> dict[str, Any]:
                 block["headers"] = kept
         if block:
             out["recalled"] = block
+
+    lore = raw.get("lore")
+    if isinstance(lore, Mapping):
+        kept_lore = {
+            str(key): value
+            for key, value in lore.items()
+            if key in _LORE_TEXT_KEYS and isinstance(value, str)
+        }
+        if kept_lore:
+            out["lore"] = kept_lore
 
     regexes = raw.get("regexes")
     if isinstance(regexes, (list, tuple)):
@@ -246,6 +261,8 @@ def factory_surfaces() -> dict[str, Any]:
     Every other surface stays a byte-identical constant.
     """
     from fabulist.context.facts import (
+        CANON_HEADER,
+        LORE_PLANNER_HEADER,
         RECALLED_BTS_HEADER,
         RECALLED_CLOSE,
         RECALLED_FRAMING,
@@ -269,6 +286,15 @@ def factory_surfaces() -> dict[str, Any]:
                     "recap": RECALLED_RECAP_HEADER,
                     "bts": RECALLED_BTS_HEADER,
                 },
+            },
+            # Issue #106: the fixed-canon headings are editable surfaces too.
+            # The planner's LORE section and the narrator's truth-tier canon
+            # section are model-facing headings, so they belong here and not
+            # only in a Python constant (ADR-006); an install that predates the
+            # key falls back to the constants byte-identically.
+            "lore": {
+                "planner_header": LORE_PLANNER_HEADER,
+                "canon_header": CANON_HEADER,
             },
             "regexes": [serialize_regex(stage) for stage in PRESET_REGEXES],
             "history": {
