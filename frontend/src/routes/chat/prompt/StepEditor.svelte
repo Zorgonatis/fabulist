@@ -140,11 +140,8 @@
 		dragOverIndex = null;
 	}
 
-	function onAddChange(event: Event): void {
-		const select = event.currentTarget as HTMLSelectElement;
-		const value = select.value as PromptModuleType | '';
-		select.value = '';
-		if (value) onAddBlock(value);
+	function onAdd(): void {
+		onAddBlock('text');
 	}
 </script>
 
@@ -184,13 +181,15 @@
 
 <div class="section-head">
 	<h4>Blocks ({modules.length})</h4>
-	<select class="add-block" value="" aria-label="Add block" onchange={onAddChange}>
-		<option value="">+ add block</option>
-		<option value="text">+ text block</option>
-		{#each availableBlocks as type (type)}
-			<option value={type}>+ {type}</option>
-		{/each}
-	</select>
+	<!-- One button: every prompt block a user can add is text (#105). -->
+	<button
+		type="button"
+		class="add-block"
+		title="Adds a text block. Every prompt block in a step is text."
+		onclick={onAdd}
+	>
+		Add block
+	</button>
 </div>
 
 <ol class="blocks">
@@ -288,7 +287,7 @@
 			</div>
 		</li>
 	{:else}
-		<li class="empty-row">No blocks. Use “+ add block” to build this step.</li>
+		<li class="empty-row">No blocks. Use “Add block” to build this step.</li>
 	{/each}
 </ol>
 
@@ -360,6 +359,11 @@
 		border-radius: 4px;
 		font-size: var(--font-small);
 		padding: 0.15rem 0.3rem;
+		cursor: pointer;
+	}
+	.add-block:hover {
+		background: var(--bg-hover);
+		border-color: var(--line-strong);
 	}
 	.inherited-note {
 		font-size: var(--font-small);
