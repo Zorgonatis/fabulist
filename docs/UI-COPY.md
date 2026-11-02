@@ -107,6 +107,19 @@ because the app already uses "repair" for the effect — the `narrate (repair N)
 stage labels and "the engine caught these and repaired them" in the transcript.
 "Critic" stays an internal word and is not surfaced as a label.
 
+## Copy changes after the 0.0.8 cut
+
+Display copy only, grouped by issue. Rule 6 held: no key, id, route or component name was
+renamed.
+
+| Surface | Copy | Notes |
+| --- | --- | --- |
+| Step editor — section head (new control) | "Add block", tooltip "Adds a text block. Every prompt block in a step is text." (#105) | Replaces the dead `+ add block` select; the only addable block is text |
+| Step editor — empty state | "No blocks. Use \"Add block\" to build this step." (#105) | Names the new control |
+| Prompt drawer — preview notes (new) | chips "lane: …", "lane member: …", "assistant: …", plus note lines (#104) | Beside the message list, never inside it; says what the preview rendered and substituted |
+| Sidebar — chat row (new mark) | "N versions" when a chat holds more than one session (#107) | The rail folds forks into one chat |
+| Chat header — versions door (new) | "N versions ▾"; the member list shows a reply snippet, the turn count, the time, and "● open" on the open session (#107) | Selecting a member opens it; it becomes the chat's row |
+
 ## Deliberately kept
 
 - **`Anti Injection`** — the feature's own name (`ANTI_INJECTION_FLAG`), pinned

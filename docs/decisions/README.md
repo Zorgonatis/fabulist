@@ -223,6 +223,11 @@ undo is a compensating append that restores the pre-image exactly.
 Consequence: one copy of every fact, so the registry, the prompt and the sidebar cannot drift,
 and no model write can silently redefine an asset.
 
+Amendment (issue #106). The registry is the truth tier for tracked state, but authored fixed
+canon outranks it: a `constant` lorebook entry wins where the two disagree, and the state is
+the side that needs repair (ADR-030). The one-copy rule still holds, because the constant
+entries render once, in the state block, never in the reference block.
+
 ### ADR-014 · Cast admission is user-gated (D79)
 
 Detection of a new character ends at a proposal. Until it is accepted, a candidate is never a
@@ -261,6 +266,36 @@ deterministically.
 
 Consequence: the narrator can influence time without owning it, and the UI never shows a
 machine key where a name belongs.
+
+### ADR-029 · A chat is a read-only projection of the fork chain (issue #107)
+
+A chat is not a stored unit. It is the root of a session's fork chain plus every session that
+climbs to that root through `base_session`, derived on every list read. The rail folds sessions
+by the derived `chat_id` and marks the group with `chat_size`; the chat header's versions
+dropdown lists the members. No table, no event kind and no backfill exists for a chat, and none
+may be added: the fold is the engine's own bookkeeping climb (`EventLog._session_map`), so the
+rail and the engine cannot disagree about what one story is. A root session, or a log with no
+forks, is its own chat, so a legacy log groups correctly as it is.
+
+Consequence: a reroll or a delete adds a version of one story instead of a new row, and no
+subsystem can become a second store of chats.
+
+### ADR-030 · Fixed canon outranks the tracked state, and the planner reads every enabled lore entry (issue #106)
+
+An entry the author marks `constant` is fixed canon: authored truth. The narrator's truth tier
+carries the constant entries as the last section of the `<engine_state>` block, and the block
+header states the precedence: where a fixed-canon entry and the tracked state disagree, the
+entry wins and the state is the side that needs repair. The constant entries leave the
+`<engine_memory>` reference block, so one copy renders in the tier that wins. The planner
+receives every enabled lore entry with no activation scan, because turn one has no narrative
+tail to scan, and a canon entry that stays dark is the defect this read closes. The section
+headings are renderer-owned constants, not preset surfaces: the steering framing of a block
+belongs to the top of the object that resolves it, exactly like `STATE_HEADER` and
+`RECALLED_FRAMING`.
+
+Consequence: the derived registry can never silently overrule what the author fixed, a canon
+entry cannot stay invisible to the pass that writes the plan, and no heading of an engine tier
+is author-editable data.
 
 ## 6. Rendering
 

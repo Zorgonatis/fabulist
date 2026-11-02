@@ -4,7 +4,9 @@ What any agent "is prompted with" is ASSEMBLED per turn from the layers below.
 There is no single "the prompt." Validation rule of thumb: **agent-calls captures
 (agent-debug on) show the exact message array any agent received on any turn** —
 that is ground truth; the PromptDrawer preview renders the same assembly through
-the production builder (parity by construction); the inspector shows per-region sizes.
+one named request builder per interaction (`prompts/request_parts.py`, plus
+`graph.nodes.planner_request` for the planner) that the live call site also calls
+(parity by construction, all eleven interactions, #104); the inspector shows per-region sizes.
 
 ## Where you edit it: the Prompt Manager (D65/D68 — the Steps IA)
 
@@ -22,8 +24,9 @@ rather than as storage buckets. Three views inside the one drawer:
   cannot drift).
 - **Step editor** — the SillyTavern-style surface for one step: its flow's ordered
   blocks (drag handle · enable · name · **source badge** · type), each row expanding into
-  the editor. Structural block types the step allows can be added (each once); free
-  `text` blocks are always addable with a role. Source badges answer "can I edit this,
+  the editor. One **Add block** button adds a `text` block with a role — every block a
+  step can add is text (#105); the structural rows are the flow's own, always present.
+  Source badges answer "can I edit this,
   and who fills it?":
   - **Authored** — a `system` row (or a free `text` block) with content; it overrides the
     engine part (`modules.compile_flow`).
@@ -42,7 +45,7 @@ rather than as storage buckets. Three views inside the one drawer:
 - **Full-screen block editor** — an in-app overlay (D51 v1 precedent; deliberately not an
   OS `window.open` popout): markdown-lite source beside a live `renderMarkdown` preview,
   a formatting toolbar, and the **variable inserter inside the editor**, splicing `{{name}}`
-  at the caret.
+  at the caret. The steps payload also carries `system_default` — the engine default text for a flow whose `system` row can be empty (the planner directive today); the block editor pre-fills it while the row is empty (#105). 
 
 ## Layer map (what the narrator receives, in assembly order)
 
@@ -51,10 +54,10 @@ rather than as storage buckets. Three views inside the one drawer:
 | 1 | System stack: directives (Director, perspective, anti-slop, Story Strings, length, VTK rules, …) | prompts/parts.py DEFAULT_DIRECTIVES → compiler.resolve_directives → render_system_prompt | YES — **Rules** (the preset's directive rows; an empty list inherits the code catalog) | PromptDrawer preview; agent-calls capture; inspector `system` region |
 | 2 | Library doc (OpenUI component reference) | prompts/library_mini.py; substituted at compile via `<<library>>` in the directive stack | YES — **Advanced → Library doc** (empty = inherit the factory text) | inspector `library` region; capture |
 | 3 | History | compiler DSL-stripped projection (regex stage applied, depth-limited; the newest `dsl_keep_last` narratives keep their panels — default 3, 0 strips all) | PARTLY — **Advanced → Regex scripts** (find/replace/flags/min depth) and **History** (depth, strip DSL, keep-last window); the projection itself is code | capture; inspector `history` region |
-| 4 | `<state>` facts (persona, roster, stt, rolls, clock pipe-YAML) | context/facts.py | NO — assembled from the log (edit state via the sidebar ✎ door) | capture; inspector `facts` region |
+| 4 | `<state>` facts (persona, roster, stt, rolls, clock pipe-YAML, then the fixed-canon section last, #106) | context/facts.py | NO — assembled from the log (edit state via the sidebar ✎ door); the fixed-canon section renders the authored `constant` lorebook entries | capture; inspector `facts` region |
 | 5 | Plan seam (`<plan>` from last turn's Story Strings) | graph/plans.py render_plan_for_prompt | NO — structural | capture |
 | 6 | Final user message (your turn text + image part if attached) | engine | NO | capture; inspector `user` region |
-| 7 | `<recalled>` post-user system (recall / world info / recap / BTS) | context/facts.py RECALLED_FRAMING + sections | Framing copy YES — **Advanced → Recalled framing / Recalled section headers**; CONTENT is log-derived (memory knobs, WI import, BTS events) | capture (post-user system message); Memories pane shows recall per turn |
+| 7 | `<recalled>` post-user system (recall / world info / recap / BTS; `constant` lore entries render in `<state>` instead, #106) | context/facts.py RECALLED_FRAMING + sections | Framing copy YES — **Advanced → Recalled framing / Recalled section headers**; CONTENT is log-derived (memory knobs, WI import, BTS events) | capture (post-user system message); Memories pane shows recall per turn |
 
 **One `enabled` source (D65):** the effective directive switch is the preset's own
 directive ROW. The engine no longer folds the pre-W6.3 `settings_changed` toggles map —
@@ -88,7 +91,8 @@ frontend list had 8). It is now a step like any other.
   assembly. Deactivating returns to defaults. Preview == reality through the same builder.
 - The persisted `default` preset row is the ONE "Default pipeline" entry (the
   `__default__` sentinel and its duplicate select row are gone).
-- Factory image: `FACTORY_VERSION = 5` (`prompts/factory-defaults.json`, re-committed).
+- Factory image: `FACTORY_VERSION = 12` (`prompts/factory-defaults.json`, re-committed;
+  the #105 bump seeded the planner directive row).
   The image carries no `toggles`, no `prompt_overrides` and no directive rows — those
   inherit the code catalog. Existing installs receive the D26 "factory defaults changed —
   review/reset" notice, so the schema change reaches live DBs without a manual PUT.
@@ -124,13 +128,14 @@ frontend list had 8). It is now a step like any other.
 
 1. The FACTORY DEFAULTS themselves — the directive catalog text, DEFAULT_FLOWS bodies,
    library doc, recalled framing — i.e. what a field inherits while it is empty. Every one
-   is overridable per preset in Rules / Advanced; the default itself is code.
+   is overridable per preset in Rules / Advanced; the default itself is code, except the
+   planner directive, which is seeded preset data with the constant as the no-preset
+   fallback (#105).
 2. `<state>` facts assembly (context/facts.py) — log-derived, never authored.
 3. Plan seam (`<plan>`, graph/plans.py) and the final user message.
 4. Structural PLACEMENT: which region a row lands in is decided by its `type`
    (history/facts/user/recalled/system), not by the UI. The editor can reorder rows within
-   a step's flow, add the step's allowed structural types (each once) and free `text`
-   blocks, and edit text — it cannot move a block between regions.
+   a step's flow and add free `text` blocks — it cannot move a block between regions.
 5. History projection mechanics (compiler.stripped_history) — the knobs are in Advanced;
    the projection is not authorable.
 

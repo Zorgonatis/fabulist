@@ -79,7 +79,11 @@ you are working in a clone, that directory will not exist; do not recreate it.
 
 `get_events` = session-local audit view (forks copy nothing). `get_chain_events` = fork-aware —
 ALL session-constant context (persona/cast/world/modules/macros/memory scope) must walk the
-chain. `get_projection` = fork- AND revision-aware (history, state). Using `get_events` for
+chain. A fork's config carry folds the source's CHAIN latest-wins per whitelisted kind
+(`FORK_CONFIG_EVENTS`), never the source's own rows: a branch owns none, so an own-row carry
+loses the persona, the actor and the name at generation 2. The above-the-cut test applies to
+the winning row's own `seq`, never to a numeric filter over the merged chain, because `seq`
+restarts per segment (#108). `get_projection` = fork- AND revision-aware (history, state). Using `get_events` for
 context assembly silently starves branch turns (fixed in 4e59afd — do not reintroduce).
 `get_state_snapshot` = the state a fork CARRIED into the new chat: the `system`/
 `session_state_snapshot` row is a BASE written ONCE at fork time (the state AT the cut) and
@@ -96,10 +100,20 @@ objects (`entity_establish/set/update/move/retire/summary` + the `__entity_catal
 catalog) through write-action tools; the free-form `[BTS]` notation is a READ SHIM for old logs
 and must never come back as a write path. Presence is registry-first (a being is in-scene iff
 its location assignment equals the player's — a move is a deterministic exit); `flat_render`
-never emits `forecast` (the user's manual pin owns it). The served tracker prompt comes from the
+never emits `forecast` (the user's manual pin owns it). `chat` is a READ-ONLY PROJECTION
+(ADR-029), never a stored unit: the root of a session's fork chain plus every session that
+climbs to it through `base_session`. The list derives `chat_id` and `chat_size`; the rail folds
+by `chat_id`, and the chat header's versions dropdown lists the members. Do not add a chat
+table, a chat event or a backfill. Fixed canon is an authored `constant` lorebook entry: it
+outranks the tracked state in the narrator's truth tier and rides the state block, never the
+recalled block (ADR-030). `request_parts` is the ONE request assembly per interaction; the
+live call site and the studio preview call the same builder. The served tracker prompt comes from the
 COMMITTED FACTORY ARTIFACT (`prompts/factory-defaults.json`) — editing the constant in `bts.py`
 is not enough: run `scripts/seed_prompt_defaults.py --force` (and check flow row ORDER — its
-write path can reorder rows; the prompt-flows test pins it). `StatusPanel` is gone. `assistant`
+write path can reorder rows; the prompt-flows test pins it). The planner directive is the same
+class: the served text comes from the committed factory artifact, so editing
+`DEFAULT_PLANNER_DIRECTIVE` alone changes nothing for a seeded install; bump the factory
+version and reseed (#105). `StatusPanel` is gone. `assistant`
 is canonical; `sidekick` survives only as deliberate read-side legacy shims. The engine-emitted
 HUD statement is `EnvTracker`. `Queries` is now `Repair triggers` (#99) — COPY ONLY: kind id
 `queries`, `DecisionQueriesPane.svelte`, `decisionQueries.ts`, `/api/decision-queries`,
@@ -131,6 +145,11 @@ generator's inline `INFRASTRUCTURE` block (four infra components), which must tr
   (and anything outside the finish-reason allowlist discarded — ADR-021); DSL statements may
   arrive unfenced (nodes.py `_split_unfenced_statements` + frontend `segment.ts`); `pkill -f`
   self-matches — use `fuser -k <port>/tcp`.
+- The studio preview must not carry its own parts assembly. One named request builder per
+  interaction (`prompts/request_parts.py`, plus `graph.nodes.planner_request` for the planner)
+  is called by both the live call site and the preview, and `tests/test_prompt_preview_parity.py`
+  pins the byte-for-byte match and the builder completeness. A re-copied parts dict in the
+  router fails the AST pin (#104).
 - The keep-last window reads the ordered `segments` channel, never `prose` — `prose` is the joined
   prose segments only and never holds panel markup, so a window that read prose kept nothing while
   every unit test with a hand-written fixture still passed (#100); the commit path stores `prose`,
