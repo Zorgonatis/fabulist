@@ -15,7 +15,12 @@ The approved fix, pinned here:
 * an entry marked ``constant`` is fixed canon: it moves OUT of the
   ``<engine_memory>`` reference block and INTO the ``<engine_state>`` truth
   block, whose header now states that the entry wins over the tracked state;
-* the section headings stay editable preset surfaces;
+* the section headings are RENDERER-OWNED constants (``LORE_PLANNER_HEADER`` /
+  ``CANON_HEADER``), not preset surfaces — owner ruling 2026-11-02: the steering
+  framing of a block belongs to the top of the object that resolves it, like
+  ``STATE_HEADER`` and ``RECALLED_FRAMING``. The retired ``surfaces.lore`` group
+  is dropped by the normalizer and ignored by the readers (an old preset keeps
+  working, byte-identically, with no factory-version bump);
 * nothing moves in the stable prefix (ADR-005) and the planner section is
   byte-stable inside one run (the seed loop's cached prefix).
 """
@@ -27,7 +32,6 @@ from fabulist.context.facts import (
     LORE_PLANNER_HEADER,
     assemble_turn_context,
     join_facts_suffix,
-    lore_copy,
     session_canon_block,
     session_lore_block,
     session_lore_entries,
@@ -36,6 +40,7 @@ from fabulist.context.facts import (
 )
 from fabulist.graph.nodes import _planner_context
 from fabulist.log import EventLog
+from fabulist.prompts import preset_store as store
 from fabulist.prompts.envelope import STATE_HEADER, render_engine_envelope
 from fabulist.prompts.narrator import render_state_block
 from fabulist.prompts.surfaces import (
@@ -275,44 +280,85 @@ def test_narrator_without_constant_entries_renders_no_canon_section(log):
     assert blocks.recalled is not None and AWNING in blocks.recalled
 
 
-# -- the editable heading surface -------------------------------------------
+# -- the renderer-owned headings --------------------------------------------
 
 
-def test_lore_headings_are_editable_preset_surfaces(log):
-    """Both fixed-canon headings come from ``surfaces.lore`` (ADR-006/D27)."""
+#: The retired ``surfaces.lore`` group, as an install seeded at v12 carries it.
+LEGACY_LORE_SURFACES = {
+    "lore": {
+        "planner_header": "CANON YOU MUST NOT BREAK:",
+        "canon_header": "### World canon (entries win)",
+    }
+}
+
+
+def test_lore_headings_are_renderer_owned_constants(log):
+    """Both fixed-canon headings render from the module constants (owner ruling).
+
+    The steering framing of a block belongs to the top of the object that
+    resolves it, as an engine-owned constant — exactly like ``STATE_HEADER`` and
+    ``RECALLED_FRAMING`` — so there is no ``surfaces.lore`` indirection left.
+    """
     _card_session(log)
-    surfaces = normalize_surfaces(
-        {
-            "lore": {
-                "planner_header": "CANON YOU MUST NOT BREAK:",
-                "canon_header": "### World canon (entries win)",
-            }
-        }
+
+    assert session_lore_block(log, SID).startswith(f"{LORE_PLANNER_HEADER}\n")
+    canon = session_canon_block(log, SID)
+    assert canon is not None and canon.startswith(f"{CANON_HEADER}\n")
+
+
+def test_default_prompt_bytes_unchanged_by_the_demotion(log):
+    """A default install renders byte-identically: the constants WERE the fallback.
+
+    The retired ``surfaces.lore`` seed carried the constants verbatim, so
+    dropping the group changes no rendered byte. Pin the exact heading strings
+    in the assembled planner and narrator contexts, and the absence of the
+    group from the factory seed.
+    """
+    _card_session(log)
+
+    planner = _planner_context(log, SID, _planner_state())
+    assert f"{LORE_PLANNER_HEADER}\n- {HARBOUR}\n- {AWNING}\n- {ARCHIVIST}" in planner
+
+    blocks = assemble_turn_context(log, SID, user_text=USER_TEXT)
+    assert f"{CANON_HEADER}\n- {HARBOUR}" in join_facts_suffix(blocks.state_parts)
+
+    # The factory seed no longer carries the retired group, so a regeneration
+    # (scripts/seed_prompt_defaults.py) stays clean with no factory-version bump.
+    assert "lore" not in factory_surfaces()
+
+
+def test_old_preset_carrying_surfaces_lore_renders_the_constants(log):
+    """Forward compatibility: a v12 install's retired group changes no heading.
+
+    The normalizer drops ``surfaces.lore`` and the readers never read it, so a
+    persisted default that still carries the group renders the constants — no
+    migration, no factory-version bump, no byte change.
+    """
+    _card_session(log)
+
+    # The schema drops the retired group (an old preset's next write is clean).
+    assert normalize_surfaces(LEGACY_LORE_SURFACES) == {}
+
+    # A persisted default written BEFORE the demotion still carries the raw
+    # group in its event payload; the fold and the planner ignore it.
+    store.ensure_default_preset(log)
+    row = store.default_preset(log)
+    assert row is not None
+    payload = store.preset_to_json(row)
+    payload["surfaces"] = {**preset_surfaces(row), **LEGACY_LORE_SURFACES}
+    log.append_event(store.PRESETS_ANCHOR, "system", "user", payload)
+
+    planner = _planner_context(log, SID, _planner_state())
+    assert LORE_PLANNER_HEADER in planner
+    assert "CANON YOU MUST NOT BREAK:" not in planner
+
+    # The narrator renders the constant even when a caller threads raw surfaces.
+    blocks = assemble_turn_context(
+        log, SID, user_text=USER_TEXT, surfaces=LEGACY_LORE_SURFACES
     )
-
-    assert lore_copy(surfaces)["planner"] == "CANON YOU MUST NOT BREAK:"
-    assert session_lore_block(log, SID, surfaces=surfaces).startswith(
-        "CANON YOU MUST NOT BREAK:\n"
-    )
-    canon = session_canon_block(log, SID, surfaces=surfaces)
-    assert canon is not None and canon.startswith("### World canon (entries win)\n")
-
-    blocks = assemble_turn_context(log, SID, user_text=USER_TEXT, surfaces=surfaces)
-    assert "### World canon (entries win)" in join_facts_suffix(blocks.state_parts)
-
-
-def test_the_factory_surface_seeds_the_code_headings():
-    """An install that never edited the surface renders the constants exactly."""
-    assert factory_surfaces()["lore"] == {
-        "planner_header": LORE_PLANNER_HEADER,
-        "canon_header": CANON_HEADER,
-    }
-    assert lore_copy(None) == {
-        "planner": LORE_PLANNER_HEADER,
-        "canon": CANON_HEADER,
-    }
-    assert normalize_surfaces({"lore": {"bogus": "x"}}) == {}
-    assert preset_surfaces(None) == {}
+    state_body = join_facts_suffix(blocks.state_parts)
+    assert CANON_HEADER in state_body
+    assert "### World canon (entries win)" not in state_body
 
 
 def test_fixed_canon_never_reaches_the_stable_prefix(log):

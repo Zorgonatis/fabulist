@@ -3515,25 +3515,6 @@ def _world_objects_block(log: LogPort, session_id: str) -> str:
     return "WORLD OBJECTS:\n" + "\n".join(lines)
 
 
-def _planner_surfaces(log: LogPort) -> dict | None:
-    """The active preset's normalized ``surfaces`` block, or ``None``.
-
-    Only the editable section headings are read from it (the planner's
-    ``LORE (fixed canon)`` heading, issue #106). A missing preset or an unreadable
-    store is normal for a direct node call (tests, a pre-boot log) and simply
-    leaves the code constants in place — never a failed context block.
-    """
-
-    try:
-        from fabulist.prompts.preset_store import active_preset
-        from fabulist.prompts.surfaces import preset_surfaces
-
-        return preset_surfaces(active_preset(log))
-    except Exception:  # noqa: BLE001 - headings fall back to the constants
-        logger.debug("planner context: preset surfaces unreadable", exc_info=True)
-        return None
-
-
 def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
     """The planner's context block: current state, cast, world, lore, recent turns.
 
@@ -3644,12 +3625,13 @@ def _planner_context(log: LogPort, session_id: str, state: TurnState) -> str:
     # block pools, minus the world-definition prefix (this context already renders
     # the live definition in its WORLD block). Authored data, so the section is
     # byte-stable inside one run: the seed loop keeps its cached prefix (ADR-005).
+    # The ``LORE (fixed canon):`` heading is the renderer-owned constant
+    # (``facts.LORE_PLANNER_HEADER``, #106 follow-up) — the preset is not read for
+    # it, so an old preset still carrying ``surfaces.lore`` renders the constant.
     try:
         from fabulist.context.facts import session_lore_block
 
-        lore = session_lore_block(
-            log, session_id, surfaces=_planner_surfaces(log), variables=variables
-        )
+        lore = session_lore_block(log, session_id, variables=variables)
         if lore:
             parts.append(lore)
     except Exception as exc:  # noqa: BLE001 - context is advisory, never fatal
