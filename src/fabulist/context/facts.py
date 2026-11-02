@@ -191,13 +191,16 @@ RECALLED_WORLD_INFO_HEADER = "### World info — active lore"
 RECALLED_RECAP_HEADER = "### Recap — earlier events"
 RECALLED_BTS_HEADER = "### Behind the scenes — continuity notes"
 
-#: The FIXED-CANON section headings (issue #106). Two sections, one surface
-#: group (``surfaces.lore``): the PLANNER's ``LORE (fixed canon)`` block — every
-#: enabled entry, no activation scan — and the narrator's fixed-canon section,
-#: which renders only the ``constant`` entries and rides inside the
-#: ``<engine_state>`` truth block beside the state facts. Both are editable
-#: preset surfaces; these are the fallback constants (D27 semantics: absent
-#: means "render the code constant").
+#: The FIXED-CANON section headings (issue #106). Two sections, one owner: the
+#: PLANNER's ``LORE (fixed canon)`` block — every enabled entry, no activation
+#: scan — and the narrator's fixed-canon section, which renders only the
+#: ``constant`` entries and rides inside the ``<engine_state>`` truth block
+#: beside the state facts. Owner ruling (2026-11-02): the steering framing of a
+#: block belongs to the top of the object that RESOLVES it, as an engine-owned
+#: constant — exactly like :data:`fabulist.prompts.envelope.STATE_HEADER` and
+#: :data:`RECALLED_FRAMING`. They are NOT preset surfaces (the ``surfaces.lore``
+#: group of #106 was indirection the release does not want); an old preset that
+#: still carries it renders these constants byte-for-byte.
 LORE_PLANNER_HEADER = "LORE (fixed canon):"
 CANON_HEADER = "### Fixed canon — authored lore"
 
@@ -853,7 +856,6 @@ def session_lore_block(
     log: EventLog,
     session_id: str,
     *,
-    surfaces: dict | None = None,
     variables: dict | None = None,
 ) -> str | None:
     """The PLANNER's ``LORE (fixed canon)`` section, or ``None``.
@@ -865,20 +867,22 @@ def session_lore_block(
     :func:`session_world_definition_block` glued on top (see
     :func:`session_world_info_block`).
 
+    The heading is the renderer-owned constant :data:`LORE_PLANNER_HEADER` —
+    NOT a preset surface (issue #106 follow-up). An old preset that still
+    carries ``surfaces.lore`` is ignored: the heading renders the constant.
+
     Author-composed data: byte-stable inside one planner run (ADR-005) — nothing
     here depends on the clock, the tail or the turn.
     """
 
     entries = session_lore_entries(log, session_id)
-    header = lore_copy(surfaces, variables)["planner"]
-    return _render_lore_block(entries, header, variables)
+    return _render_lore_block(entries, LORE_PLANNER_HEADER, variables)
 
 
 def session_canon_block(
     log: EventLog,
     session_id: str,
     *,
-    surfaces: dict | None = None,
     variables: dict | None = None,
 ) -> str | None:
     """The NARRATOR's fixed-canon section — the ``constant`` entries only.
@@ -890,39 +894,16 @@ def session_canon_block(
     they leave the ``<engine_memory>`` reference block, where the same words
     would read as optional context (see ``include_constants`` on
     :func:`session_world_info_block`). One copy, in the tier that wins.
+
+    The heading is the renderer-owned constant :data:`CANON_HEADER`, not a
+    preset surface (issue #106 follow-up): an old preset that still carries
+    ``surfaces.lore`` renders the constant regardless.
     """
 
     entries = [
         entry for entry in session_lore_entries(log, session_id) if entry.constant
     ]
-    header = lore_copy(surfaces, variables)["canon"]
-    return _render_lore_block(entries, header, variables)
-
-
-def lore_copy(
-    surfaces: dict | None = None, variables: dict | None = None
-) -> dict[str, str]:
-    """Effective fixed-canon headings from the preset's ``lore`` surface (D27).
-
-    Mirrors :func:`recalled_copy`: a preset-carried value wins, ``{{expression}}``
-    tokens resolve against ``variables``, and an absent/blank surface renders the
-    module constant verbatim. Keys: ``planner`` (the planner's section heading)
-    and ``canon`` (the narrator's truth-tier section heading).
-    """
-
-    from fabulist.prompts.surfaces import normalize_surfaces, render_surface_text
-
-    block = normalize_surfaces(surfaces).get("lore") or {}
-
-    def _text(value: object, default: str) -> str:
-        if isinstance(value, str) and value.strip():
-            return render_surface_text(value, variables)
-        return default
-
-    return {
-        "planner": _text(block.get("planner_header"), LORE_PLANNER_HEADER),
-        "canon": _text(block.get("canon_header"), CANON_HEADER),
-    }
+    return _render_lore_block(entries, CANON_HEADER, variables)
 
 
 def session_world_info_block(
@@ -1409,7 +1390,7 @@ def assemble_turn_context(
     # header (``envelope.STATE_HEADER``). It is not recalled reference and it is
     # not stable-prefix content (ADR-005), so the narrator's cached prefix keeps
     # every byte.
-    canon = session_canon_block(log, sid, surfaces=surfaces, variables=variables)
+    canon = session_canon_block(log, sid, variables=variables)
     state_parts = [p for p in (roster_names, stt, rolls, clock_facts, canon) if p]
     context_parts = [
         p
