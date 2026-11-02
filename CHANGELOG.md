@@ -6,13 +6,22 @@ One line per change, with a reference to the closed issue. The issue thread carr
 detail; this file is an index, not a report. Versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2026-11-02
+
+### Fixed
+
+- The studio's add-block control is one button: every block a step can add is text, and the copy names it (#105)
+- The studio prompt preview shows the request the engine actually sends, for every interaction: one named request assembly per interaction is shared by the live call site and the preview, so planner/npc/proposals no longer 500 and critic/ooc match the turn (#104)
+- The planner reads every enabled lorebook entry with no activation filter, and a fixed-canon entry outranks the tracked state in the narrator's truth tier (#106)
+- The sidebar folds forks into one chat per story: a chat is the read-only root of the fork chain, with a versions dropdown under the chat title (#107)
+- A fork of a branch keeps the persona, the actor and the name: the config carry folds the chain, and an already-pinned empty name heals on display (#108)
+- The planner's directive is real preset data: the factory planner step carries the engine's exact text (no prompt byte changes), existing installs get the one-time factory review/reset notice, and an empty row opens pre-filled instead of blind (#105)
+- The studio prompt preview names what it rendered — lane, lane member, assistant — and what it had to substitute, in a caption beside the message list (#105)
+
 ## [0.0.7] - 2026-11-01
 
 ### Fixed
 
-- The planner's directive is real preset data: the factory planner step carries the engine's exact text (no prompt byte changes), existing installs get the one-time factory review/reset notice, and an empty row opens pre-filled instead of blind (#105)
-- The studio prompt preview names what it rendered — lane, lane member, assistant — and what it had to substitute, in a caption beside the message list (#105)
-- The studio prompt preview shows the request the engine actually sends, for every interaction: one named request assembly per interaction is shared by the live call site and the preview, so planner/npc/proposals no longer 500 and critic/ooc match the turn (#104)
 - The last N turns keep their panels in the model's history again: the keep-last window read the prose channel, which never holds panel markup (#100)
 - A studio band caption opens its own band: the bands wrap as units, so no caption trails the previous band's row (#99)
 
