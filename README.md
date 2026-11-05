@@ -1,3 +1,22 @@
+A better readme is coming soon.
+
+TL;DR agents and other cool shit, no broken outputs (self repair fed by validation errors), fun as fuck. 
+Kinda expensive compared to other engines, but it's actually doing the work so you can enjoy.
+
+My recommended setup:
+Use the sidecar on CPU for embedding, reranking and decision inference (no config needed)
+Set a cheap but smart agentic AI on everything that is not the narrator.
+Set a model that writes well for the narrator.
+
+KNOWN GAPS: 
+Single UI set (Technology focused). Themed packs come later.
+It's a bit shit with loads of bugs.
+It will cost you more money to run than SillyTavern
+Not done a prompt-level pass yet, all content is reused from my EDH/personal prompts since
+It works nearly all of the time.
+
+
+
 # Fabulist
 
 **A roleplay UI, for those who want to edit the outcome instead of the prompt.**
